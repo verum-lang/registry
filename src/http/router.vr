@@ -132,6 +132,6 @@ public fn make_router(services: ServiceRegistry) -> Router {
 
 fn redirect_v2_to_v3(path: &Text) -> Maybe<Text> {
     if path.starts_with("/api/v2/") {
-        Some(format!("/api/v3/{}", path.byte_substring(8, path.len())).to_text())
+        Some(f"/api/v3/{path.byte_substring(8, path.len())}")
     } else { None }
 }

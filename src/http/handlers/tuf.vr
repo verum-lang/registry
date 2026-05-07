@@ -53,10 +53,10 @@ pub async fn root(req: WeftRequest) -> Response
             .header("content-type", &TUF_CONTENT_TYPE)
             .header("cache-control", "public, max-age=86400, immutable"),
         Err(TufError.NoRoot) => render_error("not_found".to_text(),
-            format!("root.json v={} not found", version).to_text(), None, None,
+            f"root.json v={version} not found", None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("tuf root: {e}").to_text());
+            Logger.log(Level.Warn, &f"tuf root: {e}");
             render_error("internal_error".to_text(),
                 "tuf serve failed".to_text(), None, None,
             ).status(StatusCode.InternalServerError)
@@ -77,7 +77,7 @@ pub async fn timestamp(_req: WeftRequest) -> Response
             "timestamp.json not yet bootstrapped".to_text(), None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("tuf timestamp: {e}").to_text());
+            Logger.log(Level.Warn, &f"tuf timestamp: {e}");
             render_error("internal_error".to_text(),
                 "tuf serve failed".to_text(), None, None,
             ).status(StatusCode.InternalServerError)
@@ -98,10 +98,10 @@ pub async fn snapshot(req: WeftRequest) -> Response
             .header("content-type", &TUF_CONTENT_TYPE)
             .header("cache-control", "public, max-age=3600, immutable"),
         Err(TufError.NoSnapshot) => render_error("not_found".to_text(),
-            format!("snapshot.json v={} not found", version).to_text(), None, None,
+            f"snapshot.json v={version} not found", None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("tuf snapshot: {e}").to_text());
+            Logger.log(Level.Warn, &f"tuf snapshot: {e}");
             render_error("internal_error".to_text(),
                 "tuf serve failed".to_text(), None, None,
             ).status(StatusCode.InternalServerError)
@@ -122,10 +122,10 @@ pub async fn targets(req: WeftRequest) -> Response
             .header("content-type", &TUF_CONTENT_TYPE)
             .header("cache-control", "public, max-age=3600, immutable"),
         Err(TufError.NoTargets(_)) => render_error("not_found".to_text(),
-            format!("targets.json v={} not found", version).to_text(), None, None,
+            f"targets.json v={version} not found", None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("tuf targets: {e}").to_text());
+            Logger.log(Level.Warn, &f"tuf targets: {e}");
             render_error("internal_error".to_text(),
                 "tuf serve failed".to_text(), None, None,
             ).status(StatusCode.InternalServerError)
@@ -142,7 +142,7 @@ fn parse_version_param(req: &WeftRequest) -> Result<Int, Response> {
     let v_text = req.path_param("version").unwrap_or_else(|| "".to_text());
     Int.parse(&v_text).map_err(|_| {
         render_error("validation_failed".to_text(),
-            format!("invalid TUF metadata version: {}", v_text).to_text(),
+            f"invalid TUF metadata version: {v_text}",
             None, None,
         ).status(StatusCode.BadRequest)
     })

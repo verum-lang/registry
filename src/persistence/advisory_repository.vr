@@ -116,13 +116,13 @@ fn decode_advisory_row(row: &Row) -> Result<SecurityAdvisory, DbError> {
         "medium"   => SevMedium,
         "high"     => SevHigh,
         "critical" => SevCritical,
-        other => return Err(DbError.DecodeFailed { fault: format!("severity: {other}").to_text() }),
+        other => return Err(DbError.DecodeFailed { fault: f"severity: {other}" }),
     };
     let affected = parse_constraint(&row.get_text("affected_versions")?)
-        .map_err(|e| DbError.DecodeFailed { fault: format!("affected_versions: {e}").to_text() })?;
+        .map_err(|e| DbError.DecodeFailed { fault: f"affected_versions: {e}" })?;
     let fixed = match row.get_text_opt("fixed_versions")? {
         Some(t) => Some(parse_constraint(&t)
-            .map_err(|e| DbError.DecodeFailed { fault: format!("fixed_versions: {e}").to_text() })?),
+            .map_err(|e| DbError.DecodeFailed { fault: f"fixed_versions: {e}" })?),
         None => None,
     };
     Ok(SecurityAdvisory {

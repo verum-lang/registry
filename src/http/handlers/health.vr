@@ -40,10 +40,10 @@ public async fn handle_readiness(req: WeftRequest) -> Response
     let _ = req;
     let mut failures: List<Text> = List.new();
 
-    if let Err(e) = Database.ping().await { failures.push(format!("postgres: {e}").to_text()); }
-    if let Err(e) = Storage.head_bucket().await { failures.push(format!("s3: {e}").to_text()); }
-    if let Err(e) = Cache.ping().await { failures.push(format!("redis: {e}").to_text()); }
-    if let Err(e) = Search.health().await { failures.push(format!("meilisearch: {e}").to_text()); }
+    if let Err(e) = Database.ping().await { failures.push(f"postgres: {e}"); }
+    if let Err(e) = Storage.head_bucket().await { failures.push(f"s3: {e}"); }
+    if let Err(e) = Cache.ping().await { failures.push(f"redis: {e}"); }
+    if let Err(e) = Search.health().await { failures.push(f"meilisearch: {e}"); }
 
     if failures.is_empty() {
         Response.text("READY")
@@ -61,8 +61,8 @@ public async fn handle_version(req: WeftRequest) -> Response {
     Response.json(&json! {{
         "registry":     "verum-registry",
         "spec":         "v2.0",
-        "verum_stdlib": env!("VERUM_STDLIB_VERSION", "unknown"),
-        "build":        env!("CARGO_PKG_VERSION", "unknown"),
-        "git_sha":      env!("GIT_SHA", "unknown"),
+        "verum_stdlib": @env("VERUM_STDLIB_VERSION", "unknown"),
+        "build":        @env("CARGO_PKG_VERSION", "unknown"),
+        "git_sha":      @env("GIT_SHA", "unknown"),
     }})
 }

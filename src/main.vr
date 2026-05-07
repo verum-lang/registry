@@ -31,21 +31,26 @@
     at_tier:       Tier.MultiTier([Tier.Aot, Tier.Check]),
     lifecycle:     Lifecycle.Theorem("canonical"),
     exposes: [
-        // Network — inbound HTTP/2 + outbound HTTP for Fulcio / Rekor / OIDC discovery.
-        Capability.Network(NetProtocol.Http2, NetDirection.Inbound),
-        Capability.Network(NetProtocol.Http,  NetDirection.Outbound),
+        // Network — HTTP/2 inbound (browser + CLI clients), HTTP outbound
+        // (Fulcio / Rekor / OIDC discovery). HTTP/2 vs HTTP distinction
+        // is load-bearing: HTTP/2 carries the Rapid-Reset CVE-2023-44487
+        // surface that audit-protocol checks against deployed config.
+        capability_http2_inbound(),
+        capability_http_outbound(),
         // Filesystem — config + TLS material + TUF offline keys.
         Capability.Read(ResourceTag.Filesystem),
         Capability.Write(ResourceTag.Filesystem),
-        // Persistence — three durable backends.
-        Capability.Persist(PersistenceMedium.Postgres),
-        Capability.Persist(PersistenceMedium.S3),
-        Capability.Persist(PersistenceMedium.Ledger),       // sumdb
-        // Concurrency — bounded worker spawns for publish-pipeline phases
-        // + the TUF refresh ticker.
-        Capability.Spawn(TaskLifetime.Bounded),
-        // Time-bound contracts — Sigstore certs ≤ 10 min, sessions ≤ 1 h.
-        Capability.TimeBound(Duration.from_hours(1)),
+        // Persistence — three durable categories with concrete tags.
+        // Stdlib `PersistenceMedium` is intentionally categorical;
+        // the connection_tag identifies the concrete backend.
+        capability_persist_database("postgres".to_text()),
+        capability_persist_disk("s3://verum-registry-prod/".to_text()),
+        capability_persist_log("verum.registry.sumdb".to_text()),
+        // Concurrency — structured spawns for publish-pipeline phases
+        // (parent-scoped; cancelled if the publish handler returns).
+        capability_spawn_structured(),
+        // Time-bound contracts — sessions / signed-URL leases.
+        capability_time_bounded(&Duration.from_hours(1)),
     ],
     requires:      [],
     composes_with: [
@@ -127,27 +132,27 @@ mount async_::spawn;
 public async fn main() -> Result<(), Text> {
     // 1. Load configuration via core.configuration.toml.
     let config = load_config()
-        .map_err(|e| format!("config load failed: {e}").to_text())?;
+        .map_err(|e| f"config load failed: {e}")?;
 
     // 2. Initialise observability subsystems early.
     tracing_init(&config.tracing).await
-        .map_err(|e| format!("tracing init failed: {e}").to_text())?;
+        .map_err(|e| f"tracing init failed: {e}")?;
     metrics_init(&config.metrics).await
-        .map_err(|e| format!("metrics init failed: {e}").to_text())?;
+        .map_err(|e| f"metrics init failed: {e}")?;
 
     // 3. Connect to persistence layer.
     let db_pool = open_postgres(&config.postgres).await
-        .map_err(|e| format!("postgres connect failed: {e}").to_text())?;
+        .map_err(|e| f"postgres connect failed: {e}")?;
     let storage = open_object_store(&config.s3).await
-        .map_err(|e| format!("s3 connect failed: {e}").to_text())?;
+        .map_err(|e| f"s3 connect failed: {e}")?;
     let cache = open_cache(&config.redis).await
-        .map_err(|e| format!("redis connect failed: {e}").to_text())?;
+        .map_err(|e| f"redis connect failed: {e}")?;
     let search = open_search(&config.meilisearch).await
-        .map_err(|e| format!("meilisearch connect failed: {e}").to_text())?;
+        .map_err(|e| f"meilisearch connect failed: {e}")?;
 
     // 4. Apply schema migrations through the universal MigrationRunner.
     apply_migrations(&db_pool).await
-        .map_err(|e| format!("migration failed: {e}").to_text())?;
+        .map_err(|e| f"migration failed: {e}")?;
 
     // 5. Assemble service registry — v3.0 adds TUF, Sigstore, WebAuthn.
     //
@@ -156,11 +161,11 @@ public async fn main() -> Result<(), Text> {
     // SigstoreService with that trust root pinned. WebAuthn is
     // independent.
     let tuf_keys: TufKeyMaterial = TufKeyMaterial.from_config(&config.tuf)
-        .map_err(|e| format!("tuf keys load failed: {e}").to_text())?;
+        .map_err(|e| f"tuf keys load failed: {e}")?;
     let tuf = TufService.new(tuf_keys).await
-        .map_err(|e| format!("tuf init failed: {e}").to_text())?;
+        .map_err(|e| f"tuf init failed: {e}")?;
     let trust_root = tuf.fetch_sigstore_trust_root(&config.tuf).await
-        .map_err(|e| format!("sigstore trust-root load failed: {e}").to_text())?;
+        .map_err(|e| f"sigstore trust-root load failed: {e}")?;
     let sigstore = SigstoreService.new(trust_root);
     let webauthn = WebAuthnService.new(
         config.webauthn.rp_id.clone(),
@@ -178,9 +183,9 @@ public async fn main() -> Result<(), Text> {
         publish:    PublishService {},
         search:     SearchService {},
         sumdb:      SumdbService.from_db(&db_pool, &config.sumdb).await
-            .map_err(|e| format!("sumdb init failed: {e}").to_text())?,
+            .map_err(|e| f"sumdb init failed: {e}")?,
         auth:       AuthService.from_config(&config.oidc).await
-            .map_err(|e| format!("auth init failed: {e}").to_text())?,
+            .map_err(|e| f"auth init failed: {e}")?,
         provenance: ProvenanceService {},
         sigstore,
         tuf,
@@ -214,17 +219,17 @@ public async fn main() -> Result<(), Text> {
         .with_connection_config(conn_cfg)
         .serve_tls(tls)
         .await
-        .map_err(|e| format!("serve failed: {e}").to_text())
+        .map_err(|e| f"serve failed: {e}")
 }
 
 async fn apply_migrations(pool: &AsyncPgPool) -> Result<(), Text> {
-    let conn = pool.acquire().await.map_err(|e| format!("{e}").to_text())?;
+    let conn = pool.acquire().await.map_err(|e| f"{e}")?;
     let mut store = store_new(conn, store_config_default());
     let plan = build(load_migrations())
-        .map_err(|e| format!("invalid migration plan: {e}").to_text())?;
+        .map_err(|e| f"invalid migration plan: {e}")?;
     let runner = runner_new(RmStrict);
     let _report = runner.execute(&plan, &mut store, now_ns()).await
-        .map_err(|e| format!("{e}").to_text())?;
+        .map_err(|e| f"{e}")?;
     Ok(())
 }
 
@@ -232,24 +237,24 @@ fn load_migrations() -> List<core.database.common.migrations.Migration> {
     let mut steps: List<core.database.common.migrations.Migration> = List.new();
     steps.push(migration_new(
         1, "initial_schema".to_text(),
-        include_str!("../migrations/0001_initial_schema.sql").to_text(),
+        @include_str("../migrations/0001_initial_schema.sql").to_text(),
     ));
     // NEW v3.0
     steps.push(migration_new(
         2, "passkeys".to_text(),
-        include_str!("../migrations/0002_passkeys.sql").to_text(),
+        @include_str("../migrations/0002_passkeys.sql").to_text(),
     ));
     steps.push(migration_new(
         3, "tuf_metadata".to_text(),
-        include_str!("../migrations/0003_tuf_metadata.sql").to_text(),
+        @include_str("../migrations/0003_tuf_metadata.sql").to_text(),
     ));
     steps.push(migration_new(
         4, "sigstore_bundles".to_text(),
-        include_str!("../migrations/0004_sigstore_bundles.sql").to_text(),
+        @include_str("../migrations/0004_sigstore_bundles.sql").to_text(),
     ));
     steps.push(migration_new(
         5, "publish_identity".to_text(),
-        include_str!("../migrations/0005_publish_identity.sql").to_text(),
+        @include_str("../migrations/0005_publish_identity.sql").to_text(),
     ));
     steps
 }
@@ -269,7 +274,7 @@ fn rate_limit_config(c: &Config) -> RateLimitConfig {
 fn spiffe_bundles(c: &Config) -> Result<List<core.security.spiffe.TrustBundle>, Text> {
     if c.spiffe.enabled {
         core.security.spiffe.load_bundles_from_paths(&c.spiffe.bundle_paths)
-            .map_err(|e| format!("{e}").to_text())
+            .map_err(|e| f"{e}")
     } else {
         Ok(List.new())
     }

@@ -32,8 +32,8 @@ public async fn handle_search(req: WeftRequest) -> Response
     using [SearchService, Search, Cache, Metrics, Logger]
 {
     let q = req.query_param("q").unwrap_or_else(|| "".to_text());
-    let page = req.query_param("page").and_then(|s| s.parse::<Int>().ok()).unwrap_or(0);
-    let per_page = req.query_param("per_page").and_then(|s| s.parse::<Int>().ok()).unwrap_or(20);
+    let page = req.query_param("page").and_then(|s| s.parse<Int>().ok()).unwrap_or(0);
+    let per_page = req.query_param("per_page").and_then(|s| s.parse<Int>().ok()).unwrap_or(20);
     let sort = match req.query_param("sort").unwrap_or_else(|| "relevance".to_text()).as_str() {
         "downloads" => SortMode.SortDownloads,
         "recent"    => SortMode.SortRecent,

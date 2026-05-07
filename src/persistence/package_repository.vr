@@ -78,7 +78,7 @@ public async fn upsert_package(
 ) -> Result<(), DbError> {
     let mut conn = repo.pool.acquire().await?;
     let v_text = format_semver(&pkg.latest_version);
-    let kw_array = pkg.keywords.iter().map(|k| k.clone()).collect::<List<Text>>();
+    let kw_array = pkg.keywords.iter().map(|k| k.clone()).collect<List<Text>>();
     conn.execute(sql#"
         INSERT INTO packages (
             id, description, homepage, repository, license, keywords,
@@ -169,7 +169,7 @@ fn decode_package_row(row: &Row) -> Result<PackageRecord, DbError> {
         license:        row.get_text("license")?,
         keywords:       row.get_text_array("keywords").unwrap_or_default(),
         latest_version: base.semver.parse(&row.get_text("latest_version")?)
-            .map_err(|e| DbError.DecodeFailed { fault: format!("latest_version: {e}").to_text() })?,
+            .map_err(|e| DbError.DecodeFailed { fault: f"latest_version: {e}" })?,
         downloads:      row.get_int64("downloads")? as Int,
         score:          row.get_int("score")?,
         created_at:     row.get_timestamp("created_at")?,

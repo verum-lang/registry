@@ -77,7 +77,7 @@ public async fn lookup_entry(
             sequence:   row.get_int64("sequence")? as Int,
             package_id: row.get_text("package_id")?,
             version:    base.semver.parse(&row.get_text("version")?)
-                .map_err(|e| DbError.DecodeFailed { fault: format!("version: {e}").to_text() })?,
+                .map_err(|e| DbError.DecodeFailed { fault: f"version: {e}" })?,
             checksum:   row.get_text("checksum")?,
             timestamp:  row.get_timestamp("timestamp")?,
         })),
@@ -120,7 +120,7 @@ public async fn latest_tree_head(
             root_hash:    row.get_bytes("root_hash")?,
             timestamp_ms: row.get_int64("timestamp")?,
             signature:    row.get_bytes("signature")?.try_into()
-                .map_err(|e| DbError.DecodeFailed { fault: format!("signature: {e}").to_text() })?,
+                .map_err(|e| DbError.DecodeFailed { fault: f"signature: {e}" })?,
             operator_pubkey: [0_u8; 32],  // operator pubkey held by SumdbService, not in DB
         })),
         None => Ok(None),

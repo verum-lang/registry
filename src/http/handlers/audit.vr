@@ -63,7 +63,7 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
     let dist = match lifecycle_distribution_for_corpus().await {
         Ok(d)  => d,
         Err(e) => return render_error("internal_error".to_text(),
-            format!("{e}").to_text(), None, None,
+            f"{e}", None, None,
         ).status(StatusCode.InternalServerError),
     };
     let violations = detect_poset_violations(POSET_MAX_DEPTH).await
@@ -113,7 +113,7 @@ pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
     let summary = match summarise_corpus_anti_patterns().await {
         Ok(s)  => s,
         Err(e) => return render_error("internal_error".to_text(),
-            format!("{e}").to_text(), None, None,
+            f"{e}", None, None,
         ).status(StatusCode.InternalServerError),
     };
     let mut obj = encoding.json.JsonObject.new();
@@ -148,10 +148,10 @@ pub async fn cog_anti_patterns(req: WeftRequest) -> Response
     let roster = match repo.fetch_roster(&cog_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return render_error("not_found".to_text(),
-            format!("no audit record for {}", cog_id).to_text(), None, None,
+            f"no audit record for {cog_id}", None, None,
         ).status(StatusCode.NotFound),
         Err(e) => return render_error("internal_error".to_text(),
-            format!("{e}").to_text(), None, None,
+            f"{e}", None, None,
         ).status(StatusCode.InternalServerError),
     };
     Response.json(&roster_to_json(&roster))
@@ -202,10 +202,10 @@ pub async fn cog_cve_bundle(req: WeftRequest) -> Response
     let bundle = match repo.fetch_cve_bundle(&cog_id).await {
         Ok(Some(b)) => b,
         Ok(None) => return render_error("not_found".to_text(),
-            format!("no audit record for {}", cog_id).to_text(), None, None,
+            f"no audit record for {cog_id}", None, None,
         ).status(StatusCode.NotFound),
         Err(e) => return render_error("internal_error".to_text(),
-            format!("{e}").to_text(), None, None,
+            f"{e}", None, None,
         ).status(StatusCode.InternalServerError),
     };
 
@@ -226,7 +226,7 @@ pub async fn self_audit(req: WeftRequest) -> Response
     let result = match run_self_audit().await {
         Ok(r)  => r,
         Err(e) => return render_error("internal_error".to_text(),
-            format!("{e}").to_text(), None, None,
+            f"{e}", None, None,
         ).status(StatusCode.InternalServerError),
     };
     if accept_text_plain(&req) {
@@ -249,8 +249,8 @@ fn cog_id_from_req(req: &WeftRequest) -> Result<Text, Response> {
             "missing scope/name/version".to_text(), None, None,
         ).status(StatusCode.BadRequest));
     }
-    let id = if scope.is_empty() { format!("{}@{}", name, ver) }
-             else { format!("{}/{}@{}", scope, name, ver) };
+    let id = if scope.is_empty() { f"{name}@{ver}" }
+             else { f"{scope}/{name}@{ver}" };
     Ok(id.to_text())
 }
 

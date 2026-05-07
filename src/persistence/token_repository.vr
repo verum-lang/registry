@@ -102,9 +102,9 @@ public async fn update_token_last_used(
 fn decode_token_row(row: &Row) -> Result<ApiToken, DbError> {
     let scopes_text = row.get_text("scopes").unwrap_or_else(|_| "[]".to_text());
     let scopes: List<TokenScope> = json_parse(&scopes_text)
-        .map_err(|e| DbError.DecodeFailed { fault: format!("scopes json: {e}").to_text() })?
+        .map_err(|e| DbError.DecodeFailed { fault: f"scopes json: {e}" })?
         .try_into()
-        .map_err(|e| DbError.DecodeFailed { fault: format!("scopes: {e}").to_text() })?;
+        .map_err(|e| DbError.DecodeFailed { fault: f"scopes: {e}" })?;
     Ok(ApiToken {
         id:           row.get_text("id")?,
         user_id:      row.get_text("user_id")?,

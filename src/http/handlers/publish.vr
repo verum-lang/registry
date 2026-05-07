@@ -208,16 +208,16 @@ fn missing(name: &str) -> Response {
 
 fn publish_error_message(e: &PublishError) -> Text {
     match e {
-        ManifestParseFailed(err)    => format!("manifest parse: {err}").to_text(),
+        ManifestParseFailed(err)    => f"manifest parse: {err}",
         NotAnOwner                   => "you are not an owner of this package".to_text(),
-        VersionExists(v)             => format!("version {v} already published").to_text(),
+        VersionExists(v)             => f"version {v} already published",
         VersionNotMonotone { latest, proposed } =>
-            format!("proposed {proposed} is not greater than latest {latest}").to_text(),
+            f"proposed {proposed} is not greater than latest {latest}",
         TyposquattingSuspected { proposed, similar, distance } =>
-            format!("name '{proposed}' is too similar (distance={distance}) to existing '{similar}'").to_text(),
-        MalwareDetected(reason)      => format!("malware detected: {reason}").to_text(),
-        ArchiveDecodeFailed(reason)  => format!("archive decode failed: {reason}").to_text(),
-        CompileFailed(reason)        => format!("compile failed: {reason}").to_text(),
+            f"name '{proposed}' is too similar (distance={distance}) to existing '{similar}'",
+        MalwareDetected(reason)      => f"malware detected: {reason}",
+        ArchiveDecodeFailed(reason)  => f"archive decode failed: {reason}",
+        CompileFailed(reason)        => f"compile failed: {reason}",
         AntiPatternViolations(_)     => "architectural anti-pattern violations".to_text(),
         StorageFailed(_)             => "storage operation failed".to_text(),
         DatabaseFailed(_)            => "database operation failed".to_text(),

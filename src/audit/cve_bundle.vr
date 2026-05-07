@@ -198,18 +198,11 @@ public type DeveloperSummary is {
 
 pub fn render_developer_summary(b: &CveBundle) -> DeveloperSummary {
     let glyph = lifecycle_glyph(&b.lifecycle);
-    let cve = format!("{} {} {}",
-        if is_closed(&b.cve_constructive) { "✓" } else { "✗" },
-        if is_closed(&b.cve_verifiable)   { "✓" } else { "✗" },
-        if is_closed(&b.cve_executable)   { "✓" } else { "✗" });
-    let ap = format!("{}/40 ok",
-        40 - b.anti_patterns.error_count - b.anti_patterns.warning_count);
+    let cve = f"{if is_closed(&b.cve_constructive) { "✓" } else { "✗" }} {if is_closed(&b.cve_verifiable)   { "✓" } else { "✗" }} {if is_closed(&b.cve_executable)   { "✓" } else { "✗" }}";
+    let ap = f"{40 - b.anti_patterns.error_count - b.anti_patterns.warning_count}/40 ok";
     let verdict = if b.load_bearing { "load-bearing ✓" } else { "non-load-bearing ✗" };
     DeveloperSummary {
-        text: format!(
-            "{}\n  Lifecycle:  {} {}\n  CVE:        {}\n  AP roster:  {}\n  Audit:      {}",
-            b.cog, glyph, lifecycle_label(&b.lifecycle), cve, ap, verdict,
-        ).to_text(),
+        text: f"{b.cog}\n  Lifecycle:  {glyph} {lifecycle_label(&b.lifecycle)}\n  CVE:        {cve}\n  AP roster:  {ap}\n  Audit:      {verdict}",
     }
 }
 
@@ -227,7 +220,7 @@ fn lifecycle_glyph(l: &Lifecycle) -> Text {
 
 fn lifecycle_label(l: &Lifecycle) -> Text {
     match l {
-        Lifecycle.Theorem(v)         => format!("Theorem({v})").to_text(),
+        Lifecycle.Theorem(v)         => f"Theorem({v})",
         Lifecycle.Definition         => "Definition".to_text(),
         Lifecycle.Conditional        => "Conditional".to_text(),
         Lifecycle.Postulate          => "Postulate".to_text(),

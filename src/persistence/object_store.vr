@@ -54,7 +54,7 @@ public async fn connect(config: &S3Config) -> Result<ObjectStore, Text> {
         region:            config.region.clone(),
         access_key_id:     config.access_key_id.clone(),
         secret_access_key: config.secret_access_key.clone(),
-    }).await.map_err(|e| format!("s3 client: {e}").to_text())?;
+    }).await.map_err(|e| f"s3 client: {e}")?;
     Ok(ObjectStore {
         client: client,
         bucket: config.bucket.clone(),
@@ -78,7 +78,7 @@ public async fn put_source_archive(
         content_type: "application/vnd.verum.cog-source+tar+zstd".to_text(),
         body:         archive_bytes.clone(),
         metadata:     compose_metadata(package_id, version, archive_bytes),
-    }).await.map_err(|e| format!("s3 put: {e}").to_text())
+    }).await.map_err(|e| f"s3 put: {e}")
 }
 
 public async fn get_source_archive(
@@ -90,7 +90,7 @@ public async fn get_source_archive(
     store.client.get_object(s3.GetObjectRequest {
         bucket: store.bucket.clone(),
         key:    key,
-    }).await.map_err(|e| format!("s3 get: {e}").to_text())
+    }).await.map_err(|e| f"s3 get: {e}")
 }
 
 public async fn delete_source_archive(
@@ -102,7 +102,7 @@ public async fn delete_source_archive(
     store.client.delete_object(s3.DeleteObjectRequest {
         bucket: store.bucket.clone(),
         key:    key,
-    }).await.map_err(|e| format!("s3 delete: {e}").to_text())
+    }).await.map_err(|e| f"s3 delete: {e}")
 }
 
 // =============================================================================
@@ -111,7 +111,7 @@ public async fn delete_source_archive(
 
 fn source_key(package_id: &PackageScope, version: &SemVer) -> Text {
     let v = format_semver(version);
-    format!("packages/{}/{}/source.tar.zst", package_id, v).to_text()
+    f"packages/{package_id}/{v}/source.tar.zst"
 }
 
 fn compose_metadata(

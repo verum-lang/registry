@@ -152,7 +152,7 @@ public fn load_config() -> Result<Config, ConfigLoadError> {
     let path = env_var("VERUM_REGISTRY_CONFIG")
         .unwrap_or_else(|_| "/etc/verum-registry/config.toml".to_text());
     let text = read_to_string(&path)
-        .map_err(|e| FileReadFailed(format!("{path}: {e}").to_text()))?;
+        .map_err(|e| FileReadFailed(f"{path}: {e}"))?;
     parse_config(&text)
 }
 
@@ -232,8 +232,8 @@ fn parse_oidc(root: &Map<Text, ConfigValue>) -> Result<OidcConfig, ConfigLoadErr
             while i < keys.len() {
                 let k = keys.get(i).unwrap();
                 if let Some(ConfigValue.ConfigTable(pt)) = prov_t.get(k) {
-                    let issuer = require_string(pt, &format!("oidc.providers.{k}.issuer").to_text(), &"issuer".to_text())?;
-                    let audience = require_string(pt, &format!("oidc.providers.{k}.audience").to_text(), &"audience".to_text())?;
+                    let issuer = require_string(pt, &f"oidc.providers.{k}.issuer", &"issuer".to_text())?;
+                    let audience = require_string(pt, &f"oidc.providers.{k}.audience", &"audience".to_text())?;
                     providers.insert(k.clone(), OidcProviderConfig { issuer, audience });
                 }
                 i = i + 1;
@@ -301,7 +301,7 @@ fn require_string_in(root: &Map<Text, ConfigValue>, section: &str, key: &str) ->
         Some(ConfigValue.ConfigTable(t)) => t,
         _ => return Err(MissingField(section.to_text())),
     };
-    require_string(section_t, &format!("{section}.{key}").to_text(), &key.to_text())
+    require_string(section_t, &f"{section}.{key}", &key.to_text())
 }
 
 fn require_string(t: &Map<Text, ConfigValue>, full: &Text, key: &Text) -> Result<Text, ConfigLoadError> {

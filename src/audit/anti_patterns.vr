@@ -183,7 +183,7 @@ public fn ap_name(id: &AntiPatternId) -> Text {
         AntiPatternId.AP_039_AnchoringOverextension       => "AnchoringOverextension",
         AntiPatternId.AP_040_SelfReferenceWithoutOperator => "SelfReferenceWithoutOperator",
     };
-    format!("{}/{}", id_text, camel).to_text()
+    f"{id_text}/{camel}"
 }
 
 public fn all_ap_ids() -> List<AntiPatternId> {
@@ -280,7 +280,7 @@ pub async fn anti_pattern_roster_for_cog(
 {
     // Kernel intrinsic — runs the full 40-pattern catalog.
     let kernel_findings = run_anti_pattern_check(compiled_shape_blob)
-        .map_err(|e| AuditError.KernelDispatchFailed(format!("{e}").to_text()))?;
+        .map_err(|e| AuditError.KernelDispatchFailed(f"{e}"))?;
 
     let mut roster_map: Map<Text, AntiPatternFinding> = Map.new();
     let mut errors: Int = 0;
@@ -332,12 +332,12 @@ pub async fn anti_pattern_roster_for_cog(
 fn run_anti_pattern_check(compiled_shape: &List<Byte>) -> Result<List<KernelFinding>, Text>;
 
 @derive(Clone, Debug)
-struct KernelFinding {
+type KernelFinding is {
     id:        ArchAntiPatternId,
     severity:  Severity,
     message:   Text,
     cite:      Text,
-}
+};
 
 fn kernel_id_to_local(id: &ArchAntiPatternId) -> Maybe<AntiPatternId> {
     // The kernel surface has a `code: Text` like "AP-001"; we map by
@@ -421,7 +421,7 @@ pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary
         WHERE verdict <> 'ok'
         GROUP BY ap_id
     "#.fetch_all().await
-        .map_err(|e| AuditError.QueryFailed(format!("{e}").to_text()))?;
+        .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut counts: Map<Text, Int> = Map.new();
     let mut i: Int = 0;
@@ -448,7 +448,7 @@ pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary
             SUM(CASE WHEN error_count = 0 AND warning_count = 0 THEN 1 ELSE 0 END) AS clean
         FROM cog_audit_records
     "#.fetch_one().await
-        .map_err(|e| AuditError.QueryFailed(format!("{e}").to_text()))?;
+        .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     Ok(CorpusAntiPatternSummary {
         counts_by_id,
@@ -460,12 +460,12 @@ pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary
 }
 
 @derive(FromRow)
-struct TotalsRow {
+type TotalsRow is {
     total:        Int,
     with_errors:  Maybe<Int>,
     warning_only: Maybe<Int>,
     clean:        Maybe<Int>,
-}
+};
 
 // =============================================================================
 // Errors

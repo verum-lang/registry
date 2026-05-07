@@ -71,9 +71,9 @@ pub async fn register_begin(req: WeftRequest) -> Response
             Response.json(&json_object(obj))
         }
         Err(e) => {
-            Logger.log(Level.Warn, &format!("webauthn register/begin: {e}").to_text());
+            Logger.log(Level.Warn, &f"webauthn register/begin: {e}");
             render_error("internal_error".to_text(),
-                format!("{e}").to_text(), None, None,
+                f"{e}", None, None,
             ).status(StatusCode.InternalServerError)
         }
     }
@@ -117,9 +117,9 @@ pub async fn register_finish(req: WeftRequest) -> Response
             None, None,
         ).status(StatusCode.BadRequest),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("webauthn register/finish: {e}").to_text());
+            Logger.log(Level.Warn, &f"webauthn register/finish: {e}");
             render_error("internal_error".to_text(),
-                format!("{e}").to_text(), None, None,
+                f"{e}", None, None,
             ).status(StatusCode.InternalServerError)
         }
     }
@@ -148,9 +148,9 @@ pub async fn authenticate_begin(req: WeftRequest) -> Response
             Response.json(&json_object(obj))
         }
         Err(e) => {
-            Logger.log(Level.Warn, &format!("webauthn auth/begin: {e}").to_text());
+            Logger.log(Level.Warn, &f"webauthn auth/begin: {e}");
             render_error("internal_error".to_text(),
-                format!("{e}").to_text(), None, None,
+                f"{e}", None, None,
             ).status(StatusCode.InternalServerError)
         }
     }
@@ -197,9 +197,9 @@ pub async fn authenticate_finish(req: WeftRequest) -> Response
             None, None,
         ).status(StatusCode.Unauthorized),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("webauthn auth/finish: {e}").to_text());
+            Logger.log(Level.Warn, &f"webauthn auth/finish: {e}");
             render_error("internal_error".to_text(),
-                format!("{e}").to_text(), None, None,
+                f"{e}", None, None,
             ).status(StatusCode.InternalServerError)
         }
     }
@@ -230,9 +230,9 @@ pub async fn list_passkeys(req: WeftRequest) -> Response
             Response.json(&json_array(arr))
         }
         Err(e) => {
-            Logger.log(Level.Warn, &format!("list_passkeys: {e}").to_text());
+            Logger.log(Level.Warn, &f"list_passkeys: {e}");
             render_error("internal_error".to_text(),
-                format!("{e}").to_text(), None, None,
+                f"{e}", None, None,
             ).status(StatusCode.InternalServerError)
         }
     }
@@ -262,9 +262,9 @@ pub async fn revoke_passkey(req: WeftRequest) -> Response
             "no such passkey".to_text(), None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("revoke_passkey: {e}").to_text());
+            Logger.log(Level.Warn, &f"revoke_passkey: {e}");
             render_error("internal_error".to_text(),
-                format!("{e}").to_text(), None, None,
+                f"{e}", None, None,
             ).status(StatusCode.InternalServerError)
         }
     }
@@ -275,7 +275,7 @@ pub async fn revoke_passkey(req: WeftRequest) -> Response
 // =============================================================================
 
 @derive(Deserialize)
-struct RegisterFinishBody {
+type RegisterFinishBody is {
     challenge_id:        Text,
     /// base64url-encoded clientDataJSON.
     client_data_json:    Text,
@@ -283,15 +283,15 @@ struct RegisterFinishBody {
     attestation_object:  Text,
     transports:          List<Text>,
     nickname:            Maybe<Text>,
-}
+};
 
 @derive(Deserialize, Default)
-struct AuthBeginBody {
+type AuthBeginBody is {
     username: Maybe<Text>,
-}
+};
 
 @derive(Deserialize)
-struct AuthFinishBody {
+type AuthFinishBody is {
     challenge_id:           Text,
     /// base64url credentialId.
     credential_id_b64:      Text,
@@ -299,13 +299,13 @@ struct AuthFinishBody {
     authenticator_data:     Text,
     signature:              Text,
     user_handle:            Maybe<Text>,
-}
+};
 
 fn decode_attestation_response(body: &RegisterFinishBody) -> Result<AuthenticatorAttestationResponse, Text> {
     let cd = b64url_decode(&body.client_data_json)
-        .map_err(|e| format!("clientDataJSON: {e}").to_text())?;
+        .map_err(|e| f"clientDataJSON: {e}")?;
     let att = b64url_decode(&body.attestation_object)
-        .map_err(|e| format!("attestationObject: {e}").to_text())?;
+        .map_err(|e| f"attestationObject: {e}")?;
     Ok(AuthenticatorAttestationResponse {
         client_data_json:   cd,
         attestation_object: att,
@@ -315,13 +315,13 @@ fn decode_attestation_response(body: &RegisterFinishBody) -> Result<Authenticato
 
 fn decode_assertion_response(body: &AuthFinishBody) -> Result<AuthenticatorAssertionResponse, Text> {
     let cd = b64url_decode(&body.client_data_json)
-        .map_err(|e| format!("clientDataJSON: {e}").to_text())?;
+        .map_err(|e| f"clientDataJSON: {e}")?;
     let auth_data = b64url_decode(&body.authenticator_data)
-        .map_err(|e| format!("authenticatorData: {e}").to_text())?;
+        .map_err(|e| f"authenticatorData: {e}")?;
     let sig = b64url_decode(&body.signature)
-        .map_err(|e| format!("signature: {e}").to_text())?;
+        .map_err(|e| f"signature: {e}")?;
     let user_handle = match &body.user_handle {
-        Some(uh) => Some(b64url_decode(uh).map_err(|e| format!("userHandle: {e}").to_text())?),
+        Some(uh) => Some(b64url_decode(uh).map_err(|e| f"userHandle: {e}")?),
         None     => None,
     };
     Ok(AuthenticatorAssertionResponse {

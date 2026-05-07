@@ -44,8 +44,8 @@ public async fn tracing_init(config: &TracingConfig) -> Result<(), Text> {
         endpoint:    config.otlp_endpoint.clone(),
         sample_rate: config.sample_rate,
         service_name: "verum-registry".to_text(),
-        service_version: env!("CARGO_PKG_VERSION", "0.0.0").to_text(),
-    }).await.map_err(|e| format!("otlp init: {e}").to_text())
+        service_version: @env("CARGO_PKG_VERSION", "0.0.0").to_text(),
+    }).await.map_err(|e| f"otlp init: {e}")
 }
 
 /// Initialise the metrics subsystem and pre-register canonical
@@ -54,7 +54,7 @@ public async fn metrics_init(config: &MetricsConfig) -> Result<(), Text> {
     core_metrics.init_registry(core_metrics.RegistryConfig {
         bind_address: config.bind_address.clone(),
         mtls_only:    config.mtls_only,
-    }).await.map_err(|e| format!("metrics init: {e}").to_text())?;
+    }).await.map_err(|e| f"metrics init: {e}")?;
 
     // Register canonical metric names.
     let counters = [

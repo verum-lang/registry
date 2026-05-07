@@ -192,7 +192,7 @@ fn decode_version_row(row: &Row) -> Result<PackageVersion, DbError> {
     Ok(PackageVersion {
         package_id:                row.get_text("package_id")?,
         version:                   parse_semver(&row.get_text("version")?)
-            .map_err(|e| DbError.DecodeFailed { fault: format!("version: {e}").to_text() })?,
+            .map_err(|e| DbError.DecodeFailed { fault: f"version: {e}" })?,
         edition:                   row.get_text("edition")?,
         language_profile:          decode_language_profile(&row.get_text("language_profile")?)?,
         dependencies:              decode_deps(&row.get_text("dependencies").unwrap_or_else(|_| "{}".to_text()))?,
@@ -225,7 +225,7 @@ fn decode_language_profile(s: &Text) -> Result<LanguageProfile, DbError> {
         "application" => Ok(Application),
         "systems"     => Ok(Systems),
         "research"    => Ok(Research),
-        _ => Err(DbError.DecodeFailed { fault: format!("language_profile: {s}").to_text() }),
+        _ => Err(DbError.DecodeFailed { fault: f"language_profile: {s}" }),
     }
 }
 
@@ -251,7 +251,7 @@ fn decode_lifecycle(s: &Text) -> Result<Lifecycle, DbError> {
         "H" => Ok(Lifecycle.Hypothesis(ConfidenceLevel.Medium)),
         "I" => Ok(Lifecycle.Interpretation("registry-recorded".to_text())),
         "X" => Ok(Lifecycle.Retracted("registry-recorded".to_text(), None)),
-        _   => Err(DbError.DecodeFailed { fault: format!("lifecycle glyph: {s}").to_text() }),
+        _   => Err(DbError.DecodeFailed { fault: f"lifecycle glyph: {s}" }),
     }
 }
 
@@ -264,11 +264,11 @@ fn json_encode_features(feats: &Map<Text, List<Text>>) -> Text {
 }
 
 fn decode_deps(s: &Text) -> Result<Map<Text, DependencySpec>, DbError> {
-    json_parse(s).map_err(|e| DbError.DecodeFailed { fault: format!("deps json: {e}").to_text() })
-        .and_then(|v| v.try_into::<Map<Text, DependencySpec>>())
+    json_parse(s).map_err(|e| DbError.DecodeFailed { fault: f"deps json: {e}" })
+        .and_then(|v| v.try_into<Map<Text, DependencySpec>>())
 }
 
 fn decode_features(s: &Text) -> Result<Map<Text, List<Text>>, DbError> {
-    json_parse(s).map_err(|e| DbError.DecodeFailed { fault: format!("features json: {e}").to_text() })
-        .and_then(|v| v.try_into::<Map<Text, List<Text>>>())
+    json_parse(s).map_err(|e| DbError.DecodeFailed { fault: f"features json: {e}" })
+        .and_then(|v| v.try_into<Map<Text, List<Text>>>())
 }

@@ -139,7 +139,7 @@ fn decode_owner_row(row: &Row) -> Result<PackageOwner, DbError> {
     let role = match row.get_text("role")?.as_str() {
         "owner"      => RoleOwner,
         "maintainer" => RoleMaintainer,
-        other => return Err(DbError.DecodeFailed { fault: format!("role: {other}").to_text() }),
+        other => return Err(DbError.DecodeFailed { fault: f"role: {other}" }),
     };
     Ok(PackageOwner {
         package_id: row.get_text("package_id")?,

@@ -76,25 +76,25 @@ implement SumdbService {
         // Load operator seed from configured path; for new installs,
         // generate at first run.
         let seed = load_or_init_signing_seed(&config.signing_key_path)
-            .map_err(|e| format!("signing key: {e}").to_text())?;
+            .map_err(|e| f"signing key: {e}")?;
         let pubkey = public_key(&seed);
         let mut log = log_new(seed, pubkey);
 
         // Replay all sumdb_entries to rebuild the in-memory log.
-        let mut conn = pool.acquire().await.map_err(|e| format!("{e}").to_text())?;
+        let mut conn = pool.acquire().await.map_err(|e| f"{e}")?;
         let rows = conn.query(
             sql#"SELECT package_id, version, checksum, timestamp
                   FROM sumdb_entries
                   ORDER BY sequence"#,
             (),
-        ).await.map_err(|e| format!("{e}").to_text())?;
+        ).await.map_err(|e| f"{e}")?;
 
         let mut i: Int = 0;
         while i < rows.len() {
             let leaf_text = encode_leaf_text(&rows[i])
-                .map_err(|e| format!("decode entry {i}: {e}").to_text())?;
+                .map_err(|e| f"decode entry {i}: {e}")?;
             let _ = append(&mut log, LogLeaf { bytes: leaf_text.as_bytes().to_list() }, now_unix_ns())
-                .map_err(|e| format!("replay entry {i}: {e}").to_text())?;
+                .map_err(|e| f"replay entry {i}: {e}")?;
             i = i + 1;
         }
 
@@ -107,7 +107,7 @@ implement SumdbService {
         leaf_bytes: List<Byte>,
     ) -> Result<SignedTreeHead, SumdbError> {
         append(&mut self.log, LogLeaf { bytes: leaf_bytes }, now_unix_ns())
-            .map_err(|e| LogIntegrityFailed(format!("{e}").to_text()))
+            .map_err(|e| LogIntegrityFailed(f"{e}"))
     }
 
     pub async fn lookup(
@@ -118,8 +118,8 @@ implement SumdbService {
         using [Database, Cache]
     {
         let v_text = base.semver.format_semver(version);
-        let cache_key = format!("sumdb:{}@{}", package, v_text).to_text();
-        if let Ok(Some(cached)) = Cache.get::<SumdbLookupResult>(&cache_key).await {
+        let cache_key = f"sumdb:{package}@{v_text}";
+        if let Ok(Some(cached)) = Cache.get<SumdbLookupResult>(&cache_key).await {
             return Ok(cached);
         }
         let row_opt = Database.query_one_opt(
@@ -127,18 +127,18 @@ implement SumdbService {
                   FROM sumdb_entries
                   WHERE package_id = $1 AND version = $2"#,
             (package, &v_text),
-        ).await.map_err(|e| StorageFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| StorageFailed(f"{e}"))?;
         let row = row_opt.ok_or(VersionNotInLog {
             package_id: package.clone(),
             version: version.clone(),
         })?;
 
         let sequence = row.get_int64("sequence")
-            .map_err(|e| StorageFailed(format!("{e}").to_text()))? as Int;
+            .map_err(|e| StorageFailed(f"{e}"))? as Int;
         let checksum_text = row.get_text("checksum")
-            .map_err(|e| StorageFailed(format!("{e}").to_text()))?;
+            .map_err(|e| StorageFailed(f"{e}"))?;
         let checksum = Hex64::try_from(checksum_text)
-            .map_err(|e| LogIntegrityFailed(format!("{e}").to_text()))?;
+            .map_err(|e| LogIntegrityFailed(f"{e}"))?;
 
         // Compute tile coordinates the verifier needs.
         let current_size = self.log.leaves.len();
@@ -159,11 +159,11 @@ implement SumdbService {
         using [Cache]
     {
         let cache_key = "sumdb:latest".to_text();
-        if let Ok(Some(cached)) = Cache.get::<SignedTreeHead>(&cache_key).await {
+        if let Ok(Some(cached)) = Cache.get<SignedTreeHead>(&cache_key).await {
             return Ok(cached);
         }
         let sth = sign_current_tree_head(&self.log, now_unix_ns())
-            .map_err(|e| LogIntegrityFailed(format!("{e}").to_text()))?;
+            .map_err(|e| LogIntegrityFailed(f"{e}"))?;
         let _ = Cache.set(&cache_key, &sth, Duration.seconds(60)).await;
         Ok(sth)
     }
@@ -171,8 +171,8 @@ implement SumdbService {
     pub async fn tile(&self, coord: TileCoord) -> Result<Tile, SumdbError>
         using [Cache]
     {
-        let cache_key = format!("sumdb:tile:{}:{}", coord.level, coord.index).to_text();
-        if let Ok(Some(cached)) = Cache.get::<Tile>(&cache_key).await {
+        let cache_key = f"sumdb:tile:{coord.level}:{coord.index}";
+        if let Ok(Some(cached)) = Cache.get<Tile>(&cache_key).await {
             return Ok(cached);
         }
         let tile = tile_at(&self.log, coord)
@@ -194,12 +194,12 @@ fn load_or_init_signing_seed(path: &Text) -> Result<security.ecc.ed25519.Ed25519
             while i < 32 { seed[i] = bytes[i]; i = i + 1; }
             Ok(seed)
         }
-        Ok(_) => Err(format!("signing key file at {path} has wrong length").to_text()),
+        Ok(_) => Err(f"signing key file at {path} has wrong length"),
         Err(_) => {
             // Generate a fresh seed and persist it (mode 0600).
             let seed = generate_seed();
             io.fs.write_with_mode(path, &seed.to_list(), 0o600)
-                .map_err(|e| format!("write signing key: {e}").to_text())?;
+                .map_err(|e| f"write signing key: {e}")?;
             Ok(seed)
         }
     }
@@ -208,10 +208,10 @@ fn load_or_init_signing_seed(path: &Text) -> Result<security.ecc.ed25519.Ed25519
 fn encode_leaf_text(row: &Row) -> Result<Text, Text> {
     // Canonical leaf JSON — matches what publish_service emits for
     // the sumdb_leaf_bytes payload.
-    let pkg = row.get_text("package_id").map_err(|e| format!("{e}").to_text())?;
-    let ver = row.get_text("version").map_err(|e| format!("{e}").to_text())?;
-    let chk = row.get_text("checksum").map_err(|e| format!("{e}").to_text())?;
-    let ts = row.get_timestamp("timestamp").map_err(|e| format!("{e}").to_text())?;
-    Ok(format!(r#"{{"package":"{}","version":"{}","checksum":"{}","timestamp":"{}"}}"#,
-                pkg, ver, chk, time.rfc3339.format(&ts)).to_text())
+    let pkg = row.get_text("package_id").map_err(|e| f"{e}")?;
+    let ver = row.get_text("version").map_err(|e| f"{e}")?;
+    let chk = row.get_text("checksum").map_err(|e| f"{e}")?;
+    let ts = row.get_timestamp("timestamp").map_err(|e| f"{e}")?;
+    Ok(format_unsupported(r#"{{"package":"{}","version":"{}","checksum":"{}","timestamp":"{}"}}"#,
+                pkg, ver, chk, time.rfc3339.format(&ts)))
 }

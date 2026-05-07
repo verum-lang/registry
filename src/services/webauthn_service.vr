@@ -153,7 +153,7 @@ implement WebAuthnService {
         // Existing passkeys to exclude (no double-registration).
         let repo = PasskeyRepository {};
         let existing = repo.find_by_user(&user.id).await
-            .map_err(|e| StorageError(format!("{e}").to_text()))?;
+            .map_err(|e| StorageError(f"{e}"))?;
         let mut exclude: List<CredentialDescriptor> = List.with_capacity(existing.len());
         let mut i: Int = 0;
         while i < existing.len() {
@@ -180,10 +180,10 @@ implement WebAuthnService {
         };
 
         Cache.set_with_ttl(
-            &format!("{}{}", CHALLENGE_KEY_PREFIX, challenge_id).to_text(),
+            &f"{CHALLENGE_KEY_PREFIX}{challenge_id}",
             &challenge_state_json(&user.id, &challenge_bytes, "register"),
             CHALLENGE_TTL_SECONDS,
-        ).await.map_err(|e| CacheError(format!("{e}").to_text()))?;
+        ).await.map_err(|e| CacheError(f"{e}"))?;
 
         Ok((challenge_id, options))
     }
@@ -218,7 +218,7 @@ implement WebAuthnService {
         );
         let repo = PasskeyRepository {};
         repo.insert(&passkey).await
-            .map_err(|e| StorageError(format!("{e}").to_text()))?;
+            .map_err(|e| StorageError(f"{e}"))?;
         Ok(passkey)
     }
 
@@ -237,7 +237,7 @@ implement WebAuthnService {
             Some(uid) => {
                 let repo = PasskeyRepository {};
                 let pks = repo.find_by_user(uid).await
-                    .map_err(|e| StorageError(format!("{e}").to_text()))?;
+                    .map_err(|e| StorageError(f"{e}"))?;
                 if pks.is_empty() { return Err(NoPasskeysForUser(uid.clone())); }
                 let mut allow: List<CredentialDescriptor> = List.with_capacity(pks.len());
                 let mut i: Int = 0;
@@ -266,10 +266,10 @@ implement WebAuthnService {
             None      => UserId("".to_text()),  // sentinel for discoverable
         };
         Cache.set_with_ttl(
-            &format!("{}{}", CHALLENGE_KEY_PREFIX, challenge_id).to_text(),
+            &f"{CHALLENGE_KEY_PREFIX}{challenge_id}",
             &challenge_state_json(&user_id_for_state, &challenge_bytes, "authenticate"),
             CHALLENGE_TTL_SECONDS,
-        ).await.map_err(|e| CacheError(format!("{e}").to_text()))?;
+        ).await.map_err(|e| CacheError(f"{e}"))?;
 
         Ok((challenge_id, options))
     }
@@ -289,7 +289,7 @@ implement WebAuthnService {
 
         let repo = PasskeyRepository {};
         let stored = repo.find_by_credential_id(credential_id).await
-            .map_err(|e| StorageError(format!("{e}").to_text()))?
+            .map_err(|e| StorageError(f"{e}"))?
             .ok_or_else(|| UnknownCredential)?;
 
         if !state.user_id.0.is_empty() && &state.user_id != &stored.user_id {
@@ -313,7 +313,7 @@ implement WebAuthnService {
             result.new_sign_count,
             result.backup_state,
             &now_utc(),
-        ).await.map_err(|e| StorageError(format!("{e}").to_text()))?;
+        ).await.map_err(|e| StorageError(f"{e}"))?;
 
         Ok((stored.user_id.clone(), result))
     }
@@ -326,7 +326,7 @@ implement WebAuthnService {
     {
         let repo = PasskeyRepository {};
         repo.find_by_user(user_id).await
-            .map_err(|e| StorageError(format!("{e}").to_text()))
+            .map_err(|e| StorageError(f"{e}"))
     }
 
     public async fn revoke_passkey(
@@ -338,7 +338,7 @@ implement WebAuthnService {
     {
         let repo = PasskeyRepository {};
         let n = repo.revoke(user_id, passkey_id).await
-            .map_err(|e| StorageError(format!("{e}").to_text()))?;
+            .map_err(|e| StorageError(f"{e}"))?;
         if n == 0 { return Err(UnknownCredential); }
         Ok(())
     }
@@ -354,9 +354,9 @@ implement WebAuthnService {
     ) -> Result<ChallengeState, WebAuthnServiceError>
         using [Cache]
     {
-        let key = format!("{}{}", CHALLENGE_KEY_PREFIX, challenge_id).to_text();
+        let key = f"{CHALLENGE_KEY_PREFIX}{challenge_id}";
         let raw = Cache.get_and_delete(&key).await
-            .map_err(|e| CacheError(format!("{e}").to_text()))?
+            .map_err(|e| CacheError(f"{e}"))?
             .ok_or_else(|| InvalidChallenge)?;
         let state = parse_challenge_state(&raw, ceremony)
             .ok_or_else(|| InvalidChallenge)?;
@@ -369,10 +369,10 @@ implement WebAuthnService {
 // =============================================================================
 
 @derive(Clone, Debug)
-struct ChallengeState {
+type ChallengeState is {
     user_id:          UserId,
     challenge_bytes:  List<Byte>,
-}
+};
 
 fn challenge_state_json(uid: &UserId, ch: &List<Byte>, ceremony: &str) -> Text {
     let obj = JsonValue.Object(json_object_from_pairs(&[

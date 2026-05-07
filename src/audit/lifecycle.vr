@@ -79,7 +79,7 @@ pub async fn lifecycle_distribution_for_corpus() -> Result<LifecycleDistribution
         WHERE NOT yanked
         GROUP BY cve_lifecycle
     "#.fetch_all().await
-        .map_err(|e| AuditError.QueryFailed(format!("{e}").to_text()))?;
+        .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut dist = LifecycleDistribution {
         theorem: 0, definition: 0, conditional: 0, postulate: 0,
@@ -107,10 +107,10 @@ pub async fn lifecycle_distribution_for_corpus() -> Result<LifecycleDistribution
 }
 
 @derive(FromRow)
-struct LifecycleRow {
+type LifecycleRow is {
     cve_lifecycle: Text,
     n: Int,
-}
+};
 
 // =============================================================================
 // Poset violations (AP-009 transitive)
@@ -180,7 +180,7 @@ pub async fn detect_poset_violations(max_depth: Int) -> Result<List<PosetViolati
           AND lifecycle_rank(dw.source_lifecycle) > lifecycle_rank(v3.cve_lifecycle)
         ORDER BY dw.depth, dw.source_cog
     "#.fetch_all().await
-        .map_err(|e| AuditError.QueryFailed(format!("{e}").to_text()))?;
+        .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut out: List<PosetViolation> = List.with_capacity(rows.len());
     let mut i: Int = 0;
@@ -199,10 +199,10 @@ pub async fn detect_poset_violations(max_depth: Int) -> Result<List<PosetViolati
 }
 
 @derive(FromRow)
-struct PosetRow {
+type PosetRow is {
     source_cog: Text,
     source_lifecycle: Text,
     target_cog: Text,
     target_lifecycle: Text,
     depth: Int,
-}
+};

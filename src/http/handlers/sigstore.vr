@@ -56,7 +56,7 @@ pub async fn get_bundle(req: WeftRequest) -> Response
     let name_text  = req.path_param("name").unwrap_or_else(|| "".to_text());
     let version_text = req.path_param("version").unwrap_or_else(|| "".to_text());
     let pkg_id_text = if scope_text.is_empty() { name_text.clone() }
-                      else { format!("{}/{}", scope_text, name_text).to_text() };
+                      else { f"{scope_text}/{name_text}" };
     let pkg_id: PackageScope = match pkg_id_text.try_into() {
         Ok(s)  => s,
         Err(_) => return render_error("validation_failed".to_text(),
@@ -73,10 +73,10 @@ pub async fn get_bundle(req: WeftRequest) -> Response
     let v_row = match lookup_version(&VersionRepository, &pkg_id, &semver).await {
         Ok(Some(r)) => r,
         Ok(None) => return render_error("not_found".to_text(),
-            format!("version {}@{}", pkg_id, version_text).to_text(), None, None,
+            f"version {pkg_id}@{version_text}", None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("get_bundle: {e}").to_text());
+            Logger.log(Level.Warn, &f"get_bundle: {e}");
             return render_error("internal_error".to_text(),
                 "version lookup failed".to_text(), None, None,
             ).status(StatusCode.InternalServerError);
@@ -92,7 +92,7 @@ pub async fn get_bundle(req: WeftRequest) -> Response
             "no Sigstore bundle on file for this version".to_text(), None, None,
         ).status(StatusCode.NotFound),
         Err(e) => {
-            Logger.log(Level.Warn, &format!("fetch_bundle: {e}").to_text());
+            Logger.log(Level.Warn, &f"fetch_bundle: {e}");
             render_error("internal_error".to_text(),
                 "bundle fetch failed".to_text(), None, None,
             ).status(StatusCode.InternalServerError)
@@ -124,7 +124,7 @@ pub async fn verify_bundle(req: WeftRequest) -> Response
     let bundle = match security.sigstore.types.parse_sigstore_bundle(&body.bundle) {
         Ok(b)  => b,
         Err(e) => return render_error("validation_failed".to_text(),
-            format!("invalid bundle: {e}").to_text(), None, None,
+            f"invalid bundle: {e}", None, None,
         ).status(StatusCode.BadRequest),
     };
     let expected = match parse_expected(&body.expected) {
@@ -146,7 +146,7 @@ pub async fn verify_bundle(req: WeftRequest) -> Response
         Err(e) => {
             let mut obj = encoding.json.JsonObject.new();
             obj.insert("verified".to_text(), json_bool(false));
-            obj.insert("reason".to_text(), json_string(format!("{e}").to_text()));
+            obj.insert("reason".to_text(), json_string(f"{e}"));
             Response.json(&json_object(obj)).status(StatusCode.BadRequest)
         }
     }
@@ -157,29 +157,29 @@ pub async fn verify_bundle(req: WeftRequest) -> Response
 // =============================================================================
 
 @derive(Deserialize)
-struct VerifyBody {
+type VerifyBody is {
     bundle:   JsonValue,
     expected: ExpectedDto,
-}
+};
 
 @derive(Deserialize)
-struct ExpectedDto {
+type ExpectedDto is {
     issuer:  Text,
     subject: SubjectDto,
-}
+};
 
 @derive(Deserialize)
-struct SubjectDto {
+type SubjectDto is {
     kind:  Text,
     value: Text,
-}
+};
 
 fn parse_expected(d: &ExpectedDto) -> Result<ExpectedIdentity, Text> {
     let matcher = match d.subject.kind.as_str() {
         "exact"  => IdentityMatcher.Exact(d.subject.value.clone()),
         "glob"   => IdentityMatcher.Glob(d.subject.value.clone()),
         "domain" => IdentityMatcher.Domain(d.subject.value.clone()),
-        other    => return Err(format!("unknown subject matcher kind: {other}").to_text()),
+        other    => return Err(f"unknown subject matcher kind: {other}"),
     };
     Ok(ExpectedIdentity {
         issuer:           d.issuer.clone(),

@@ -134,19 +134,19 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let root_v = repo.latest_root().await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .map(|r| r.version)
             .unwrap_or(0);
         let ts_v = repo.latest_signed(&RoleName.Timestamp).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .map(|r| r.version)
             .unwrap_or(0);
         let sn_v = repo.latest_signed(&RoleName.Snapshot).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .map(|r| r.version)
             .unwrap_or(0);
         let tg_v = repo.latest_signed(&RoleName.Targets).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .map(|r| r.version)
             .unwrap_or(0);
         Ok(TufService {
@@ -164,7 +164,7 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let snap = repo.get_root(version).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .ok_or_else(|| NoRoot)?;
         Ok(snap.content_bytes)
     }
@@ -175,7 +175,7 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let m = repo.latest_signed(&RoleName.Timestamp).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .ok_or_else(|| NoTimestamp)?;
         Ok(m.content_bytes)
     }
@@ -185,7 +185,7 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let m = repo.get_signed(&RoleName.Snapshot, version).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .ok_or_else(|| NoSnapshot)?;
         Ok(m.content_bytes)
     }
@@ -195,7 +195,7 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let m = repo.get_signed(&RoleName.Targets, version).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .ok_or_else(|| NoTargets(version))?;
         Ok(m.content_bytes)
     }
@@ -207,7 +207,7 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let next_v = repo.next_version(&RoleName.Targets).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?;
+            .map_err(|e| Storage(f"{e}"))?;
         // Build the new targets metadata.  In production this enumerates
         // every (cog, version) → digest from the registry's package index;
         // we surface the hook here.  The actual targets-list assembly is
@@ -233,7 +233,7 @@ implement TufService {
             created_at:     now,
         };
         repo.insert_signed(&meta).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?;
+            .map_err(|e| Storage(f"{e}"))?;
         let mut w = self.current_targets_version.write().await;
         *w = next_v;
         Ok(next_v)
@@ -249,12 +249,12 @@ implement TufService {
             sleep_seconds(TIMESTAMP_REFRESH_SECONDS).await;
             tick = tick + 1;
             if let Err(e) = self.refresh_timestamp().await {
-                Logger.log(Level.Warn, &format!("tuf-svc: timestamp refresh failed: {e}").to_text());
+                Logger.log(Level.Warn, &f"tuf-svc: timestamp refresh failed: {e}");
             }
             // Every 24 ticks (24h), refresh snapshot too.
             if tick % 24 == 0 {
                 if let Err(e) = self.refresh_snapshot().await {
-                    Logger.log(Level.Warn, &format!("tuf-svc: snapshot refresh failed: {e}").to_text());
+                    Logger.log(Level.Warn, &f"tuf-svc: snapshot refresh failed: {e}");
                 }
             }
         }
@@ -265,11 +265,11 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let next_v = repo.next_version(&RoleName.Timestamp).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?;
+            .map_err(|e| Storage(f"{e}"))?;
         let now = now_utc();
         let expires = add_seconds(&now, TIMESTAMP_VALIDITY_SECONDS);
         let snap_meta = repo.latest_signed(&RoleName.Snapshot).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .ok_or_else(|| NoSnapshot)?;
         let mut meta_map: Map<Text, MetafileSpec> = Map.new();
         let mut snap_hashes: Map<Text, Text> = Map.new();
@@ -295,7 +295,7 @@ implement TufService {
             content_sha256: sha,
             expires_at:     expires,
             created_at:     now,
-        }).await.map_err(|e| Storage(format!("{e}").to_text()))?;
+        }).await.map_err(|e| Storage(f"{e}"))?;
         let mut w = self.current_timestamp_version.write().await;
         *w = next_v;
         Ok(())
@@ -306,11 +306,11 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let next_v = repo.next_version(&RoleName.Snapshot).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?;
+            .map_err(|e| Storage(f"{e}"))?;
         let now = now_utc();
         let expires = add_seconds(&now, SNAPSHOT_VALIDITY_SECONDS);
         let tg_meta = repo.latest_signed(&RoleName.Targets).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .ok_or_else(|| NoTargets(0))?;
         let mut meta_map: Map<Text, MetafileSpec> = Map.new();
         let mut tg_hashes: Map<Text, Text> = Map.new();
@@ -336,7 +336,7 @@ implement TufService {
             content_sha256: sha,
             expires_at:     expires,
             created_at:     now,
-        }).await.map_err(|e| Storage(format!("{e}").to_text()))?;
+        }).await.map_err(|e| Storage(f"{e}"))?;
         let mut w = self.current_snapshot_version.write().await;
         *w = next_v;
         Ok(())
@@ -353,7 +353,7 @@ implement TufService {
     {
         let repo = TufMetadataRepository {};
         let prev_v = repo.latest_root().await
-            .map_err(|e| Storage(format!("{e}").to_text()))?
+            .map_err(|e| Storage(f"{e}"))?
             .map(|r| r.version)
             .unwrap_or(0);
         let next_v = prev_v + 1;
@@ -370,10 +370,10 @@ implement TufService {
             content_sha256: sha,
             expires_at:     expires,
             created_at:     now,
-        }).await.map_err(|e| Storage(format!("{e}").to_text()))?;
+        }).await.map_err(|e| Storage(f"{e}"))?;
         let mut w = self.current_root_version.write().await;
         *w = next_v;
-        Logger.log(Level.Info, &format!("tuf-svc: root rotated to v={}", next_v).to_text());
+        Logger.log(Level.Info, &f"tuf-svc: root rotated to v={next_v}");
         Ok(next_v)
     }
 }
@@ -385,33 +385,33 @@ implement TufService {
 fn sign_timestamp(seed: &Ed25519Seed, ts: &TimestampMetadata) -> Result<List<Byte>, TufError> {
     let signed_value = encode_timestamp_to_json(ts);
     let payload = canonical_signing_payload(&signed_value)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     let sig = ed25519_sign(seed, payload.as_slice());
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     Ok(envelope_bytes(&signed_value, &[(key_id, sig.to_list())]))
 }
 
 fn sign_snapshot(seed: &Ed25519Seed, sn: &SnapshotMetadata) -> Result<List<Byte>, TufError> {
     let signed_value = encode_snapshot_to_json(sn);
     let payload = canonical_signing_payload(&signed_value)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     let sig = ed25519_sign(seed, payload.as_slice());
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     Ok(envelope_bytes(&signed_value, &[(key_id, sig.to_list())]))
 }
 
 fn sign_targets(seed: &Ed25519Seed, tg: &TargetsMetadata) -> Result<List<Byte>, TufError> {
     let signed_value = encode_targets_to_json(tg);
     let payload = canonical_signing_payload(&signed_value)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     let sig = ed25519_sign(seed, payload.as_slice());
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     Ok(envelope_bytes(&signed_value, &[(key_id, sig.to_list())]))
 }
 
@@ -422,7 +422,7 @@ fn sign_root(
 ) -> Result<List<Byte>, TufError> {
     let signed_value = encode_root_to_json(root);
     let payload = canonical_signing_payload(&signed_value)
-        .map_err(|e| Canonical(format!("{e}").to_text()))?;
+        .map_err(|e| Canonical(f"{e}"))?;
     // Sign with the union of (previous, new) root seeds — cross-signing.
     let mut signatures: List<(KeyId, List<Byte>)> = List.new();
     let mut i: Int = 0;
@@ -431,7 +431,7 @@ fn sign_root(
         let sig = ed25519_sign(seed, payload.as_slice());
         let pub_bytes = pubkey_bytes(seed);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
-            .map_err(|e| Canonical(format!("{e}").to_text()))?;
+            .map_err(|e| Canonical(f"{e}"))?;
         signatures.push((kid, sig.to_list()));
         i = i + 1;
     }
@@ -441,7 +441,7 @@ fn sign_root(
         let sig = ed25519_sign(seed, payload.as_slice());
         let pub_bytes = pubkey_bytes(seed);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
-            .map_err(|e| Canonical(format!("{e}").to_text()))?;
+            .map_err(|e| Canonical(f"{e}"))?;
         signatures.push((kid, sig.to_list()));
         j = j + 1;
     }
@@ -586,7 +586,7 @@ fn build_root_metadata(
     while k < new_keys.root_seeds.len() {
         let pub_bytes = pubkey_bytes(&new_keys.root_seeds[k]);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
-            .map_err(|e| Canonical(format!("{e}").to_text()))?;
+            .map_err(|e| Canonical(f"{e}"))?;
         let mut keyval: encoding.json.JsonObject = encoding.json.JsonObject.new();
         keyval.insert("public".to_text(),
             encoding.json.json_string(hex_encode(&pub_bytes)));
@@ -630,7 +630,7 @@ fn build_root_metadata(
 
 fn ed25519_keyid(seed: &Ed25519Seed) -> Result<KeyId, TufError> {
     let pub_bytes = pubkey_bytes(seed);
-    compute_keyid_for_ed25519(&pub_bytes).map_err(|e| Canonical(format!("{e}").to_text()))
+    compute_keyid_for_ed25519(&pub_bytes).map_err(|e| Canonical(f"{e}"))
 }
 
 fn tuf_ed25519_key(seed: &Ed25519Seed) -> Result<TufKey, TufError> {

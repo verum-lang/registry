@@ -210,24 +210,24 @@ implement PublishService {
         let source_sha256_bytes = sha256_digest(archive_bytes);
         let source_sha256 = match Hex64::try_from(hex_encode(&source_sha256_bytes)) {
             Ok(h)  => h,
-            Err(e) => return Err(InternalError(format!("hex format: {e}").to_text())),
+            Err(e) => return Err(InternalError(f"hex format: {e}")),
         };
 
         // 5b. Decompress (zstd) + unpack (tar).
         let tar_bytes = match zstd.decode(archive_bytes) {
             Ok(b)  => b,
-            Err(e) => return Err(ArchiveDecodeFailed(format!("zstd: {e}").to_text())),
+            Err(e) => return Err(ArchiveDecodeFailed(f"zstd: {e}")),
         };
         let entries = match tar_format().unpack(tar_bytes.as_slice()) {
             Ok(es) => es,
-            Err(e) => return Err(ArchiveDecodeFailed(format!("tar: {e}").to_text())),
+            Err(e) => return Err(ArchiveDecodeFailed(f"tar: {e}")),
         };
 
         // 5c. Compile-validate via verum_kernel.  In-process; uses the
         // current compiler embedded in the registry binary.
         let compile_report = match verum_kernel.compile_validate(&entries, manifest) {
             Ok(r)  => r,
-            Err(e) => return Err(CompileFailed(format!("{e}").to_text())),
+            Err(e) => return Err(CompileFailed(f"{e}")),
         };
 
         // 5d. Anti-pattern catalog (40 patterns).  Any Severity.Error aborts.
@@ -253,7 +253,7 @@ implement PublishService {
             hex_encode(&hash_canonical_shape(&compile_report.shape.declarations))
         ) {
             Ok(h)  => h,
-            Err(e) => return Err(InternalError(format!("hex format: {e}").to_text())),
+            Err(e) => return Err(InternalError(f"hex format: {e}")),
         };
         let verification_level = render_verification_level(&compile_report.verification_level);
 
@@ -314,11 +314,10 @@ implement PublishService {
         using [Database, Storage, Sumdb, Logger]
     {
         // S3 upload OUTSIDE transaction (S3 is non-transactional).
-        let s3_key = format!("packages/{}/{}/source.tar.zst",
-                             manifest.cog.name, manifest.cog.version).to_text();
+        let s3_key = f"packages/{manifest.cog.name}/{manifest.cog.version}/source.tar.zst";
         match Storage.put(&s3_key, source_archive).await {
             Ok(()) => {}
-            Err(e) => return Err(StorageFailed(format!("s3 put: {e}").to_text())),
+            Err(e) => return Err(StorageFailed(f"s3 put: {e}")),
         }
 
         // Postgres transaction: packages + versions + ownership + sumdb.
@@ -332,7 +331,7 @@ implement PublishService {
             // BIGSERIAL inside the transaction.
             let _seq = Sumdb.append(LogLeaf { bytes: artefacts.sumdb_leaf_bytes.clone() })
                 .await
-                .map_err(|e| DatabaseFailed(format!("sumdb append: {e}").to_text()))?;
+                .map_err(|e| DatabaseFailed(f"sumdb append: {e}"))?;
             Ok(version_record)
         }).await;
 
@@ -366,8 +365,8 @@ implement PublishService {
             }
         });
 
-        let cache_key_pkg = format!("package:{}", version.package_id).to_text();
-        let cache_key_versions = format!("versions:{}", version.package_id).to_text();
+        let cache_key_pkg = f"package:{version.package_id}";
+        let cache_key_versions = f"versions:{version.package_id}";
         let _ = Cache.invalidate(&cache_key_pkg).await;
         let _ = Cache.invalidate(&cache_key_versions).await;
     }
@@ -382,7 +381,7 @@ implement PublishService {
     ) -> Result<Bool, PublishError> using [Database] {
         let row = Database.query_one(sql#"SELECT EXISTS (SELECT 1 FROM packages WHERE id = $1) AS x"#, (name,))
             .await
-            .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+            .map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
     }
 
@@ -395,7 +394,7 @@ implement PublishService {
         let row = Database.query_one(
             sql#"SELECT EXISTS (SELECT 1 FROM versions WHERE package_id = $1 AND version = $2) AS x"#,
             (name, &v_text),
-        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
     }
 
@@ -406,13 +405,13 @@ implement PublishService {
         let row_opt = Database.query_one_opt(
             sql#"SELECT latest_version FROM packages WHERE id = $1"#,
             (name,),
-        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         match row_opt {
             Some(row) => {
                 let v_text: Text = row.get_text("latest_version")
-                    .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+                    .map_err(|e| DatabaseFailed(f"{e}"))?;
                 base.semver.parse(&v_text).map(Some)
-                    .map_err(|e| InternalError(format!("bad latest_version: {e}").to_text()))
+                    .map_err(|e| InternalError(f"bad latest_version: {e}"))
             }
             None => Ok(None),
         }
@@ -426,7 +425,7 @@ implement PublishService {
             sql#"SELECT package_id, user_id, role, granted_at, granted_by
                   FROM package_owners WHERE package_id = $1"#,
             (name,),
-        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<PackageOwner> = List.new();
         let mut i: Int = 0;
         while i < rows.len() {
@@ -444,7 +443,7 @@ implement PublishService {
         let rows = Database.query(
             sql#"SELECT id FROM packages WHERE id <> $1 ORDER BY downloads DESC LIMIT 1000"#,
             (proposed,),
-        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<CogName> = List.new();
         let mut i: Int = 0;
         while i < rows.len() {
@@ -481,7 +480,7 @@ implement PublishService {
         user: &User,
     ) -> Result<(), PublishError> {
         let v_text = base.semver.format_semver(&manifest.cog.version);
-        let kw_array = manifest.cog.keywords.iter().map(|k| k.clone()).collect::<Vec<_>>();
+        let kw_array = manifest.cog.keywords.iter().map(|k| k.clone()).collect<Vec<_>>();
         tx.execute(sql#"
             INSERT INTO packages (
                 id, description, homepage, repository, license, keywords,
@@ -508,7 +507,7 @@ implement PublishService {
             &manifest.cog.license.clone().unwrap_or_else(|| "Unlicense".to_text()),
             &kw_array,
             &v_text,
-        )).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        )).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(())
     }
 
@@ -547,7 +546,7 @@ implement PublishService {
             &analyzed.shape_declarations_digest,
             &analyzed.verification_level,
             &user.id,
-        )).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        )).await.map_err(|e| DatabaseFailed(f"{e}"))?;
 
         Ok(PackageVersion {
             package_id: manifest.cog.name.clone(),
@@ -583,7 +582,7 @@ implement PublishService {
                     WHERE package_id = $1 AND user_id = $2
                  ) AS x"#,
             (name, user_id),
-        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
     }
 
@@ -599,7 +598,7 @@ implement PublishService {
             VALUES ($1, $2, 'owner', now(), $3)
         "#, (name, user_id, granted_by))
             .await
-            .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+            .map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(())
     }
 }
@@ -671,19 +670,19 @@ fn hash_canonical_shape(declarations: &ShapeDeclarations) -> [Byte; 32] {
 
 fn decode_owner_row(row: &Row) -> Result<PackageOwner, PublishError> {
     let package_id: PackageScope = row.get_text("package_id")
-        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        .map_err(|e| DatabaseFailed(f"{e}"))?;
     let user_id: UserId = row.get_text("user_id")
-        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        .map_err(|e| DatabaseFailed(f"{e}"))?;
     let role_text = row.get_text("role")
-        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        .map_err(|e| DatabaseFailed(f"{e}"))?;
     let role = match role_text.as_str() {
         "owner"      => RoleOwner,
         "maintainer" => RoleMaintainer,
-        _            => return Err(InternalError(format!("invalid role: {role_text}").to_text())),
+        _            => return Err(InternalError(f"invalid role: {role_text}")),
     };
     let granted_at = row.get_timestamp("granted_at")
-        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        .map_err(|e| DatabaseFailed(f"{e}"))?;
     let granted_by: UserId = row.get_text("granted_by")
-        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        .map_err(|e| DatabaseFailed(f"{e}"))?;
     Ok(PackageOwner { package_id, user_id, role, granted_at, granted_by })
 }

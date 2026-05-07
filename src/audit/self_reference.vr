@@ -106,7 +106,7 @@ pub async fn run_self_audit() -> Result<SelfAuditResult, AuditError>
         l2_proof_method:LayerVerdict.NotApplicable("registry has no SMT certs".to_text()),
         l3_meta_theory: LayerVerdict.Pass,         // ZfcTwoInacc — declared
         l4_arch_shape:  if roster.error_count == 0 { LayerVerdict.Pass }
-                        else { LayerVerdict.Fail(format!("{} AP errors", roster.error_count).to_text()) },
+                        else { LayerVerdict.Fail(f"{roster.error_count} AP errors") },
         l5_audit_report:LayerVerdict.Pass,         // schema_version pinned ("1.0")
         l6_articulation:LayerVerdict.Pass,         // SelfReferenceWitness declared in main.vr
     };

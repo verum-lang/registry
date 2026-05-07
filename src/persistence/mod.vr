@@ -112,7 +112,7 @@ public async fn open_postgres(c: &PostgresConfig) -> Result<AsyncPgPool, Text> {
     };
     pg_async_connect(&c.url, pool_cfg)
         .await
-        .map_err(|e| format!("postgres: {e}").to_text())
+        .map_err(|e| f"postgres: {e}")
 }
 
 public async fn open_object_store(c: &S3Config) -> Result<ObjectStore, Text> {
@@ -122,11 +122,11 @@ public async fn open_object_store(c: &S3Config) -> Result<ObjectStore, Text> {
 public async fn open_cache(c: &RedisConfig) -> Result<RedisCache, Text> {
     core.cache.redis.connect(&c.url)
         .await
-        .map_err(|e| format!("redis: {e}").to_text())
+        .map_err(|e| f"redis: {e}")
 }
 
 public async fn open_search(c: &MeilisearchConfig) -> Result<MeilisearchClient, Text> {
     core.search.meilisearch.connect(&c.url, &c.api_key)
         .await
-        .map_err(|e| format!("meilisearch: {e}").to_text())
+        .map_err(|e| f"meilisearch: {e}")
 }

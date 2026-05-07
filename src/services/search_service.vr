@@ -109,7 +109,7 @@ implement SearchService {
         // Cache check (anonymous-cacheable).  Cache key embeds the full
         // query shape so distinct queries don't collide.
         let cache_key = render_cache_key(&query);
-        if let Ok(Some(cached)) = Cache.get::<SearchResults>(&cache_key).await {
+        if let Ok(Some(cached)) = Cache.get<SearchResults>(&cache_key).await {
             Metrics.increment("search.cache_hits");
             return Ok(cached);
         }
@@ -117,7 +117,7 @@ implement SearchService {
         // Delegate to Search backend.
         let results = Search.search_packages(&render_backend_query(&query))
             .await
-            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?;
+            .map_err(|e| SearchBackendFailed(f"{e}"))?;
 
         // Cache for 60 seconds.  Hot queries dominate; aggressive cache
         // is appropriate for an eventually-consistent search index.
@@ -137,7 +137,7 @@ implement SearchService {
         let doc = render_indexed_document(&pkg, version);
         Search.upsert_indexed_document(&doc)
             .await
-            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))
+            .map_err(|e| SearchBackendFailed(f"{e}"))
     }
 
     async fn lookup_package(
@@ -149,10 +149,10 @@ implement SearchService {
                         latest_version, downloads, score, created_at, updated_at
                   FROM packages WHERE id = $1"#,
             (id,),
-        ).await.map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?;
+        ).await.map_err(|e| SearchBackendFailed(f"{e}"))?;
         match row_opt {
             Some(row) => decode_package_row(&row),
-            None => Err(SearchBackendFailed(format!("package not found: {id}").to_text())),
+            None => Err(SearchBackendFailed(f"package not found: {id}")),
         }
     }
 }
@@ -162,15 +162,7 @@ implement SearchService {
 // =============================================================================
 
 fn render_cache_key(q: &SearchQuery) -> Text {
-    format!("search:{}:{:?}:{:?}:{:?}:{:?}:{}:{}:{}",
-        q.q,
-        q.cve_lifecycle,
-        q.language_profile,
-        q.verification_level_min,
-        q.license,
-        q.page, q.per_page,
-        sort_mode_tag(&q.sort),
-    ).to_text()
+    f"search:{q.q}:{q.cve_lifecycle:?}:{q.language_profile:?}:{q.verification_level_min:?}:{q.license:?}:{q.page}:{q.per_page}:{sort_mode_tag(&q.sort)}"
 }
 
 fn render_backend_query(q: &SearchQuery) -> SearchBackendQuery {
@@ -198,19 +190,19 @@ fn render_indexed_document(pkg: &PackageRecord, ver: &PackageVersion) -> SearchI
 
 fn decode_package_row(row: &Row) -> Result<PackageRecord, SearchError> {
     Ok(PackageRecord {
-        id: row.get_text("id").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
-        description: row.get_text("description").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        id: row.get_text("id").map_err(|e| SearchBackendFailed(f"{e}"))?,
+        description: row.get_text("description").map_err(|e| SearchBackendFailed(f"{e}"))?,
         homepage: row.get_text_opt("homepage").ok().flatten(),
         repository: row.get_text_opt("repository").ok().flatten(),
-        license: row.get_text("license").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        license: row.get_text("license").map_err(|e| SearchBackendFailed(f"{e}"))?,
         keywords: row.get_text_array("keywords").unwrap_or_default(),
         latest_version: base.semver.parse(&row.get_text("latest_version")
-            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?)
-            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+            .map_err(|e| SearchBackendFailed(f"{e}"))?)
+            .map_err(|e| SearchBackendFailed(f"{e}"))?,
         downloads: row.get_int64("downloads").unwrap_or(0) as Int,
         score: row.get_int("score").unwrap_or(0),
-        created_at: row.get_timestamp("created_at").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
-        updated_at: row.get_timestamp("updated_at").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        created_at: row.get_timestamp("created_at").map_err(|e| SearchBackendFailed(f"{e}"))?,
+        updated_at: row.get_timestamp("updated_at").map_err(|e| SearchBackendFailed(f"{e}"))?,
         owners: List.new(),  // owners loaded separately
     })
 }

@@ -132,12 +132,12 @@ implement SigstoreService {
     {
         let bundle_json_value = sigstore_bundle_to_json(bundle);
         let canonical = jcs_canonicalize(&bundle_json_value)
-            .map_err(|e| CanonicalisationFailed(format!("{e}").to_text()))?;
+            .map_err(|e| CanonicalisationFailed(f"{e}"))?;
         let bundle_text = json_encode(&bundle_json_value);
 
         // Envelope hash — recompute fresh.
         let envelope_canonical = jcs_canonicalize(&dsse_envelope_json(&bundle.envelope))
-            .map_err(|e| CanonicalisationFailed(format!("{e}").to_text()))?;
+            .map_err(|e| CanonicalisationFailed(f"{e}"))?;
         let envelope_sha = Hex64(hex_encode(&sha256_digest(&envelope_canonical)));
         let leaf_sha = Hex64(hex_encode(&sha256_digest(&canonical))); // simplification: bundle hash
 
@@ -150,7 +150,7 @@ implement SigstoreService {
             now_utc(),
         );
         let repo = SigstoreBundleRepository {};
-        repo.insert(&rec).await.map_err(|e| Storage(format!("{e}").to_text()))?;
+        repo.insert(&rec).await.map_err(|e| Storage(f"{e}"))?;
         Ok(rec)
     }
 
@@ -162,7 +162,7 @@ implement SigstoreService {
     {
         let repo = SigstoreBundleRepository {};
         let opt = repo.fetch_by_version_id(version_id).await
-            .map_err(|e| Storage(format!("{e}").to_text()))?;
+            .map_err(|e| Storage(f"{e}"))?;
         opt.ok_or_else(|| NoBundle(version_id))
     }
 
@@ -178,7 +178,7 @@ implement SigstoreService {
     {
         let repo = SigstoreBundleRepository {};
         repo.list_by_identity(issuer, subject, limit).await
-            .map_err(|e| Storage(format!("{e}").to_text()))
+            .map_err(|e| Storage(f"{e}"))
     }
 }
 
