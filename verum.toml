@@ -106,7 +106,7 @@ post-quantum-pq         = []   # core.security.pq integration
 # =============================================================================
 
 [profile.dev]
-tier              = "0"
+tier              = "interp"
 verification      = "runtime"
 opt_level         = 0
 debug             = true
@@ -118,7 +118,7 @@ codegen_units     = 256
 cbgr_checks       = "all"
 
 [profile.release]
-tier              = "2"
+tier              = "release"
 verification      = "runtime"
 opt_level         = 3
 debug             = false
