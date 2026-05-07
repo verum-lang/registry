@@ -38,7 +38,7 @@ mount time.rfc3339.Rfc3339Time;
 mount security.tuf.types.RoleName;
 
 @derive(Serialize, Deserialize, Eq, Clone, Debug)
-public type Hex64 is Text { where self.matches(r"^[0-9a-f]{64}$") };
+public type Hex64 is Text { self.matches("^[0-9a-f]{64}$") };
 
 /// Snapshot of the registry's TUF root metadata at a given version.
 /// Persisted on every root rotation (quarterly); served via

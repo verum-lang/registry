@@ -43,7 +43,7 @@ public type UserId is Ulid;
 /// Public username — lowercase alphanumeric + hyphen + underscore, 2–64.
 @derive(Serialize, Deserialize, Eq, Clone, Hash)
 public type Username is Text {
-    where self.matches(r"^[a-z][a-z0-9_-]{1,63}$")
+    self.matches("^[a-z][a-z0-9_-]{1,63}$")
 };
 
 /// RFC 5321 conformant email address.  Full validation deferred to
@@ -51,7 +51,7 @@ public type Username is Text {
 /// is a documentation contract and presence of `@`.
 @derive(Serialize, Deserialize, Eq, Clone)
 public type EmailAddress is Text {
-    where self.contains("@") && self.len() >= 3
+    self.contains("@") && self.len() >= 3
 };
 
 @derive(Serialize, Deserialize, Eq, Clone)

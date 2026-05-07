@@ -34,7 +34,7 @@ mount verum_registry.domain.package.PackageScope;
 /// Identifier — `VSEC-YYYY-NNNN`.
 @derive(Serialize, Deserialize, Eq, Clone, Hash)
 public type AdvisoryId is Text {
-    where self.matches(r"^VSEC-\d{4}-\d{4}$")
+    self.matches(r"^VSEC-\d{4}-\d{4}$")
 };
 
 @derive(Serialize, Deserialize, Eq, Clone)

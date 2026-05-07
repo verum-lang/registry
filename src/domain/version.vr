@@ -45,12 +45,12 @@ mount verum_registry.domain.user.UserId;
 
 @derive(Serialize, Deserialize, Eq, Clone, Hash)
 public type Hex64 is Text {
-    where self.len() == 64 && self.matches(r"^[0-9a-f]{64}$")
+    self.len() == 64 && self.matches("^[0-9a-f]{64}$")
 };
 
 @derive(Serialize, Deserialize, Eq, Clone)
 public type VerificationLevel is Text {
-    where self.matches(r"^(runtime|static|fast|formal|proof|thorough|reliable|certified|coherent_static|coherent_runtime|coherent|synthesize)$")
+    self.matches("^(runtime|static|fast|formal|proof|thorough|reliable|certified|coherent_static|coherent_runtime|coherent|synthesize)$")
 };
 
 // =============================================================================
