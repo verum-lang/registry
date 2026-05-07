@@ -1,193 +1,128 @@
-// User domain types
-// Defines User, UserRole, and ApiToken types
-//
-// This module uses refinement types from refinements.vr to ensure
-// type-level validation of usernames, emails, tokens, etc.
+// =============================================================================
+// verum_registry/domain/user.vr — User + ApiToken + OidcIdentity
+// =============================================================================
+// Spec: §5.1.4 / §5.1.5
+// =============================================================================
 
-mount core.collections.{List, Map};
-mount core.base.{Text, Int, Bool};
-mount core.time.unix_timestamp;
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "user / api-token / OIDC-identity domain types",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.TypecheckPlusTests,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.user;
 
-// Import refinement types for validated fields
-mount super.refinements.{
-    Username,
-    Email,
-    TokenValue,
-    TokenScope,
-    NonEmptyText,
-    ValidatedPackageName
+mount core.*;
+mount base.{Text, Maybe};
+mount collections.List;
+mount base.ulid.Ulid;
+mount time.rfc3339.Rfc3339Time;
+mount security.password_hash.Argon2idHash;
+
+mount verum_registry.domain.package.PackageScope;
+
+// =============================================================================
+// Refinement-typed leaves
+// =============================================================================
+
+/// User identifier — monotonic-sortable Crockford-base32 ULID (26 chars).
+@derive(Serialize, Deserialize, Eq, Clone, Hash)
+public type UserId is Ulid;
+
+/// Public username — lowercase alphanumeric + hyphen + underscore, 2–64.
+@derive(Serialize, Deserialize, Eq, Clone, Hash)
+public type Username is Text {
+    where self.matches(r"^[a-z][a-z0-9_-]{1,63}$")
 };
 
-// UserRole defines the role/permission level of a user
-// NOTE: Types must be defined BEFORE they are used to avoid placeholder type issues
-pub type UserRole is
-    | Regular
-    | Moderator
-    | Admin;
-
-implement UserRole {
-    pub fn to_string(self) -> Text {
-        match self {
-            UserRole.Regular => "regular",
-            UserRole.Moderator => "moderator",
-            UserRole.Admin => "admin"
-        }
-    }
-
-    pub fn from_string(s: Text) -> UserRole {
-        match s {
-            "admin" => UserRole.Admin,
-            "moderator" => UserRole.Moderator,
-            _ => UserRole.Regular
-        }
-    }
-}
-
-// ApiToken represents an API authentication token
-// NOTE: ApiToken must be defined BEFORE User since User contains List<ApiToken>
-// Uses refinement types for validated fields
-pub type ApiToken is {
-    id: Int,
-    name: NonEmptyText,         // Token name must be non-empty
-    token: TokenValue,          // Validated token value (32-256 chars)
-    created_at: Int,
-    expires_at: Int,            // 0 = never expires
-    last_used_at: Int,
-    is_active: Bool,
-    scopes: List<TokenScope>    // Validated scopes (publish, yank, read, admin)
+/// RFC 5321 conformant email address.  Full validation deferred to
+/// `core.text.email::is_valid` (forthcoming); for now the refinement
+/// is a documentation contract and presence of `@`.
+@derive(Serialize, Deserialize, Eq, Clone)
+public type EmailAddress is Text {
+    where self.contains("@") && self.len() >= 3
 };
 
-implement ApiToken {
-    pub fn new(id: Int, name: NonEmptyText, token: TokenValue) -> ApiToken {
-        let mut default_scopes = List.new();
-        default_scopes.push("publish");  // Valid TokenScope
-        default_scopes.push("yank");     // Valid TokenScope
-        let now = unix_timestamp();
+@derive(Serialize, Deserialize, Eq, Clone)
+public type TokenId is Ulid;
 
-        ApiToken {
-            id: id,
-            name: name,
-            token: token,
-            created_at: now,
-            expires_at: 0,  // 0 = never expires
-            last_used_at: now,
-            is_active: true,
-            scopes: default_scopes
-        }
-    }
+// =============================================================================
+// OIDC identity
+// =============================================================================
 
-    pub fn is_expired(self, current_time: Int) -> Bool {
-        if self.expires_at == 0 {
-            false
-        } else {
-            current_time > self.expires_at
-        }
-    }
-
-    pub fn is_valid(self, current_time: Int) -> Bool {
-        self.is_active && !self.is_expired(current_time)
-    }
-
-    pub fn has_scope(self, scope: TokenScope) -> Bool {
-        self.scopes.contains(scope)
-    }
-
-    pub fn with_scopes(self, scopes: List<TokenScope>) -> ApiToken {
-        ApiToken {
-            id: self.id,
-            name: self.name,
-            token: self.token,
-            created_at: self.created_at,
-            expires_at: self.expires_at,
-            last_used_at: self.last_used_at,
-            is_active: self.is_active,
-            scopes: scopes
-        }
-    }
-}
-
-// User represents a registry user
-// Uses refinement types for validated fields
-pub type User is {
-    id: Int,
-    username: Username,                          // Validated username (3-32 chars)
-    email: Email,                                // Validated email address
-    role: UserRole,
-    created_at: Int,
-    api_tokens: List<ApiToken>,
-    owned_packages: List<ValidatedPackageName>, // List of validated package names
-    is_active: Bool
+@derive(Serialize, Deserialize, Eq, Clone)
+public type OidcIdentity is {
+    /// OIDC issuer URL (e.g., `https://token.actions.githubusercontent.com`).
+    issuer: Text,
+    /// OIDC `sub` claim — provider-internal subject identifier.
+    subject: Text,
+    /// Provider-specific metadata (repository, workflow, ref, ...).
+    metadata: Map<Text, Text>,
 };
 
-implement User {
-    /// Create a new User with validated username and email
-    /// Note: Caller must ensure username and email are valid using their try_from() methods
-    pub fn new(id: Int, username: Username, email: Email) -> User {
-        User {
-            id: id,
-            username: username,
-            email: email,
-            role: UserRole.Regular,
-            created_at: unix_timestamp(),
-            api_tokens: List.new(),
-            owned_packages: List.new(),
-            is_active: true
-        }
-    }
+// =============================================================================
+// User
+// =============================================================================
 
-    pub fn with_role(self, role: UserRole) -> User {
-        User {
-            id: self.id,
-            username: self.username,
-            email: self.email,
-            role: role,
-            created_at: self.created_at,
-            api_tokens: self.api_tokens,
-            owned_packages: self.owned_packages,
-            is_active: self.is_active
-        }
-    }
+@derive(Serialize, Deserialize, Eq, Clone)
+public type User is {
+    id: UserId,
+    username: Username,
+    email: EmailAddress,
+    /// Argon2id password hash (only used for non-OIDC accounts).
+    /// `None` when the user authenticates via OIDC only.
+    password_hash: Maybe<Argon2idHash>,
+    /// Trusted-publisher OIDC identities the user has linked.
+    oidc_identities: List<OidcIdentity>,
+    created_at: Rfc3339Time,
+};
 
-    pub fn add_token(self, token: ApiToken) -> User {
-        let mut updated_tokens = self.api_tokens;
-        updated_tokens.push(token);
+// =============================================================================
+// ApiToken — long-lived credential with scopes + mandatory expiry
+// =============================================================================
 
-        User {
-            id: self.id,
-            username: self.username,
-            email: self.email,
-            role: self.role,
-            created_at: self.created_at,
-            api_tokens: updated_tokens,
-            owned_packages: self.owned_packages,
-            is_active: self.is_active
-        }
-    }
+@derive(Serialize, Deserialize, Eq, Clone)
+public type ApiToken is {
+    id: TokenId,
+    user_id: UserId,
+    /// Argon2id hash of the token secret.  The plaintext is shown to
+    /// the user once at creation and is never persisted.
+    secret_hash: Argon2idHash,
+    /// Scopes — typed enum, no string parsing on the hot path.
+    scopes: List<TokenScope>,
+    /// Hard expiry (REQUIRED — no perpetual tokens).
+    expires_at: Rfc3339Time,
+    /// Optional soft-revocation timestamp.
+    revoked_at: Maybe<Rfc3339Time>,
+    /// Last successful use (for audit).
+    last_used_at: Maybe<Rfc3339Time>,
+};
 
-    pub fn add_package(self, package_name: ValidatedPackageName) -> User {
-        let mut updated_packages = self.owned_packages;
-        updated_packages.push(package_name);
+@derive(Serialize, Deserialize, Eq, Clone)
+public type TokenScope is
+      ScopePublishPackage(PackageScope)
+    | ScopeYankPackage(PackageScope)
+    | ScopeReadAll
+    | ScopeManageOwners(PackageScope)
+    | ScopeAdmin;
 
-        User {
-            id: self.id,
-            username: self.username,
-            email: self.email,
-            role: self.role,
-            created_at: self.created_at,
-            api_tokens: self.api_tokens,
-            owned_packages: updated_packages,
-            is_active: self.is_active
-        }
-    }
-
-    pub fn is_admin(self) -> Bool {
-        match self.role {
-            UserRole.Admin => true,
-            _ => false
-        }
-    }
-
-    pub fn can_publish(self) -> Bool {
-        self.is_active && self.api_tokens.len() > 0
+public fn token_scope_tag(s: &TokenScope) -> Text {
+    match s {
+        ScopePublishPackage(_)  => "publish".to_text(),
+        ScopeYankPackage(_)     => "yank".to_text(),
+        ScopeReadAll            => "read".to_text(),
+        ScopeManageOwners(_)    => "manage_owners".to_text(),
+        ScopeAdmin              => "admin".to_text(),
     }
 }

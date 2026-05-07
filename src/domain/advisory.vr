@@ -1,0 +1,69 @@
+// =============================================================================
+// verum_registry/domain/advisory.vr — SecurityAdvisory
+// =============================================================================
+// Spec: §10.2
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "immutable security advisory record",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.TypecheckPlusTests,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.advisory;
+
+mount core.*;
+mount base.{Text, Maybe};
+mount collections.List;
+mount base.semver_constraint.SemVerConstraint;
+mount time.rfc3339.Rfc3339Time;
+
+mount verum_registry.domain.package.PackageScope;
+
+/// Identifier — `VSEC-YYYY-NNNN`.
+@derive(Serialize, Deserialize, Eq, Clone, Hash)
+public type AdvisoryId is Text {
+    where self.matches(r"^VSEC-\d{4}-\d{4}$")
+};
+
+@derive(Serialize, Deserialize, Eq, Clone)
+public type Severity is
+      SevLow | SevMedium | SevHigh | SevCritical;
+
+public fn severity_tag(s: &Severity) -> Text {
+    match s {
+        SevLow      => "low".to_text(),
+        SevMedium   => "medium".to_text(),
+        SevHigh     => "high".to_text(),
+        SevCritical => "critical".to_text(),
+    }
+}
+
+@derive(Serialize, Deserialize, Eq, Clone)
+public type SecurityAdvisory is {
+    id: AdvisoryId,
+    package_id: PackageScope,
+    /// Affected versions (`SemVerConstraint` parsed via stdlib).
+    affected_versions: SemVerConstraint,
+    /// Fixed versions, if a fix exists.
+    fixed_versions: Maybe<SemVerConstraint>,
+    severity: Severity,
+    /// Cross-references to public CVE database.
+    cve_ids: List<Text>,
+    /// One-line summary.
+    summary: Text { len <= 200 },
+    /// Full disclosure text (Markdown).
+    details: Maybe<Text>,
+    disclosed_at: Rfc3339Time,
+};

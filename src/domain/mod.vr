@@ -1,86 +1,49 @@
-// Domain module exports
-// This module contains the core domain types for the Verum Registry
+// =============================================================================
+// verum_registry/domain/mod.vr — domain entities (spec §5)
+// =============================================================================
+//
+// Re-exports domain types so callers `mount verum_registry.domain.*`
+// have everything in scope.
+// =============================================================================
 
-module version;
-module package;
-module user;
-module errors;
-module checksum;
-module validation;
-module refinements;
-module repositories;
-module semver_constraint;
-module webhook;
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "domain layer entry point — refinement-typed records over stdlib primitives",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.TypecheckPlusTests,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain;
 
-// Re-export commonly used types
-// Note: SemVer must be exported before Package/PackageVersion as they depend on it
-pub import .version.{SemVer, VersionConstraint};
-pub import .package.{Package, PackageVersion, PackageMetadata, Dependency};
-pub import .user.{User, UserRole, ApiToken};
-pub import .errors.RegistryError;
-pub import .checksum.{Checksum, ChecksumAlgorithm};
-
-// Re-export validation functions
-pub import .validation.{
-    is_valid_package_name,
-    is_valid_version,
-    is_valid_username,
-    is_valid_email
+public mount verum_registry.domain.package.{
+    PackageScope, PackageRecord, Keyword, SpdxExpression,
 };
-
-// Re-export refinement types for type-safe domain modeling
-pub import .refinements.{
-    // Numeric refinements
-    PositiveInt,
-    NonNegativeInt,
-    EntityId,
-    Timestamp,
-    DownloadCount,
-    VersionComponent,
-    // Text refinements
-    NonEmptyText,
-    Username,
-    PackageName,
-    Description,
-    ShortText,
-    UrlText,
-    LicenseId,
-    TokenValue,
-    Sha256Hash,
-    Email,
-    VersionConstraint,
-    // Pagination refinements
-    PageNumber,
-    PageSize,
-    QueryOffset,
-    QueryLimit,
-    TokenScope,
-    // Utility functions
-    clamp_page_size,
-    clamp_page_number,
-    calculate_offset
+public mount verum_registry.domain.version.{
+    PackageVersion, Hex64, VerificationLevel,
 };
-
-// Re-export repository protocols for dependency injection
-pub import .repositories.{
-    PackageRepository,
-    PackageVersionRepository,
-    UserRepository,
-    TokenRepository
+public mount verum_registry.domain.user.{
+    User, UserId, Username, EmailAddress,
+    ApiToken, TokenId, TokenScope,
+    OidcIdentity,
 };
-
-// Re-export semantic version constraint parsing
-pub import .semver_constraint.{
-    parse_constraint,
-    satisfies,
-    sort_versions_descending
+public mount verum_registry.domain.owner.{
+    PackageOwner, OwnerRole,
 };
-
-// Re-export webhook domain types
-pub import .webhook.{
-    WebhookEvent,
-    Webhook,
-    WebhookDelivery,
-    WebhookPayload,
-    WebhookData
+public mount verum_registry.domain.sumdb.{SumdbEntry};
+public mount verum_registry.domain.advisory.{
+    SecurityAdvisory, Severity, AdvisoryId,
+};
+public mount verum_registry.domain.errors.{
+    PublishError, SearchError, SumdbError, AuthError,
+    ProvenanceError, ResolveError,
 };

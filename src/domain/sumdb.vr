@@ -1,0 +1,50 @@
+// =============================================================================
+// verum_registry/domain/sumdb.vr — SumdbEntry
+// =============================================================================
+// Spec: §5.1.7
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "sumdb leaf entry — append-only transparency log payload",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.TypecheckPlusTests,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.sumdb;
+
+mount core.*;
+mount base.semver.SemVer;
+mount time.rfc3339.Rfc3339Time;
+
+mount verum_registry.domain.package.PackageScope;
+mount verum_registry.domain.version.Hex64;
+
+/// Single entry in the registry sumdb (transparency log).  Spec §9.3.
+///
+/// JSON-canonicalised bytes of this record are hashed via
+/// `core.security.transparency_log` to produce the leaf hash for the
+/// Merkle tree.  The `sequence` is allocated only at append-time
+/// (Postgres BIGSERIAL); pre-append the field is `0`.
+@derive(Serialize, Deserialize, Eq, Clone)
+public type SumdbEntry is {
+    /// Globally monotonic entry index.  `0` before append.
+    sequence: Int { >= 0 },
+    /// Package version this entry attests.
+    package_id: PackageScope,
+    version: SemVer,
+    /// SHA-256 of the source archive.
+    checksum: Hex64,
+    /// Insertion timestamp (server-side).
+    timestamp: Rfc3339Time,
+};

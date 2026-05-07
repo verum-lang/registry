@@ -1,191 +1,183 @@
-// Verum Package Registry — Production Entry Point
+// =============================================================================
+// verum_registry/main.vr — entry point + service registry assembly
+// =============================================================================
 //
-// Initializes context providers, configures middleware, and starts the HTTP server.
-// All infrastructure dependencies are wired through Verum's context system.
+// Implements the bootstrap described in spec §8.6.
+//
+// Composes the entire registry against the enriched Verum stdlib:
+//   * `core.configuration.toml`  — config loading
+//   * `core.database.postgres`   — connection pooling + sql# meta-fn
+//   * `core.database.postgres.migrations` — schema evolution
+//   * `core.net.weft`            — HTTP server + middleware composition
+//   * `core.security.{oidc, transparency_log, ecc.ed25519}` — security
+//   * `core.archive.tar` + `core.compress.zstd` — source bundle handling
+//
+// CVE Self-application per spec §13: this cog declares its
+// `@arch_module(...)` ShapeDeclarations including a non-trivial
+// `self_reference` witness (the registry serves itself).
+// =============================================================================
 
-mount core.base.{Result, Text, Int, Bool, Maybe};
-mount core.collections.{List, Map};
-mount core.net.http.{HttpServer, HttpServerConfig};
-mount core.async.{spawn, join};
-mount core.sync.{Mutex, AtomicBool, signal_handler};
-mount core.env.{get_env, get_env_or};
-mount core.io.{print, eprintln};
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "Verum package registry — entry point + service assembly",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        // The registry serves cogs; the registry is itself a cog; the
+        // registry's cog is served by the registry. Self-reference is
+        // articulated through the publish-pipeline operator and the
+        // Banach contracting fixed point — see spec §13.2.
+        self_reference: Some(SelfReferenceWitness {
+            operator:       "verum_registry.services.publish_service".to_text(),
+            fixed_point:    "verum_registry@2.0.0".to_text(),
+            fixpoint_class: fixpoint_class_banach(),
+        }),
+    },
+)
+module verum_registry.main;
 
-// Server and configuration
-mount crate.server.{RegistryConfig, ServerConfig, DatabaseConfig, StorageConfig, CacheConfig, SearchConfig};
-mount crate.server.{Router, setup_routes, print_routes};
-
-// Context protocols
-mount crate.contexts.{Database, Storage, Cache, Search, Logger, Metrics};
-
-// Context provider implementations
-mount crate.infrastructure.providers.{
-    PostgresDatabaseProvider,
-    FilesystemStorageProvider,
-    LruCacheProvider,
-    MemorySearchProvider,
-    StdoutLoggerProvider,
-    InMemoryMetricsProvider,
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount net.weft.{
+    Server, WeftApp, ServiceBuilder,
+    MetricsLayer, TimeoutLayer, RateLimitLayer,
+    SpiffeAuthLayer, ListenerConfig, ConnectionConfig,
+    TlsConfig,
+};
+mount database.postgres.async_pool.{AsyncPgPool};
+mount database.postgres.migrations.{
+    runner_new, build, migration_new, RmStrict, store_new, store_config_default,
 };
 
-// Middleware
-mount crate.middleware.{
-    create_auth_middleware,
-    create_rate_limiter,
-    create_request_logger,
-    create_error_handler,
+mount verum_registry.config.{Config, load_config};
+mount verum_registry.http.{make_router};
+mount verum_registry.services.{
+    PublishService, SearchService, SumdbService, AuthService, ProvenanceService,
+    ServiceRegistry,
 };
+mount verum_registry.persistence.{
+    open_postgres, open_object_store, open_cache, open_search,
+};
+mount verum_registry.observability.{tracing_init, metrics_init};
 
-// ============================================================================
-// Configuration Loading
-// ============================================================================
+// =============================================================================
+// Entry point
+// =============================================================================
 
-/// Load registry configuration from environment variables with sensible defaults.
-fn load_config() -> RegistryConfig {
-    let server = ServerConfig {
-        host: get_env_or("REGISTRY_HOST", "0.0.0.0"),
-        port: parse_int_or(get_env_or("REGISTRY_PORT", "8080"), 8080),
-        max_body_size: parse_int_or(get_env_or("REGISTRY_MAX_BODY_SIZE", "10485760"), 10485760),
-        timeout_secs: parse_int_or(get_env_or("REGISTRY_TIMEOUT", "30"), 30),
+public async fn main() -> Result<(), Text> {
+    // 1. Load configuration via core.configuration.toml.
+    let config = load_config()
+        .map_err(|e| format!("config load failed: {e}").to_text())?;
+
+    // 2. Initialise observability subsystems early.
+    tracing_init(&config.tracing).await
+        .map_err(|e| format!("tracing init failed: {e}").to_text())?;
+    metrics_init(&config.metrics).await
+        .map_err(|e| format!("metrics init failed: {e}").to_text())?;
+
+    // 3. Connect to persistence layer.
+    let db_pool = open_postgres(&config.postgres).await
+        .map_err(|e| format!("postgres connect failed: {e}").to_text())?;
+    let storage = open_object_store(&config.s3).await
+        .map_err(|e| format!("s3 connect failed: {e}").to_text())?;
+    let cache = open_cache(&config.redis).await
+        .map_err(|e| format!("redis connect failed: {e}").to_text())?;
+    let search = open_search(&config.meilisearch).await
+        .map_err(|e| format!("meilisearch connect failed: {e}").to_text())?;
+
+    // 4. Apply schema migrations through the universal MigrationRunner.
+    apply_migrations(&db_pool).await
+        .map_err(|e| format!("migration failed: {e}").to_text())?;
+
+    // 5. Assemble service registry.
+    let services = ServiceRegistry {
+        publish:    PublishService {},
+        search:     SearchService {},
+        sumdb:      SumdbService.from_db(&db_pool, &config.sumdb).await
+            .map_err(|e| format!("sumdb init failed: {e}").to_text())?,
+        auth:       AuthService.from_config(&config.oidc).await
+            .map_err(|e| format!("auth init failed: {e}").to_text())?,
+        provenance: ProvenanceService {},
     };
 
-    let database = DatabaseConfig {
-        url: get_env_or("DATABASE_URL", "postgres://localhost/verum_registry"),
-        max_connections: parse_int_or(get_env_or("DATABASE_MAX_CONN", "20"), 20),
-        connection_timeout: parse_int_or(get_env_or("DATABASE_TIMEOUT", "5"), 5),
-    };
+    // 6. Build router + middleware chain (outside-in order).
+    let router = make_router(services);
+    let app = ServiceBuilder.new(router)
+        .layer(MetricsLayer.new())
+        .layer(RateLimitLayer.new(rate_limit_config(&config)))
+        .layer(TimeoutLayer.secs(config.request_timeout_secs))
+        .layer(SpiffeAuthLayer.optional(spiffe_bundles(&config)?))
+        .build();
 
-    let storage = StorageConfig {
-        base_path: get_env_or("STORAGE_PATH", "/var/lib/verum-registry/packages"),
-        max_file_size: parse_int_or(get_env_or("STORAGE_MAX_FILE_SIZE", "104857600"), 104857600),
-    };
+    // 7. Bind + serve TLS.
+    let listener_cfg = ListenerConfig.default()
+        .with_max_connections(config.max_connections)
+        .with_per_ip_max(config.per_ip_max);
+    let conn_cfg = ConnectionConfig.default()
+        .with_header_deadline_ms(config.header_deadline_ms)
+        .with_body_deadline_ms(config.body_deadline_ms);
+    let tls = TlsConfig.server()
+        .with_identity(config.tls_cert.clone(), config.tls_key.clone())
+        .with_alpn(["h2".to_text(), "http/1.1".to_text()]);
 
-    let cache = CacheConfig {
-        url: get_env_or("CACHE_URL", "redis://localhost:6379"),
-        default_ttl: parse_int_or(get_env_or("CACHE_DEFAULT_TTL", "3600"), 3600),
-    };
-
-    let search = SearchConfig {
-        endpoint: get_env_or("SEARCH_ENDPOINT", "http://localhost:9200"),
-        index_name: get_env_or("SEARCH_INDEX", "verum_packages"),
-    };
-
-    RegistryConfig { server, database, storage, cache, search }
+    Server.bind(&config.bind_address)?
+        .with_router(app)
+        .with_listener_config(listener_cfg)
+        .with_connection_config(conn_cfg)
+        .serve_tls(tls)
+        .await
+        .map_err(|e| format!("serve failed: {e}").to_text())
 }
 
-/// Parse an integer from text, returning a default on failure.
-fn parse_int_or(text: Text, default: Int) -> Int {
-    match text.parse_int() {
-        Maybe.Some(n) => n,
-        Maybe.None => default,
+async fn apply_migrations(pool: &AsyncPgPool) -> Result<(), Text> {
+    let conn = pool.acquire().await.map_err(|e| format!("{e}").to_text())?;
+    let mut store = store_new(conn, store_config_default());
+    let plan = build(load_migrations())
+        .map_err(|e| format!("invalid migration plan: {e}").to_text())?;
+    let runner = runner_new(RmStrict);
+    let _report = runner.execute(&plan, &mut store, now_ns()).await
+        .map_err(|e| format!("{e}").to_text())?;
+    Ok(())
+}
+
+fn load_migrations() -> List<core.database.common.migrations.Migration> {
+    let mut steps: List<core.database.common.migrations.Migration> = List.new();
+    steps.push(migration_new(
+        1, "initial_schema".to_text(),
+        include_str!("../migrations/0001_initial_schema.sql").to_text(),
+    ));
+    steps
+}
+
+fn rate_limit_config(c: &Config) -> RateLimitConfig {
+    RateLimitConfig {
+        anonymous_read_per_min:        60,
+        authenticated_read_per_min:   300,
+        anonymous_search_per_min:      30,
+        authenticated_search_per_min: 120,
+        publish_per_hour:              30,
+        sumdb_per_min:                600,
+        auth_per_min:                  10,
     }
 }
 
-// ============================================================================
-// Provider Initialization
-// ============================================================================
-
-/// Create and initialize all context providers from configuration.
-async fn init_providers(config: &RegistryConfig) -> Result<(), Text> {
-    let db = PostgresDatabaseProvider.new(config.database.url, config.database.max_connections);
-    db.connect().await?;
-    provide Database = db;
-
-    let storage = FilesystemStorageProvider.new(config.storage.base_path);
-    storage.ensure_directories().await?;
-    provide Storage = storage;
-
-    let cache = LruCacheProvider.new(config.cache.default_ttl);
-    provide Cache = cache;
-
-    let search = MemorySearchProvider.new();
-    provide Search = search;
-
-    let logger = StdoutLoggerProvider.new();
-    provide Logger = logger;
-
-    let metrics = InMemoryMetricsProvider.new();
-    provide Metrics = metrics;
-
-    Result.Ok(())
+fn spiffe_bundles(c: &Config) -> Result<List<core.security.spiffe.TrustBundle>, Text> {
+    if c.spiffe.enabled {
+        core.security.spiffe.load_bundles_from_paths(&c.spiffe.bundle_paths)
+            .map_err(|e| format!("{e}").to_text())
+    } else {
+        Ok(List.new())
+    }
 }
 
-// ============================================================================
-// Server Bootstrap
-// ============================================================================
-
-/// Build the full middleware chain for request processing.
-fn build_middleware_chain(config: &RegistryConfig) {
-    create_request_logger();
-    create_error_handler();
-    create_rate_limiter();
-    create_auth_middleware();
-}
-
-/// Main entry point.
-async fn main() -> Int {
-    print("verum-registry: starting");
-
-    // Load configuration
-    let config = load_config();
-
-    // Validate
-    match config.validate() {
-        Result.Ok(()) => {},
-        Result.Err(err) => {
-            eprintln(f"verum-registry: invalid configuration: {err.message()}");
-            return 1;
-        },
-    }
-
-    // Initialize providers
-    match init_providers(&config).await {
-        Result.Ok(()) => {
-            Logger.info("all context providers initialized");
-        },
-        Result.Err(msg) => {
-            eprintln(f"verum-registry: failed to initialize providers: {msg}");
-            return 1;
-        },
-    }
-
-    // Build middleware chain
-    build_middleware_chain(&config);
-
-    // Set up routes
-    let router = setup_routes();
-    Logger.info(f"registered {router.routes().len()} routes");
-
-    // Graceful shutdown signal
-    let shutdown = AtomicBool.new(false);
-    signal_handler("SIGTERM", fn() {
-        shutdown.store(true);
-        Logger.info("received SIGTERM, shutting down gracefully");
-    });
-    signal_handler("SIGINT", fn() {
-        shutdown.store(true);
-        Logger.info("received SIGINT, shutting down gracefully");
-    });
-
-    // Start HTTP server
-    let server_config = HttpServerConfig {
-        host: config.server.host,
-        port: config.server.port,
-        max_body_size: config.server.max_body_size,
-        timeout_secs: config.server.timeout_secs,
-        shutdown_signal: shutdown,
-    };
-
-    Logger.info(f"listening on {config.server.host}:{config.server.port}");
-
-    match HttpServer.serve(server_config, router).await {
-        Result.Ok(()) => {
-            Logger.info("server shut down cleanly");
-            0
-        },
-        Result.Err(err) => {
-            Logger.error(f"server error: {err}");
-            1
-        },
-    }
+fn now_ns() -> Int64 {
+    core.time.system_time.now_unix_ns()
 }
