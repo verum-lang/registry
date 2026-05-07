@@ -1,0 +1,115 @@
+// =============================================================================
+// verum_registry/http/error_response.vr — canonical error envelope
+// =============================================================================
+// Spec: §8.4
+//
+// Every error response carries the shape:
+//   { "error": { "code": "...", "message": "...", "details": [...], "trace_id": "..." } }
+//
+// `code` is a stable identifier; clients dispatch on `code`, never on
+// `message`. `details` is an optional list of `{ path, reason }` pairs
+// for field-level errors. `trace_id` is correlated with structured logs.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "canonical JSON error envelope shape + render helpers",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.error_response;
+
+mount core.*;
+mount base.{Maybe, Some, None, Text};
+mount collections.List;
+mount net.weft.{Response, StatusCode};
+
+@derive(Serialize)
+public type ErrorEnvelope is {
+    error: ErrorBody,
+};
+
+@derive(Serialize)
+public type ErrorBody is {
+    code: Text,
+    message: Text,
+    details: Maybe<List<ErrorDetail>>,
+    trace_id: Maybe<Text>,
+};
+
+@derive(Serialize)
+public type ErrorDetail is {
+    path: Text,
+    reason: Text,
+};
+
+/// Build a JSON error response.
+public fn render_error(
+    code: Text,
+    message: Text,
+    details: Maybe<List<ErrorDetail>>,
+    trace_id: Maybe<Text>,
+) -> Response {
+    let envelope = ErrorEnvelope {
+        error: ErrorBody { code, message, details, trace_id },
+    };
+    Response.json(&envelope)
+}
+
+/// Standard `code → HTTP status` mapping.  Domain modules emit `code`;
+/// this centralises the HTTP-status translation per spec §8.4.
+public fn error_status(code: &Text) -> StatusCode {
+    match code.as_str() {
+        // 400 Bad Request
+        "validation_failed"
+        | "invalid_query"
+        | "invalid_constraint"
+        | "manifest_parse_failed"
+        | "archive_decode_failed"
+        | "compile_failed"
+        | "anti_pattern_violations"
+        | "version_not_monotone"
+            => StatusCode.UnprocessableEntity,
+        // 401 Unauthorized — credentials missing / bad
+        "missing_credentials"
+        | "invalid_api_token"
+        | "expired_api_token"
+        | "revoked_api_token"
+        | "invalid_oidc_token"
+            => StatusCode.Unauthorized,
+        // 403 Forbidden
+        "not_an_owner"
+        | "oidc_issuer_not_trusted"
+            => StatusCode.Forbidden,
+        // 404 Not Found
+        "package_not_found"
+        | "version_not_found"
+        | "user_not_found"
+        | "advisory_not_found"
+        | "version_not_in_log"
+        | "tile_not_found"
+            => StatusCode.NotFound,
+        // 409 Conflict
+        "version_exists"
+        | "typosquatting_suspected"
+        | "malware_detected"
+        | "name_taken"
+            => StatusCode.Conflict,
+        // 429 Too Many Requests
+        "rate_limited"
+            => StatusCode.TooManyRequests,
+        // 500 Internal
+        _   => StatusCode.InternalServerError,
+    }
+}

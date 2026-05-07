@@ -1,0 +1,89 @@
+// =============================================================================
+// verum_registry/observability/mod.vr — tracing + metrics setup
+// =============================================================================
+// Spec: §12.3
+//
+// OTLP via `core.tracing` + `core.metrics`. The registry registers
+// canonical metric names + tracing-context propagation early in the
+// bootstrap so subsequent services emit telemetry uniformly.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "OTLP tracing + Prometheus metrics setup",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.observability;
+
+mount core.*;
+mount base.{Result, Ok, Err, Text};
+mount tracing as core_tracing;
+mount metrics as core_metrics;
+
+mount verum_registry.config.{TracingConfig, MetricsConfig};
+
+/// Initialise the tracing subsystem.  When `otlp_endpoint` is empty,
+/// tracing is disabled (no-op).
+public async fn tracing_init(config: &TracingConfig) -> Result<(), Text> {
+    if config.otlp_endpoint.is_empty() {
+        return Ok(());
+    }
+    core_tracing.init_otlp(core_tracing.OtlpConfig {
+        endpoint:    config.otlp_endpoint.clone(),
+        sample_rate: config.sample_rate,
+        service_name: "verum-registry".to_text(),
+        service_version: env!("CARGO_PKG_VERSION", "0.0.0").to_text(),
+    }).await.map_err(|e| format!("otlp init: {e}").to_text())
+}
+
+/// Initialise the metrics subsystem and pre-register canonical
+/// counter / histogram families so the first emission is fast.
+public async fn metrics_init(config: &MetricsConfig) -> Result<(), Text> {
+    core_metrics.init_registry(core_metrics.RegistryConfig {
+        bind_address: config.bind_address.clone(),
+        mtls_only:    config.mtls_only,
+    }).await.map_err(|e| format!("metrics init: {e}").to_text())?;
+
+    // Register canonical metric names.
+    let counters = [
+        "publish.attempts",
+        "publish.success",
+        "publish.parse_errors",
+        "publish.version_exists",
+        "publish.validation_failed",
+        "publish.errors",
+        "security.malware_blocked",
+        "security.typosquatting_flagged",
+        "auth.api_token_missing",
+        "auth.api_token_bad_secret",
+        "auth.api_token_revoked",
+        "auth.api_token_expired",
+        "auth.oidc_failed",
+        "auth.missing",
+        "search.requests",
+        "search.cache_hits",
+        "downloads.source",
+        "sumdb.lookups",
+        "sumdb.tiles",
+        "sumdb.latest",
+    ];
+    let mut i: Int = 0;
+    while i < counters.len() {
+        core_metrics.register_counter(counters[i]);
+        i = i + 1;
+    }
+
+    Ok(())
+}

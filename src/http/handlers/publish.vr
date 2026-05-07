@@ -1,0 +1,249 @@
+// =============================================================================
+// verum_registry/http/handlers/publish.vr — POST /publish + yank/unyank
+// =============================================================================
+// Spec: §8.2 + §7.1
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "publish endpoint — orchestrates 8-phase PublishService through HTTP",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.handlers.publish;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount net.weft.{WeftRequest, Response, StatusCode, Multipart};
+mount base.semver.parse as parse_semver;
+
+mount verum_registry.services.{PublishService, AuthService, AuthenticatedUser};
+mount verum_registry.persistence.{VersionRepository, yank_version, unyank_version};
+mount verum_registry.domain.{
+    PackageScope, SemVer, PublishError,
+    publish_error_code, publish_error_http_status,
+};
+mount verum_registry.http.error_response.{render_error};
+
+// =============================================================================
+// POST /api/v2/packages — publish a new version
+// =============================================================================
+
+public async fn handle_publish(req: WeftRequest) -> Response
+    using [PublishService, AuthService, Database, Storage, Cache, Search,
+           Sumdb, Logger, Metrics]
+{
+    // 1. Authenticate.
+    let auth_user = match AuthService.authenticate(&req).await {
+        Ok(u)  => u,
+        Err(e) => return render_error(
+            "missing_credentials".to_text(),
+            "authentication required".to_text(), None, None,
+        ).status(StatusCode.Unauthorized),
+    };
+
+    // 2. Parse multipart body.
+    let multipart = match req.parse_multipart().await {
+        Ok(m)  => m,
+        Err(e) => return render_error(
+            "validation_failed".to_text(),
+            f"invalid multipart body: {e}".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let manifest_text = match multipart.text("manifest") {
+        Some(t) => t,
+        None    => return render_error(
+            "validation_failed".to_text(),
+            "missing 'manifest' part".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let source_archive = match multipart.bytes("source") {
+        Some(b) => b,
+        None    => return render_error(
+            "validation_failed".to_text(),
+            "missing 'source' part".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+
+    // 3. Run the 8-phase publish workflow.
+    match PublishService.publish(auth_user.user, manifest_text, source_archive).await {
+        Ok(version) => Response.json(&version).status(StatusCode.Created),
+        Err(e) => {
+            Logger.log(Level.Warn, f"publish failed: {publish_error_code(&e)}");
+            render_error(
+                publish_error_code(&e),
+                publish_error_message(&e),
+                publish_error_details(&e),
+                None,
+            ).status(publish_error_http_status_code(&e))
+        }
+    }
+}
+
+// =============================================================================
+// POST /:scope/:name/:version/yank
+// =============================================================================
+
+public async fn handle_yank(req: WeftRequest) -> Response
+    using [AuthService, OwnerRepository, VersionRepository, Logger]
+{
+    let auth_user = match AuthService.authenticate(&req).await {
+        Ok(u)  => u,
+        Err(_) => return render_error(
+            "missing_credentials".to_text(),
+            "authentication required".to_text(), None, None,
+        ).status(StatusCode.Unauthorized),
+    };
+
+    let (id, version) = match parse_path(&req) { Ok(t) => t, Err(r) => return r };
+
+    // Authorisation: only owners/maintainers can yank.
+    let allowed = OwnerRepository.is_maintainer_or_owner(&id, &auth_user.user.id).await
+        .unwrap_or(false);
+    if !allowed {
+        return render_error("not_an_owner".to_text(),
+            "yank requires owner or maintainer role".to_text(), None, None)
+            .status(StatusCode.Forbidden);
+    }
+
+    let body: YankRequest = match req.json().await {
+        Ok(b)  => b,
+        Err(e) => return render_error(
+            "validation_failed".to_text(),
+            f"invalid body: {e}".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+
+    match yank_version(&VersionRepository, &id, &version, &body.reason).await {
+        Ok(()) => Response.new().status(StatusCode.NoContent),
+        Err(e) => {
+            Logger.log(Level.Error, f"yank: {e}");
+            render_error("internal_error".to_text(), "yank failed".to_text(), None, None)
+                .status(StatusCode.InternalServerError)
+        }
+    }
+}
+
+// =============================================================================
+// POST /:scope/:name/:version/unyank
+// =============================================================================
+
+public async fn handle_unyank(req: WeftRequest) -> Response
+    using [AuthService, OwnerRepository, VersionRepository, Logger]
+{
+    let auth_user = match AuthService.authenticate(&req).await {
+        Ok(u)  => u,
+        Err(_) => return render_error(
+            "missing_credentials".to_text(),
+            "authentication required".to_text(), None, None,
+        ).status(StatusCode.Unauthorized),
+    };
+
+    let (id, version) = match parse_path(&req) { Ok(t) => t, Err(r) => return r };
+    let allowed = OwnerRepository.is_maintainer_or_owner(&id, &auth_user.user.id).await
+        .unwrap_or(false);
+    if !allowed {
+        return render_error("not_an_owner".to_text(),
+            "unyank requires owner or maintainer role".to_text(), None, None)
+            .status(StatusCode.Forbidden);
+    }
+
+    match unyank_version(&VersionRepository, &id, &version).await {
+        Ok(())  => Response.new().status(StatusCode.NoContent),
+        Err(e) => {
+            Logger.log(Level.Warn, f"unyank: {e}");
+            render_error("validation_failed".to_text(),
+                "version not eligible for unyank (must be within 24h)".to_text(),
+                None, None,
+            ).status(StatusCode.UnprocessableEntity)
+        }
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+@derive(Deserialize)
+type YankRequest is { reason: Text { len <= 500 } };
+
+fn parse_path(req: &WeftRequest) -> Result<(PackageScope, SemVer), Response> {
+    let scope = req.path_param("scope").ok_or_else(|| missing("scope"))?;
+    let name = req.path_param("name").ok_or_else(|| missing("name"))?;
+    let combined = if scope.starts_with("@") {
+        f"{scope}/{name}".to_text()
+    } else {
+        name.clone()
+    };
+    let id: PackageScope = combined.try_into()
+        .map_err(|e| render_error(
+            "validation_failed".to_text(),
+            f"invalid scope: {e}".to_text(), None, None,
+        ).status(StatusCode.BadRequest))?;
+    let version_text = req.path_param("version").ok_or_else(|| missing("version"))?;
+    let version = parse_semver(&version_text).map_err(|e| render_error(
+        "validation_failed".to_text(),
+        f"invalid version: {e}".to_text(), None, None,
+    ).status(StatusCode.BadRequest))?;
+    Ok((id, version))
+}
+
+fn missing(name: &str) -> Response {
+    render_error(
+        "validation_failed".to_text(),
+        f"missing path parameter: {name}".to_text(), None, None,
+    ).status(StatusCode.BadRequest)
+}
+
+fn publish_error_message(e: &PublishError) -> Text {
+    match e {
+        ManifestParseFailed(err)    => format!("manifest parse: {err}").to_text(),
+        NotAnOwner                   => "you are not an owner of this package".to_text(),
+        VersionExists(v)             => format!("version {v} already published").to_text(),
+        VersionNotMonotone { latest, proposed } =>
+            format!("proposed {proposed} is not greater than latest {latest}").to_text(),
+        TyposquattingSuspected { proposed, similar, distance } =>
+            format!("name '{proposed}' is too similar (distance={distance}) to existing '{similar}'").to_text(),
+        MalwareDetected(reason)      => format!("malware detected: {reason}").to_text(),
+        ArchiveDecodeFailed(reason)  => format!("archive decode failed: {reason}").to_text(),
+        CompileFailed(reason)        => format!("compile failed: {reason}").to_text(),
+        AntiPatternViolations(_)     => "architectural anti-pattern violations".to_text(),
+        StorageFailed(_)             => "storage operation failed".to_text(),
+        DatabaseFailed(_)            => "database operation failed".to_text(),
+        SumdbAppendFailed(_)         => "sumdb append failed".to_text(),
+        InternalError(_)             => "internal error".to_text(),
+    }
+}
+
+fn publish_error_details(e: &PublishError) -> Maybe<List<ErrorDetail>> {
+    match e {
+        AntiPatternViolations(violations) => {
+            let mut details: List<ErrorDetail> = List.new();
+            let mut i: Int = 0;
+            while i < violations.len() {
+                details.push(ErrorDetail {
+                    path:   violations[i].code_str(),
+                    reason: violations[i].message.clone(),
+                });
+                i = i + 1;
+            }
+            Some(details)
+        }
+        _ => None,
+    }
+}
+
+fn publish_error_http_status_code(e: &PublishError) -> StatusCode {
+    StatusCode.from(publish_error_http_status(e))
+}

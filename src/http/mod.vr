@@ -1,31 +1,32 @@
-// Server Module
-//
-// HTTP server infrastructure for Verum Registry.
-// Exports configuration, routing, and server types.
+// =============================================================================
+// verum_registry/http/mod.vr — HTTP layer entry
+// =============================================================================
+// Spec: §8
+// =============================================================================
 
-module config;
-module router;
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "HTTP layer entry — router + middleware + handlers + error envelope",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http;
 
-pub import .config.{
-    ServerConfig,
-    DatabaseConfig,
-    StorageConfig,
-    CacheConfig,
-    SearchConfig,
-    RegistryConfig,
-    ConfigError,
+public mount verum_registry.http.router.{make_router};
+public mount verum_registry.http.middleware.{
+    LoggingMiddleware, MetricsMiddleware, ErrorHandlerMiddleware,
 };
-
-pub import .router.{
-    HttpMethod,
-    HttpStatus,
-    HttpRequest,
-    HttpResponse,
-    Handler,
-    Route,
-    Router,
-    setup_routes,
-    extract_params,
-    matches_route,
-    print_routes,
+public mount verum_registry.http.error_response.{
+    ErrorEnvelope, render_error, error_status,
 };

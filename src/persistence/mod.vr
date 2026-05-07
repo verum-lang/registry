@@ -1,24 +1,107 @@
-// PostgreSQL Repository Implementations Module
+// =============================================================================
+// verum_registry/persistence/mod.vr — persistence layer
+// =============================================================================
+// Spec: §6
 //
-// This module provides concrete PostgreSQL implementations for all repository protocols.
-// Each implementation uses the Database context for data access.
-//
-// Architecture:
-// - Zero-state implementations (no fields needed - uses Database context)
-// - Pure functions that delegate to Database context
-// - Row mapping functions to convert database rows to domain entities
-//
-// Error Handling:
-// - DatabaseError → RegistryError conversion
-// - Proper error propagation with context
+// Postgres queries via the compile-time `sql#"..."` meta-fn.  Affine
+// `Transaction` enforces commit/rollback at compile time.  S3 object
+// store wraps the configured bucket.
+// =============================================================================
 
-module package_repository;
-module user_repository;
-module token_repository;
-module version_repository;
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "persistence-layer entry point — Postgres queries + S3 + Redis + MeiliSearch",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence;
 
-// Re-export all implementations
-pub import .package_repository.PostgresPackageRepository;
-pub import .user_repository.PostgresUserRepository;
-pub import .token_repository.PostgresTokenRepository;
-pub import .version_repository.PostgresPackageVersionRepository;
+mount core.*;
+mount base.{Result, Ok, Err, Text};
+mount database.postgres.{AsyncPgPool, AsyncPoolConfig};
+mount database.postgres.async_pool.{connect as pg_async_connect};
+
+mount verum_registry.config.{
+    PostgresConfig, S3Config, RedisConfig, MeilisearchConfig,
+};
+
+// Repository module re-exports — handlers/services compose against these.
+public mount verum_registry.persistence.package_repository.{
+    PackageRepository, lookup_package, upsert_package,
+    increment_downloads, set_score, lookup_recent_packages,
+};
+public mount verum_registry.persistence.version_repository.{
+    VersionRepository, lookup_version, list_versions,
+    insert_version, yank_version, unyank_version,
+};
+public mount verum_registry.persistence.user_repository.{
+    UserRepository, lookup_user_by_id, lookup_user_by_username,
+    create_user, link_oidc_identity,
+};
+public mount verum_registry.persistence.token_repository.{
+    TokenRepository, lookup_token, create_token, revoke_token,
+    update_token_last_used,
+};
+public mount verum_registry.persistence.owner_repository.{
+    OwnerRepository, list_owners, add_owner, remove_owner,
+    is_owner, is_maintainer_or_owner,
+};
+public mount verum_registry.persistence.sumdb_repository.{
+    SumdbRepository, append_entry, lookup_entry,
+    save_tree_head, latest_tree_head,
+};
+public mount verum_registry.persistence.advisory_repository.{
+    AdvisoryRepository, list_advisories_for_package,
+    insert_advisory, lookup_advisory,
+};
+public mount verum_registry.persistence.object_store.{
+    ObjectStore, put_source_archive, get_source_archive,
+    delete_source_archive,
+};
+
+// =============================================================================
+// Connection openers (called from main.vr)
+// =============================================================================
+
+/// Open the Postgres async pool.
+public async fn open_postgres(c: &PostgresConfig) -> Result<AsyncPgPool, Text> {
+    let pool_cfg = AsyncPoolConfig {
+        min_size: c.min_connections as UInt32,
+        max_size: c.max_connections as UInt32,
+        mailbox_capacity: 64,
+        prepare_on_open: None,
+    };
+    pg_async_connect(&c.url, pool_cfg)
+        .await
+        .map_err(|e| format!("postgres: {e}").to_text())
+}
+
+/// Open the S3 object store.
+public async fn open_object_store(c: &S3Config) -> Result<ObjectStore, Text> {
+    object_store.connect(c).await
+}
+
+/// Open the Redis cache.
+public async fn open_cache(c: &RedisConfig) -> Result<RedisCache, Text> {
+    core.cache.redis.connect(&c.url)
+        .await
+        .map_err(|e| format!("redis: {e}").to_text())
+}
+
+/// Open the MeiliSearch index.
+public async fn open_search(c: &MeilisearchConfig) -> Result<MeilisearchClient, Text> {
+    core.search.meilisearch.connect(&c.url, &c.api_key)
+        .await
+        .map_err(|e| format!("meilisearch: {e}").to_text())
+}

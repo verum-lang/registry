@@ -1,52 +1,31 @@
-// Verum Registry - Middleware Module
-//
-// Composable middleware layer for request/response processing.
-// Follows SOLID principles with context-based dependency injection.
-//
-// Architecture:
-// - All middleware are async and composable
-// - Use context protocols for dependencies
-// - Return Result<T, E> for error handling
-// - Support middleware chaining via functional composition
+// =============================================================================
+// verum_registry/http/handlers/mod.vr
+// =============================================================================
 
-module auth;
-module rate_limit;
-module logging;
-module error_handler;
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "HTTP handlers — thin wrappers translating routes to services",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.handlers;
 
-// Re-export middleware types and functions
-pub import .auth.{
-    AuthMiddleware,
-    AuthConfig,
-    ValidatedToken,
-    create_auth_middleware,
-    validate_request_token,
-};
-
-pub import .rate_limit.{
-    RateLimiter,
-    RateLimitConfig,
-    TokenBucket,
-    RateLimitExceeded,
-    create_rate_limiter,
-    check_rate_limit,
-};
-
-pub import .logging.{
-    RequestLogger,
-    LogConfig,
-    RequestMetadata,
-    ResponseMetadata,
-    create_request_logger,
-    log_request,
-    log_response,
-};
-
-pub import .error_handler.{
-    ErrorHandler,
-    ErrorResponse,
-    ErrorContext,
-    create_error_handler,
-    handle_error,
-    recover_from_error,
-};
+public mount verum_registry.http.handlers.packages;
+public mount verum_registry.http.handlers.publish;
+public mount verum_registry.http.handlers.search;
+public mount verum_registry.http.handlers.sumdb;
+public mount verum_registry.http.handlers.auth;
+public mount verum_registry.http.handlers.owners;
+public mount verum_registry.http.handlers.advisories;
+public mount verum_registry.http.handlers.health;

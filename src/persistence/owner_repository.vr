@@ -1,0 +1,151 @@
+// =============================================================================
+// verum_registry/persistence/owner_repository.vr
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "package_owners repository",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.owner_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool};
+mount collections.List;
+mount database.common.error.DbError;
+mount database.postgres.async_pool.AsyncPgPool;
+
+mount verum_registry.domain.{
+    PackageOwner, OwnerRole, RoleOwner, RoleMaintainer,
+    PackageScope, UserId,
+};
+
+public type OwnerRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn owner_repository_new(pool: AsyncPgPool) -> OwnerRepository {
+    OwnerRepository { pool }
+}
+
+public async fn list_owners(
+    repo: &OwnerRepository,
+    package_id: &PackageScope,
+) -> Result<List<PackageOwner>, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let rows = conn.query(
+        sql#"SELECT package_id, user_id, role, granted_at, granted_by
+              FROM package_owners WHERE package_id = $1"#,
+        (package_id,),
+    ).await?;
+    let mut out: List<PackageOwner> = List.new();
+    let mut i: Int = 0;
+    while i < rows.len() {
+        out.push(decode_owner_row(&rows[i])?);
+        i = i + 1;
+    }
+    Ok(out)
+}
+
+public async fn add_owner(
+    repo: &OwnerRepository,
+    owner: &PackageOwner,
+) -> Result<(), DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let role_text = match owner.role {
+        RoleOwner       => "owner".to_text(),
+        RoleMaintainer  => "maintainer".to_text(),
+    };
+    conn.execute(
+        sql#"INSERT INTO package_owners
+              (package_id, user_id, role, granted_at, granted_by)
+              VALUES ($1, $2, $3, $4, $5)
+              ON CONFLICT (package_id, user_id) DO UPDATE SET
+                  role = EXCLUDED.role,
+                  granted_by = EXCLUDED.granted_by,
+                  granted_at = EXCLUDED.granted_at"#,
+        (&owner.package_id, &owner.user_id, &role_text, &owner.granted_at, &owner.granted_by),
+    ).await?;
+    Ok(())
+}
+
+public async fn remove_owner(
+    repo: &OwnerRepository,
+    package_id: &PackageScope,
+    user_id: &UserId,
+) -> Result<(), DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let n = conn.execute(
+        sql#"DELETE FROM package_owners WHERE package_id = $1 AND user_id = $2"#,
+        (package_id, user_id),
+    ).await?;
+    if n == 0 {
+        return Err(DbError.NotFound("ownership not found".to_text()));
+    }
+    // Refinement: at-least-one-owner is enforced by spec §5.1.2; the
+    // call site MUST check `list_owners(...).len() > 1` before
+    // removing.  This repository surface is allowed to leave the
+    // package ownerless temporarily inside a transaction; the
+    // outer-level invariant is the caller's responsibility.
+    Ok(())
+}
+
+public async fn is_owner(
+    repo: &OwnerRepository,
+    package_id: &PackageScope,
+    user_id: &UserId,
+) -> Result<Bool, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let row = conn.query_one(
+        sql#"SELECT EXISTS (
+                SELECT 1 FROM package_owners
+                WHERE package_id = $1 AND user_id = $2 AND role = 'owner'
+             ) AS x"#,
+        (package_id, user_id),
+    ).await?;
+    Ok(row.get_bool("x").unwrap_or(false))
+}
+
+/// Either an owner or a maintainer — the predicate that gates publish.
+public async fn is_maintainer_or_owner(
+    repo: &OwnerRepository,
+    package_id: &PackageScope,
+    user_id: &UserId,
+) -> Result<Bool, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let row = conn.query_one(
+        sql#"SELECT EXISTS (
+                SELECT 1 FROM package_owners
+                WHERE package_id = $1 AND user_id = $2
+             ) AS x"#,
+        (package_id, user_id),
+    ).await?;
+    Ok(row.get_bool("x").unwrap_or(false))
+}
+
+fn decode_owner_row(row: &Row) -> Result<PackageOwner, DbError> {
+    let role = match row.get_text("role")?.as_str() {
+        "owner"      => RoleOwner,
+        "maintainer" => RoleMaintainer,
+        other => return Err(DbError.DecodeFailed { fault: format!("role: {other}").to_text() }),
+    };
+    Ok(PackageOwner {
+        package_id: row.get_text("package_id")?,
+        user_id:    row.get_text("user_id")?,
+        role:       role,
+        granted_at: row.get_timestamp("granted_at")?,
+        granted_by: row.get_text("granted_by")?,
+    })
+}

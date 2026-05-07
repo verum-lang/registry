@@ -1,194 +1,98 @@
 // =============================================================================
-// sumdb.vr — Checksum Database HTTP Handlers
+// verum_registry/http/handlers/sumdb.vr
 // =============================================================================
-// Spec: docs/detailed/15-cog-distribution-architecture.md Section 4.8
-//
-// HTTP endpoints for the transparent checksum database:
-//   GET /sumdb/lookup/:package@:version  — lookup checksum
-//   GET /sumdb/latest                    — signed tree head
-//   GET /sumdb/tile/:level/:index        — Merkle tile
-//   GET /sumdb/proof/:entry_id           — inclusion proof
-//
-// All responses are cache-friendly:
-// - Lookups and tiles: immutable (1 year cache)
-// - Tree head: 60 second cache
-// - Proofs: immutable (derived from immutable data)
+// Spec: §8.2  /sumdb/lookup, /sumdb/latest, /sumdb/tile/:level/:index
 // =============================================================================
 
-module handlers.sumdb;
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "sumdb HTTP endpoints — lookup, tree-head, tile",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.handlers.sumdb;
 
-mount core.collections.{List, Map};
-mount core.text.Text;
-mount core.time.Duration;
-mount crate.services.sumdb_service.{SumdbService, LookupResult, TreeHead, InclusionProof};
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount net.weft.{WeftRequest, Response, StatusCode};
+mount base.semver.parse as parse_semver;
+mount security.transparency_log.TileCoord;
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
+mount verum_registry.services.SumdbService;
+mount verum_registry.domain.PackageScope;
+mount verum_registry.http.error_response.{render_error};
 
-/// Look up the checksum for a specific package version.
-///
-/// GET /sumdb/lookup/:package@:version
-///
-/// Response: JSON with entry details or 404.
-/// Cache-Control: public, max-age=31536000, immutable
-///
-/// This is the most critical endpoint — called by `verum build`
-/// after downloading a cog from ANY source (CDN, IPFS, Git, mirror).
-/// The client verifies the downloaded checksum against this response.
-fn handle_lookup(req: Request) -> Response
-    using [Database, Cache, Logger, Metrics]
+// GET /sumdb/lookup/:scope/:name@:version
+public async fn handle_lookup(req: WeftRequest) -> Response
+    using [SumdbService, Database, Cache]
 {
-    let package = req.param("package");
-    let version = req.param("version");
-
-    Metrics.increment("sumdb.lookups");
-    Logger.debug(f"sumdb lookup: {package}@{version}");
-
-    match SumdbService.lookup(package, version) {
-        Ok(Found(entry)) => {
-            Response.json(entry)
-                .header("Cache-Control", "public, max-age=31536000, immutable")
-                .header("X-Sumdb-Entry-Id", entry.entry_id.to_string())
-        }
-        Ok(NotFound) => {
-            Response.not_found()
-                .body("NOTFOUND")
-        }
-        Err(e) => {
-            Logger.error(f"sumdb lookup failed: {e}");
-            Metrics.increment("sumdb.errors");
-            Response.internal_error()
-        }
+    let scope = req.path_param("scope").unwrap_or_else(|| "".to_text());
+    let name = req.path_param("name").unwrap_or_else(|| "".to_text());
+    let version_text = req.path_param("version").unwrap_or_else(|| "".to_text());
+    let combined = if scope.starts_with("@") { f"{scope}/{name}".to_text() } else { name };
+    let id: PackageScope = match combined.try_into() {
+        Ok(s)  => s,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid scope/name".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let version = match parse_semver(&version_text) {
+        Ok(v)  => v,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid version".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    match SumdbService.lookup(&id, &version).await {
+        Ok(result) => Response.json(&result)
+            .header("Cache-Control", "public, max-age=31536000, immutable"),
+        Err(_) => render_error("version_not_in_log".to_text(),
+            f"no sumdb entry for {id}@{version}".to_text(), None, None,
+        ).status(StatusCode.NotFound),
     }
 }
 
-/// Get the current signed tree head.
-///
-/// GET /sumdb/latest
-///
-/// Response: JSON with tree_size, root_hash, timestamp, signature.
-/// Cache-Control: public, max-age=60 (updated with each new entry)
-///
-/// Clients use this to:
-/// 1. Detect new entries since last check
-/// 2. Verify log consistency (root hash should include all prior entries)
-/// 3. Detect log equivocation (different clients see different heads)
-fn handle_latest(req: Request) -> Response
-    using [Database, Metrics]
+// GET /sumdb/latest
+public async fn handle_latest(req: WeftRequest) -> Response
+    using [SumdbService, Cache]
 {
-    Metrics.increment("sumdb.latest");
-
-    match SumdbService.get_tree_head() {
-        Ok(head) => {
-            Response.json(head)
-                .header("Cache-Control", "public, max-age=60")
-        }
-        Err(e) => {
-            Response.internal_error()
-        }
+    let _ = req;
+    match SumdbService.latest_tree_head().await {
+        Ok(sth) => Response.json(&sth)
+            .header("Cache-Control", "public, max-age=60"),
+        Err(_) => render_error("internal_error".to_text(),
+            "tree head unavailable".to_text(), None, None,
+        ).status(StatusCode.InternalServerError),
     }
 }
 
-/// Get a Merkle tree tile for proof verification.
-///
-/// GET /sumdb/tile/:level/:index
-///
-/// Response: JSON array of 256 hashes.
-/// Cache-Control: public, max-age=31536000, immutable
-///
-/// Tiles partition the Merkle tree into cache-friendly chunks.
-/// Level 0 = leaf hashes, Level 1+ = internal nodes.
-/// Each tile contains exactly 256 entries.
-fn handle_tile(req: Request) -> Response
-    using [Database, Cache, Metrics]
+// GET /sumdb/tile/:level/:index
+public async fn handle_tile(req: WeftRequest) -> Response
+    using [SumdbService, Cache]
 {
-    let level = req.param("level").parse_int().unwrap_or(0);
-    let index = req.param("index").parse_int().unwrap_or(0);
-
-    Metrics.increment("sumdb.tiles");
-
-    match SumdbService.get_tile(level, index) {
-        Ok(hashes) => {
-            Response.json(hashes)
-                .header("Cache-Control", "public, max-age=31536000, immutable")
-        }
-        Err(e) => {
-            Response.internal_error()
-        }
+    let level: Int = req.path_param("level").and_then(|s| s.parse().ok()).unwrap_or(-1);
+    let index: Int = req.path_param("index").and_then(|s| s.parse().ok()).unwrap_or(-1);
+    if level < 0 || index < 0 {
+        return render_error("validation_failed".to_text(),
+            "level/index must be non-negative".to_text(), None, None,
+        ).status(StatusCode.BadRequest);
     }
-}
-
-/// Get an inclusion proof for a specific entry.
-///
-/// GET /sumdb/proof/:entry_id
-///
-/// Response: JSON with entry_index, tree_size, proof_hashes.
-/// Cache-Control: public, max-age=31536000, immutable
-///
-/// The inclusion proof allows a client to verify that a specific
-/// entry is part of the log without downloading the entire log.
-/// The proof consists of sibling hashes along the Merkle path
-/// from the leaf to the root.
-fn handle_proof(req: Request) -> Response
-    using [Database, Metrics]
-{
-    let entry_id = req.param("entry_id").parse_int().unwrap_or(-1);
-
-    if entry_id < 0 {
-        return Response.bad_request().body("Invalid entry_id");
-    }
-
-    Metrics.increment("sumdb.proofs");
-
-    match SumdbService.prove_inclusion(entry_id) {
-        Ok(proof) => {
-            Response.json(proof)
-                .header("Cache-Control", "public, max-age=31536000, immutable")
-        }
-        Err(e) => {
-            Response.bad_request().body(e)
-        }
-    }
-}
-
-/// Verify a downloaded package against the sumdb.
-///
-/// POST /sumdb/verify
-/// Body: { "package": "...", "version": "...", "checksum": "..." }
-///
-/// Response: { "status": "valid" | "invalid" | "missing" }
-///
-/// This is a convenience endpoint for clients that prefer server-side
-/// verification. Most clients verify locally using lookup + proof.
-fn handle_verify(req: Request) -> Response
-    using [Database, Logger, Metrics]
-{
-    let body = req.json();
-    let package = body.get_text("package");
-    let version = body.get_text("version");
-    let checksum = body.get_text("checksum");
-
-    Metrics.increment("sumdb.verifications");
-
-    match SumdbService.verify(package, version, checksum) {
-        Ok(Valid) => {
-            Response.json(Map.from([("status", "valid")]))
-        }
-        Ok(Invalid { expected, actual }) => {
-            Logger.warn(f"sumdb: checksum mismatch for {package}@{version}: expected {expected}, got {actual}");
-            Metrics.increment("sumdb.mismatches");
-            Response.json(Map.from([
-                ("status", "invalid"),
-                ("expected", expected),
-                ("actual", actual),
-            ]))
-        }
-        Ok(Missing) => {
-            Response.json(Map.from([("status", "missing")]))
-        }
-        Err(e) => {
-            Response.internal_error()
-        }
+    match SumdbService.tile(TileCoord { level, index }).await {
+        Ok(tile) => Response.json(&tile)
+            .header("Cache-Control", "public, max-age=31536000, immutable"),
+        Err(_) => render_error("tile_not_found".to_text(),
+            f"tile (level={level}, index={index}) not found".to_text(),
+            None, None,
+        ).status(StatusCode.NotFound),
     }
 }

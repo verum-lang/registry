@@ -1,0 +1,161 @@
+// =============================================================================
+// verum_registry/http/middleware.vr — composed cross-cutting layers
+// =============================================================================
+// Spec: §8.6 (server bootstrap)
+//
+// Per spec, the middleware chain (outside-in) is:
+//   1. MetricsLayer       — `core.net.weft.metrics`
+//   2. RateLimitLayer     — `core.net.weft.backpressure`
+//   3. TimeoutLayer       — `core.net.weft.timeout`
+//   4. SpiffeAuthLayer    — `core.net.weft.spiffe`  (optional)
+//   5. LoggingMiddleware  — registry-side
+//   6. ErrorHandlerMiddleware — registry-side error envelope
+//
+// All but logging + error-handler come directly from `core.net.weft`;
+// this module defines the registry-specific bookend layers that
+// translate domain errors into the canonical JSON envelope (spec §8.4).
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "registry-specific HTTP middleware — logging + error envelope",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.middleware;
+
+mount core.*;
+mount base.{Result, Ok, Err, Text};
+mount net.weft.{Middleware, Next, WeftRequest, Response, StatusCode};
+mount time.system_time.now_unix_ns;
+mount base.ulid.generate as gen_ulid;
+
+mount verum_registry.http.error_response.{ErrorEnvelope, render_error};
+
+// =============================================================================
+// LoggingMiddleware — structured request/response log
+// =============================================================================
+
+public type LoggingMiddleware is {};
+
+public fn logging_middleware_new() -> LoggingMiddleware {
+    LoggingMiddleware {}
+}
+
+implement Middleware for LoggingMiddleware {
+    async fn call(&self, req: WeftRequest, next: Next) -> Response
+        using [Logger]
+    {
+        let start = now_unix_ns();
+        let trace_id = req.header("X-Trace-Id")
+            .unwrap_or_else(|| gen_ulid().to_text());
+        let method = req.method.clone();
+        let path = req.path.clone();
+
+        Logger.log(Level.Info, f"→ [{trace_id}] {method} {path}");
+
+        // Provide trace_id into the per-request context so handlers
+        // and downstream layers can pull it for log correlation.
+        provide TraceId = trace_id.clone();
+
+        let response = next.call(req).await;
+        let duration_ns = now_unix_ns() - start;
+        let duration_ms = duration_ns / 1_000_000;
+        let status = response.status;
+
+        Logger.log(Level.Info, f"← [{trace_id}] {status} {duration_ms}ms");
+
+        response.header("X-Trace-Id", &trace_id)
+    }
+}
+
+// =============================================================================
+// MetricsMiddleware — request-rate / latency / status counters
+// =============================================================================
+//
+// Composes `core.net.weft.MetricsLayer` (the canonical Prometheus-
+// compatible recording layer) with registry-specific labels (path-
+// class, status-class, auth-method).  Concrete labelling lives here
+// because it depends on registry routing.
+public type MetricsMiddleware is {};
+
+public fn metrics_middleware_new() -> MetricsMiddleware {
+    MetricsMiddleware {}
+}
+
+implement Middleware for MetricsMiddleware {
+    async fn call(&self, req: WeftRequest, next: Next) -> Response
+        using [Metrics]
+    {
+        let start = now_unix_ns();
+        let path_class = classify_path(&req.path);
+        Metrics.increment(f"http.requests.{path_class}");
+
+        let response = next.call(req).await;
+
+        let duration_ns = now_unix_ns() - start;
+        let status_class = response.status.as_u16() / 100;
+        Metrics.histogram(f"http.latency.{path_class}", duration_ns / 1000);
+        Metrics.increment(f"http.status.{status_class}xx");
+
+        response
+    }
+}
+
+// Classify path for cardinality-bounded metrics labels.
+fn classify_path(path: &Text) -> Text {
+    if path.starts_with("/api/v2/packages") { "packages".to_text() }
+    else if path.starts_with("/api/v2/search") { "search".to_text() }
+    else if path.starts_with("/api/v2/resolve") { "resolve".to_text() }
+    else if path.starts_with("/api/v2/auth") { "auth".to_text() }
+    else if path.starts_with("/api/v2/users") { "users".to_text() }
+    else if path.starts_with("/api/v2/advisories") { "advisories".to_text() }
+    else if path.starts_with("/sumdb") { "sumdb".to_text() }
+    else if path.starts_with("/health") { "health".to_text() }
+    else { "other".to_text() }
+}
+
+// =============================================================================
+// ErrorHandlerMiddleware — uncaught panic → JSON error envelope
+// =============================================================================
+//
+// Wraps `next.call(...)` in a panic-catcher.  Any unexpected error
+// (panic, unhandled exception) renders as a 500 with the canonical
+// envelope shape (spec §8.4).  Domain-error → envelope mapping lives
+// in handlers; this layer is the safety net.
+public type ErrorHandlerMiddleware is {};
+
+public fn error_handler_middleware_new() -> ErrorHandlerMiddleware {
+    ErrorHandlerMiddleware {}
+}
+
+implement Middleware for ErrorHandlerMiddleware {
+    async fn call(&self, req: WeftRequest, next: Next) -> Response
+        using [Logger]
+    {
+        let trace_id = req.header("X-Trace-Id").unwrap_or_else(|| "".to_text());
+        match net.weft.catch_panic(async || next.call(req).await).await {
+            Ok(resp) => resp,
+            Err(panic_msg) => {
+                Logger.log(Level.Error, f"[{trace_id}] uncaught panic: {panic_msg}");
+                render_error(
+                    "internal_error".to_text(),
+                    "an internal error occurred".to_text(),
+                    None,
+                    Some(trace_id),
+                ).status(StatusCode.InternalServerError)
+            }
+        }
+    }
+}

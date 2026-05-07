@@ -1,0 +1,130 @@
+// =============================================================================
+// verum_registry/persistence/object_store.vr — S3 source-archive storage
+// =============================================================================
+// Spec: §6.3
+//
+// Source archives at the canonical key:
+//   packages/<scope>/<name>/<version>/source.tar.zst
+//
+// Objects are immutable: once written, never overwritten.  On post-
+// commit S3 failure (Phase 7's outside-transaction upload), a
+// `pending_object_pushes` row is enqueued for the background reconciler.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "S3-compatible object store for source archives",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.object_store;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.List;
+mount base.semver.{SemVer, format_semver};
+mount storage.s3 as s3;
+
+mount verum_registry.config.S3Config;
+mount verum_registry.domain.PackageScope;
+
+// =============================================================================
+// ObjectStore handle
+// =============================================================================
+
+public type ObjectStore is {
+    client: s3.S3Client,
+    bucket: Text,
+};
+
+public async fn connect(config: &S3Config) -> Result<ObjectStore, Text> {
+    let client = s3.S3Client.new(s3.S3Config {
+        endpoint:          config.endpoint.clone(),
+        region:            config.region.clone(),
+        access_key_id:     config.access_key_id.clone(),
+        secret_access_key: config.secret_access_key.clone(),
+    }).await.map_err(|e| format!("s3 client: {e}").to_text())?;
+    Ok(ObjectStore {
+        client: client,
+        bucket: config.bucket.clone(),
+    })
+}
+
+// =============================================================================
+// Source-archive operations
+// =============================================================================
+
+public async fn put_source_archive(
+    store: &ObjectStore,
+    package_id: &PackageScope,
+    version: &SemVer,
+    archive_bytes: &List<Byte>,
+) -> Result<(), Text> {
+    let key = source_key(package_id, version);
+    store.client.put_object(s3.PutObjectRequest {
+        bucket:       store.bucket.clone(),
+        key:          key,
+        content_type: "application/vnd.verum.cog-source+tar+zstd".to_text(),
+        body:         archive_bytes.clone(),
+        metadata:     compose_metadata(package_id, version, archive_bytes),
+    }).await.map_err(|e| format!("s3 put: {e}").to_text())
+}
+
+public async fn get_source_archive(
+    store: &ObjectStore,
+    package_id: &PackageScope,
+    version: &SemVer,
+) -> Result<List<Byte>, Text> {
+    let key = source_key(package_id, version);
+    store.client.get_object(s3.GetObjectRequest {
+        bucket: store.bucket.clone(),
+        key:    key,
+    }).await.map_err(|e| format!("s3 get: {e}").to_text())
+}
+
+public async fn delete_source_archive(
+    store: &ObjectStore,
+    package_id: &PackageScope,
+    version: &SemVer,
+) -> Result<(), Text> {
+    let key = source_key(package_id, version);
+    store.client.delete_object(s3.DeleteObjectRequest {
+        bucket: store.bucket.clone(),
+        key:    key,
+    }).await.map_err(|e| format!("s3 delete: {e}").to_text())
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+fn source_key(package_id: &PackageScope, version: &SemVer) -> Text {
+    let v = format_semver(version);
+    format!("packages/{}/{}/source.tar.zst", package_id, v).to_text()
+}
+
+fn compose_metadata(
+    package_id: &PackageScope,
+    version: &SemVer,
+    archive_bytes: &List<Byte>,
+) -> Map<Text, Text> {
+    let v_text = format_semver(version);
+    let sha = security.hash.sha256.digest(archive_bytes);
+    let sha_hex = encoding.hex.encode(&sha);
+    let mut m: Map<Text, Text> = Map.new();
+    m.insert("sha256-source".to_text(), sha_hex);
+    m.insert("cog-version".to_text(), v_text);
+    m.insert("cog-package".to_text(), package_id.clone());
+    m
+}

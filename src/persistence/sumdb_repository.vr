@@ -1,0 +1,128 @@
+// =============================================================================
+// verum_registry/persistence/sumdb_repository.vr
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "sumdb_entries + sumdb_tree_heads repository",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.sumdb_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.List;
+mount base.semver.{SemVer, format_semver};
+mount database.common.error.DbError;
+mount database.postgres.async_pool.AsyncPgPool;
+mount security.transparency_log.SignedTreeHead;
+
+mount verum_registry.domain.{
+    SumdbEntry, PackageScope, Hex64,
+};
+
+public type SumdbRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn sumdb_repository_new(pool: AsyncPgPool) -> SumdbRepository {
+    SumdbRepository { pool }
+}
+
+public async fn append_entry(
+    repo: &SumdbRepository,
+    package_id: &PackageScope,
+    version: &SemVer,
+    checksum: &Hex64,
+    leaf_hash: &List<Byte>,
+) -> Result<Int, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let v_text = format_semver(version);
+    let row = conn.query_one(
+        sql#"INSERT INTO sumdb_entries (package_id, version, checksum, leaf_hash)
+              VALUES ($1, $2, $3, $4)
+              RETURNING sequence"#,
+        (package_id, &v_text, checksum, leaf_hash),
+    ).await?;
+    Ok(row.get_int64("sequence")? as Int)
+}
+
+public async fn lookup_entry(
+    repo: &SumdbRepository,
+    package_id: &PackageScope,
+    version: &SemVer,
+) -> Result<Maybe<SumdbEntry>, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let v_text = format_semver(version);
+    let row_opt = conn.query_one_opt(
+        sql#"SELECT sequence, package_id, version, checksum, timestamp
+              FROM sumdb_entries
+              WHERE package_id = $1 AND version = $2"#,
+        (package_id, &v_text),
+    ).await?;
+    match row_opt {
+        Some(row) => Ok(Some(SumdbEntry {
+            sequence:   row.get_int64("sequence")? as Int,
+            package_id: row.get_text("package_id")?,
+            version:    base.semver.parse(&row.get_text("version")?)
+                .map_err(|e| DbError.DecodeFailed { fault: format!("version: {e}").to_text() })?,
+            checksum:   row.get_text("checksum")?,
+            timestamp:  row.get_timestamp("timestamp")?,
+        })),
+        None => Ok(None),
+    }
+}
+
+public async fn save_tree_head(
+    repo: &SumdbRepository,
+    sth: &SignedTreeHead,
+) -> Result<(), DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    conn.execute(
+        sql#"INSERT INTO sumdb_tree_heads
+              (tree_size, root_hash, timestamp, signature)
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT (tree_size) DO UPDATE SET
+                  root_hash = EXCLUDED.root_hash,
+                  timestamp = EXCLUDED.timestamp,
+                  signature = EXCLUDED.signature"#,
+        (&sth.tree_size, &sth.root_hash, &sth.timestamp_ms, &sth.signature.to_list()),
+    ).await?;
+    Ok(())
+}
+
+public async fn latest_tree_head(
+    repo: &SumdbRepository,
+) -> Result<Maybe<SignedTreeHead>, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let row_opt = conn.query_one_opt(
+        sql#"SELECT tree_size, root_hash, timestamp, signature
+              FROM sumdb_tree_heads
+              ORDER BY tree_size DESC
+              LIMIT 1"#,
+        (),
+    ).await?;
+    match row_opt {
+        Some(row) => Ok(Some(SignedTreeHead {
+            tree_size:    row.get_int64("tree_size")?,
+            root_hash:    row.get_bytes("root_hash")?,
+            timestamp_ms: row.get_int64("timestamp")?,
+            signature:    row.get_bytes("signature")?.try_into()
+                .map_err(|e| DbError.DecodeFailed { fault: format!("signature: {e}").to_text() })?,
+            operator_pubkey: [0_u8; 32],  // operator pubkey held by SumdbService, not in DB
+        })),
+        None => Ok(None),
+    }
+}

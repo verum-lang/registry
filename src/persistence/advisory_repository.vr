@@ -1,0 +1,139 @@
+// =============================================================================
+// verum_registry/persistence/advisory_repository.vr
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "security_advisories repository",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.advisory_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.List;
+mount base.semver_constraint.{
+    SemVerConstraint, parse as parse_constraint, format_constraint,
+};
+mount database.common.error.DbError;
+mount database.postgres.async_pool.AsyncPgPool;
+
+mount verum_registry.domain.{
+    SecurityAdvisory, AdvisoryId, PackageScope, Severity,
+    SevLow, SevMedium, SevHigh, SevCritical,
+};
+
+public type AdvisoryRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn advisory_repository_new(pool: AsyncPgPool) -> AdvisoryRepository {
+    AdvisoryRepository { pool }
+}
+
+public async fn list_advisories_for_package(
+    repo: &AdvisoryRepository,
+    package_id: &PackageScope,
+) -> Result<List<SecurityAdvisory>, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let rows = conn.query(
+        sql#"SELECT id, package_id, affected_versions, fixed_versions,
+                    severity, cve_ids, summary, details, disclosed_at
+              FROM security_advisories
+              WHERE package_id = $1
+              ORDER BY disclosed_at DESC"#,
+        (package_id,),
+    ).await?;
+    let mut out: List<SecurityAdvisory> = List.new();
+    let mut i: Int = 0;
+    while i < rows.len() {
+        out.push(decode_advisory_row(&rows[i])?);
+        i = i + 1;
+    }
+    Ok(out)
+}
+
+public async fn lookup_advisory(
+    repo: &AdvisoryRepository,
+    id: &AdvisoryId,
+) -> Result<Maybe<SecurityAdvisory>, DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let row_opt = conn.query_one_opt(
+        sql#"SELECT id, package_id, affected_versions, fixed_versions,
+                    severity, cve_ids, summary, details, disclosed_at
+              FROM security_advisories WHERE id = $1"#,
+        (id,),
+    ).await?;
+    match row_opt {
+        Some(row) => Ok(Some(decode_advisory_row(&row)?)),
+        None      => Ok(None),
+    }
+}
+
+public async fn insert_advisory(
+    repo: &AdvisoryRepository,
+    advisory: &SecurityAdvisory,
+) -> Result<(), DbError> {
+    let mut conn = repo.pool.acquire().await?;
+    let severity_text = match advisory.severity {
+        SevLow      => "low".to_text(),
+        SevMedium   => "medium".to_text(),
+        SevHigh     => "high".to_text(),
+        SevCritical => "critical".to_text(),
+    };
+    let affected_text = format_constraint(&advisory.affected_versions);
+    let fixed_text = match &advisory.fixed_versions {
+        Some(c) => Some(format_constraint(c)),
+        None    => None,
+    };
+    conn.execute(
+        sql#"INSERT INTO security_advisories
+              (id, package_id, affected_versions, fixed_versions,
+               severity, cve_ids, summary, details, disclosed_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+        (&advisory.id, &advisory.package_id, &affected_text, &fixed_text,
+         &severity_text, &advisory.cve_ids, &advisory.summary,
+         &advisory.details, &advisory.disclosed_at),
+    ).await?;
+    Ok(())
+}
+
+fn decode_advisory_row(row: &Row) -> Result<SecurityAdvisory, DbError> {
+    let severity = match row.get_text("severity")?.as_str() {
+        "low"      => SevLow,
+        "medium"   => SevMedium,
+        "high"     => SevHigh,
+        "critical" => SevCritical,
+        other => return Err(DbError.DecodeFailed { fault: format!("severity: {other}").to_text() }),
+    };
+    let affected = parse_constraint(&row.get_text("affected_versions")?)
+        .map_err(|e| DbError.DecodeFailed { fault: format!("affected_versions: {e}").to_text() })?;
+    let fixed = match row.get_text_opt("fixed_versions")? {
+        Some(t) => Some(parse_constraint(&t)
+            .map_err(|e| DbError.DecodeFailed { fault: format!("fixed_versions: {e}").to_text() })?),
+        None => None,
+    };
+    Ok(SecurityAdvisory {
+        id:                row.get_text("id")?,
+        package_id:        row.get_text("package_id")?,
+        affected_versions: affected,
+        fixed_versions:    fixed,
+        severity:          severity,
+        cve_ids:           row.get_text_array("cve_ids").unwrap_or_default(),
+        summary:           row.get_text("summary")?,
+        details:           row.get_text_opt("details")?,
+        disclosed_at:      row.get_timestamp("disclosed_at")?,
+    })
+}

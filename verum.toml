@@ -1,132 +1,149 @@
-[package]
-name = "verum-registry"
-version = "0.1.0"
-authors = []
-license = "MIT OR Apache-2.0"
-keywords = []
-categories = []
+# =============================================================================
+# verum.toml — registry cog manifest (v2.0)
+# =============================================================================
+# This is the registry's own cog manifest.  By the recursive
+# self-application discipline (spec §13), the registry serves cogs;
+# the registry IS a cog; the registry's cog is served by the
+# registry — captured by the Banach self-reference witness in
+# `src/main.vr`.
+# =============================================================================
+
+[cog]
+name        = "verum-registry"
+version     = "2.0.0"
+edition     = "2025"
+authors     = ["Verum Language Team"]
+description = "The canonical Verum package registry — vcogs.io reference implementation"
+license     = "Apache-2.0"
+repository  = "https://github.com/verum-lang/registry"
+homepage    = "https://vcogs.io"
+keywords    = ["registry", "package-manager", "transparency-log"]
+categories  = ["development-tools"]
 
 [language]
 profile = "application"
 
+# =============================================================================
+# Dependencies — composed against the enriched stdlib at every layer
+# =============================================================================
+
 [dependencies]
-stdlib = "0.1"
+# All stdlib facilities — single dependency on the stdlib bundle.
+# Specific modules used (per spec §4):
+#
+#   * core.configuration.toml          — manifest parsing
+#   * core.cog.manifest                — typed CogManifest
+#   * core.base.semver_constraint      — dependency constraints
+#   * core.base.semver                 — version comparison
+#   * core.base.string_distance        — typosquatting Damerau-Levenshtein
+#   * core.base.ulid                   — monotonic IDs
+#   * core.archive.{tar, zstd}         — source bundles
+#   * core.compress.zstd               — archive decompression
+#   * core.security.transparency_log   — sumdb (RFC 6962 + RFC 9162)
+#   * core.security.merkle             — Merkle-tree primitive
+#   * core.security.ecc.ed25519        — cog signing
+#   * core.security.hash.sha256        — content addressing
+#   * core.security.password_hash      — Argon2id token hashing
+#   * core.security.oidc               — OIDC trusted publishing (G6)
+#   * core.security.provenance         — SLSA + in-toto (G7)
+#   * core.database.postgres           — connection pool + sql# meta-fn
+#   * core.database.postgres.migrations — schema evolution
+#   * core.net.weft                    — HTTP/2 server + middleware
+#   * core.cache.redis                 — cache adapter
+#   * core.search.meilisearch          — search adapter
+#   * core.storage.s3                  — object store adapter
+#   * core.tracing                     — OTLP traces
+#   * core.metrics                     — Prometheus exposition
+#   * core.time.{rfc3339, system_time} — timestamps
+#   * core.encoding.{json, hex}        — encoding adapters
+verum-stdlib = { version = "^0.4" }
 
 [dev_dependencies]
+# Test helpers; minimal — the registry's tests run integration-heavy.
 
 [build_dependencies]
+# None — the registry is a pure-Verum cog with no native build steps.
 
-[build]
-target = ""
-opt_level = 0
-incremental = false
-lto = false
-panic = "unwind"
+# =============================================================================
+# Feature flags
+# =============================================================================
 
 [features]
-default = []
+default = ["postgres", "s3-aws", "redis-cluster"]
+
+# Backend selection — alternative drivers can be plugged in.
+postgres      = []
+s3-aws        = []
+s3-minio      = []
+redis-cluster = []
+redis-single  = []
+
+# Optional subsystems.
+oidc-trusted-publishing = []
+slsa-provenance         = []
+typosquatting-strict    = []
+
+# =============================================================================
+# Build profiles
+# =============================================================================
 
 [profile.dev]
-tier = "0"
-verification = "runtime"
-opt_level = 0
-debug = true
-debug_assertions = true
-overflow_checks = true
-lto = false
-incremental = true
-codegen_units = 256
-cbgr_checks = "all"
+tier              = "0"      # VBC interpreter for fast iteration
+verification      = "runtime"
+opt_level         = 0
+debug             = true
+debug_assertions  = true
+overflow_checks   = true
+lto               = false
+incremental       = true
+codegen_units     = 256
+cbgr_checks       = "all"
 
 [profile.release]
-tier = "2"
-verification = "runtime"
-opt_level = 3
-debug = false
-debug_assertions = false
-overflow_checks = false
-lto = true
-incremental = false
-codegen_units = 16
-cbgr_checks = "optimized"
+tier              = "2"      # AOT for production
+verification      = "runtime"
+opt_level         = 3
+debug             = false
+debug_assertions  = false
+overflow_checks   = false
+lto               = true
+incremental       = false
+codegen_units     = 16
+cbgr_checks       = "audit-points"
 
-[profile.test]
-tier = "0"
-verification = "runtime"
-opt_level = 0
-debug = true
-debug_assertions = true
-overflow_checks = true
-lto = false
-incremental = true
-codegen_units = 256
-cbgr_checks = "all"
+# =============================================================================
+# Distribution
+# =============================================================================
 
-[profile.bench]
-tier = "0"
-verification = "runtime"
-opt_level = 0
-debug = true
-debug_assertions = true
-overflow_checks = true
-lto = false
-incremental = true
-codegen_units = 256
-cbgr_checks = "all"
+[distribution]
+include_source     = true
 
-[lsp]
-enable_cost_hints = true
-validation_mode = "incremental"
-auto_import = true
-format_on_save = false
+[distribution.tier2]
+binaries           = true
+platforms          = [
+    "x86_64-linux",
+    "aarch64-linux",
+    "x86_64-macos",
+    "aarch64-macos",
+]
 
-[registry]
-index = "https://packages.verum.lang"
+# =============================================================================
+# Architectural intent — declared at the manifest level
+# =============================================================================
+#
+# The registry is a `Lifecycle.Theorem("v2.0")` cog with
+# CognitiveSubstrate.AnalyticDecompositional, FormalAnchoring
+# .CurryHowardLawvere, ExecutabilitySense.StructuralReadiness, and a
+# non-trivial SelfReferenceWitness (the registry serves itself).
+# These declarations live in `src/main.vr`'s `@arch_module(...)` and
+# are mirrored here as documentation for tooling that does not yet
+# parse Verum source.
 
-[llvm]
-cpu = "generic"
-features = ""
-reloc_mode = "pic"
-code_model = "default"
-pic = true
-pie = true
-
-[optimization]
-inline_threshold = 225
-unroll_threshold = 100
-vectorize = true
-slp_vectorize = true
-loop_unroll = true
-loop_interleaving = false
-merge_functions = true
-call_graph_profile = true
-licm_mssa = true
-licm_mssa_opt_cap = 1
-verify_each = false
-debug_logging = false
-vectorization_strategy = "aggressive"
-cbgr_optimizations = true
-
-[lto]
-mode = "thin"
-incremental = true
-import_instr_limit = 100
-aggressive_inlining = true
-enable_devirtualization = true
-enable_global_dce = true
-
-[pgo]
-enabled = false
-mode = "none"
-profile_dir = "pgo-data"
-enable_bb_reordering = true
-hot_inline_multiplier = 1.5
-use_sampling = false
-
-[cross_compile]
-enabled = false
-link_args = []
-linking_strategy = "dynamic"
-strip_symbols = false
-universal_binary = false
-minimal_runtime = false
+[meta.cve]
+lifecycle              = "T"
+substrate              = "analytic_decompositional"
+anchoring              = "curry_howard_lawvere"
+e_sense                = "structural_readiness"
+self_reference_class   = "banach"
+self_reference_operator = "verum_registry.services.publish_service"
+self_reference_fixpoint = "verum_registry@2.0.0"
