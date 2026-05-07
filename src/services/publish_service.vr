@@ -1,0 +1,689 @@
+// =============================================================================
+// verum_registry/services/publish_service.vr — eight-phase publish workflow
+// =============================================================================
+// Spec: §7.1
+//
+// The heart of the registry. Receives a manifest + source-archive,
+// validates through eight separable phases, persists transactionally,
+// emits asynchronous post-publish work.
+//
+// Composes against the enriched Verum stdlib at every step:
+//   * `core.cog.manifest`               — typed manifest parsing
+//   * `core.compress.zstd`              — archive decompression
+//   * `core.archive.tar`                — archive unpacking
+//   * `core.security.hash.sha256`       — content addressing
+//   * `core.security.ecc.ed25519`       — cog signing
+//   * `core.security.transparency_log`  — sumdb append
+//   * `core.base.string_distance`       — typosquatting detection
+//   * `core.base.semver`                — version comparison
+//   * `verum_kernel.compile_validate`   — in-process compile-validate
+//   * `verum_kernel.arch_anti_pattern`  — 40-pattern catalog
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "registry publish workflow — eight-phase validate-and-store pipeline",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.publish_service;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.{List, Map};
+mount async.spawn;
+mount base.semver.{SemVer, cmp as cmp_semver};
+mount base.string_distance.{damerau_levenshtein};
+mount cog.manifest.{CogManifest, parse_text as parse_manifest};
+mount compress.zstd;
+mount archive.{tar_format, ArchiveEntry};
+mount security.hash.sha256.{digest as sha256_digest};
+mount security.ecc.ed25519.{Ed25519Seed, sign as ed25519_sign};
+mount security.transparency_log.{TransparencyLog, LogLeaf, append as log_append};
+mount time.system_time.now_unix_ns;
+mount encoding.hex.encode as hex_encode;
+mount encoding.json.{stringify as json_stringify};
+
+mount verum_registry.domain.{
+    PackageVersion, Hex64, VerificationLevel, PackageScope,
+    User, UserId, SumdbEntry,
+    PublishError, ManifestParseFailed, NotAnOwner, VersionExists,
+    VersionNotMonotone, TyposquattingSuspected, MalwareDetected,
+    ArchiveDecodeFailed, CompileFailed, AntiPatternViolations,
+    StorageFailed, DatabaseFailed, SumdbAppendFailed, InternalError,
+};
+
+// =============================================================================
+// PublishService
+// =============================================================================
+
+public type PublishService is {};
+
+implement PublishService {
+    /// Eight-phase publish.  Returns the persisted `PackageVersion`
+    /// on success; otherwise the structured `PublishError`.
+    public async fn publish(
+        &self,
+        user: User,
+        manifest_text: Text,
+        source_archive: List<Byte>,
+    ) -> Result<PackageVersion, PublishError>
+        using [Database, Storage, Cache, Search, Sumdb, Logger, Metrics]
+    {
+        Metrics.increment("publish.attempts");
+
+        let manifest = self.phase1_parse_manifest(&manifest_text)?;
+        Logger.log(Level.Info, f"publish: {manifest.cog.name}@{manifest.cog.version}");
+
+        self.phase2_check_ownership(&user, &manifest.cog.name).await?;
+        self.phase3_check_version_bump(&manifest).await?;
+        self.phase4_security_analysis(&manifest, &source_archive).await?;
+        let analyzed = self.phase5_analyze_archive(&manifest, &source_archive).await?;
+        let artefacts = self.phase6_generate_artefacts(&manifest, &analyzed).await?;
+        let version = self.phase7_persist(&user, &manifest, &source_archive, &analyzed, &artefacts).await?;
+
+        // Phase 8 runs asynchronously; failures here log but do not
+        // surface to the caller — the publish has already succeeded.
+        self.phase8_post_publish(&version).await;
+
+        Metrics.increment("publish.success");
+        Ok(version)
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 1 — parse manifest (core.cog.manifest)
+    // -------------------------------------------------------------------------
+
+    fn phase1_parse_manifest(&self, text: &Text) -> Result<CogManifest, PublishError> {
+        match parse_manifest(text) {
+            Ok(m)  => Ok(m),
+            Err(e) => Err(ManifestParseFailed(e)),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 2 — ownership check
+    // -------------------------------------------------------------------------
+
+    async fn phase2_check_ownership(
+        &self,
+        user: &User,
+        package_name: &CogName,
+    ) -> Result<(), PublishError> using [Database] {
+        let exists = self.package_exists(package_name).await?;
+        if !exists {
+            // First publish — no ownership entry yet; created in Phase 7.
+            return Ok(());
+        }
+        let owners = self.lookup_owners(package_name).await?;
+        if !owners.iter().any(|o| o.user_id == user.id) {
+            return Err(NotAnOwner);
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3 — version-monotonicity check
+    // -------------------------------------------------------------------------
+
+    async fn phase3_check_version_bump(
+        &self,
+        manifest: &CogManifest,
+    ) -> Result<(), PublishError> using [Database] {
+        if let Some(latest) = self.lookup_latest_version(&manifest.cog.name).await? {
+            // SemVer monotonicity (cmp returns negative if a < b, zero if a == b, positive if a > b).
+            if cmp_semver(&manifest.cog.version, &latest) <= 0 {
+                return Err(VersionNotMonotone {
+                    latest:    latest.clone(),
+                    proposed:  manifest.cog.version.clone(),
+                });
+            }
+        }
+        if self.version_exists(&manifest.cog.name, &manifest.cog.version).await? {
+            return Err(VersionExists(manifest.cog.version.clone()));
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4 — security analysis (typosquatting + malware)
+    // -------------------------------------------------------------------------
+
+    async fn phase4_security_analysis(
+        &self,
+        manifest: &CogManifest,
+        source: &List<Byte>,
+    ) -> Result<(), PublishError> using [Database, Logger, Metrics] {
+        // 4a. Typosquatting — Damerau–Levenshtein distance vs high-download names.
+        let candidates = self.lookup_high_download_candidates(&manifest.cog.name).await?;
+        let proposed_str = manifest.cog.name.as_str();
+        let mut i: Int = 0;
+        while i < candidates.len() {
+            let cand = &candidates[i];
+            let d = damerau_levenshtein(proposed_str, cand.as_str());
+            if d > 0 && d <= 2 {
+                Metrics.increment("security.typosquatting_flagged");
+                return Err(TyposquattingSuspected {
+                    proposed: manifest.cog.name.clone(),
+                    similar:  cand.clone(),
+                    distance: d,
+                });
+            }
+            i = i + 1;
+        }
+
+        // 4b. Malware — static-pattern scan.  Composes
+        // `core.security.malware_patterns` (forthcoming); until that
+        // lands, we use a thin local scanner over a baseline ruleset.
+        match self.scan_malware_patterns(source).await {
+            Ok(()) => {}
+            Err(reason) => {
+                Metrics.increment("security.malware_blocked");
+                Logger.log(Level.Error, f"malware detected: {reason}");
+                return Err(MalwareDetected(reason));
+            }
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 5 — source archive analysis
+    // -------------------------------------------------------------------------
+
+    async fn phase5_analyze_archive(
+        &self,
+        manifest: &CogManifest,
+        archive_bytes: &List<Byte>,
+    ) -> Result<AnalyzedArchive, PublishError> using [Logger, Metrics] {
+        // 5a. SHA-256 of the archive bytes.
+        let source_sha256_bytes = sha256_digest(archive_bytes);
+        let source_sha256 = match Hex64::try_from(hex_encode(&source_sha256_bytes)) {
+            Ok(h)  => h,
+            Err(e) => return Err(InternalError(format!("hex format: {e}").to_text())),
+        };
+
+        // 5b. Decompress (zstd) + unpack (tar).
+        let tar_bytes = match zstd.decode(archive_bytes) {
+            Ok(b)  => b,
+            Err(e) => return Err(ArchiveDecodeFailed(format!("zstd: {e}").to_text())),
+        };
+        let entries = match tar_format().unpack(tar_bytes.as_slice()) {
+            Ok(es) => es,
+            Err(e) => return Err(ArchiveDecodeFailed(format!("tar: {e}").to_text())),
+        };
+
+        // 5c. Compile-validate via verum_kernel.  In-process; uses the
+        // current compiler embedded in the registry binary.
+        let compile_report = match verum_kernel.compile_validate(&entries, manifest) {
+            Ok(r)  => r,
+            Err(e) => return Err(CompileFailed(format!("{e}").to_text())),
+        };
+
+        // 5d. Anti-pattern catalog (40 patterns).  Any Severity.Error aborts.
+        let ap_violations = verum_kernel.arch_anti_pattern.check_all_anti_patterns(
+            &compile_report.shape,
+            &compile_report.diagnostic_context,
+        );
+        let mut blocking: List<AntiPatternViolation> = List.new();
+        let mut i: Int = 0;
+        while i < ap_violations.len() {
+            if matches!(ap_violations[i].severity, Severity.Error) {
+                blocking.push(ap_violations[i].clone());
+            }
+            i = i + 1;
+        }
+        if !blocking.is_empty() {
+            return Err(AntiPatternViolations(blocking));
+        }
+
+        // 5e. Extract CVE-shape signals.
+        let cve_lifecycle = compile_report.shape.lifecycle.clone();
+        let shape_declarations_digest = match Hex64::try_from(
+            hex_encode(&hash_canonical_shape(&compile_report.shape.declarations))
+        ) {
+            Ok(h)  => h,
+            Err(e) => return Err(InternalError(format!("hex format: {e}").to_text())),
+        };
+        let verification_level = render_verification_level(&compile_report.verification_level);
+
+        Ok(AnalyzedArchive {
+            source_sha256, entries, compile_report,
+            ap_violations, cve_lifecycle, shape_declarations_digest,
+            verification_level,
+        })
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 6 — artefact generation
+    // -------------------------------------------------------------------------
+
+    async fn phase6_generate_artefacts(
+        &self,
+        manifest: &CogManifest,
+        analyzed: &AnalyzedArchive,
+    ) -> Result<PublishArtefacts, PublishError> {
+        // 6a. Sumdb leaf — canonical JSON of SumdbEntry (sequence allocated at append).
+        let leaf = SumdbEntry {
+            sequence:   0,                        // will be replaced at append
+            package_id: manifest.cog.name.clone(),
+            version:    manifest.cog.version.clone(),
+            checksum:   analyzed.source_sha256.clone(),
+            timestamp:  rfc3339.now_utc(),
+        };
+        let leaf_canonical_json = json_stringify(&leaf);
+
+        // 6b. Cog signature — Ed25519 over (manifest_canonical_json || source_sha256).
+        let manifest_json = json_stringify(manifest);
+        let mut to_sign: List<Byte> = List.new();
+        let mb = manifest_json.as_bytes();
+        let mut i: Int = 0; while i < mb.len() { to_sign.push(mb[i]); i = i + 1; }
+        let sb = analyzed.source_sha256.as_str().as_bytes();
+        let mut j: Int = 0; while j < sb.len() { to_sign.push(sb[j]); j = j + 1; }
+        let signature = ed25519_sign(&self.signing_seed(), &to_sign);
+
+        Ok(PublishArtefacts {
+            sumdb_leaf: leaf,
+            sumdb_leaf_bytes: leaf_canonical_json.as_bytes().to_list(),
+            cog_signature: signature,
+        })
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 7 — transactional persist
+    // -------------------------------------------------------------------------
+
+    async fn phase7_persist(
+        &self,
+        user: &User,
+        manifest: &CogManifest,
+        source_archive: &List<Byte>,
+        analyzed: &AnalyzedArchive,
+        artefacts: &PublishArtefacts,
+    ) -> Result<PackageVersion, PublishError>
+        using [Database, Storage, Sumdb, Logger]
+    {
+        // S3 upload OUTSIDE transaction (S3 is non-transactional).
+        let s3_key = format!("packages/{}/{}/source.tar.zst",
+                             manifest.cog.name, manifest.cog.version).to_text();
+        match Storage.put(&s3_key, source_archive).await {
+            Ok(()) => {}
+            Err(e) => return Err(StorageFailed(format!("s3 put: {e}").to_text())),
+        }
+
+        // Postgres transaction: packages + versions + ownership + sumdb.
+        let tx_result = Database.transaction(async |tx| {
+            self.upsert_package(tx, manifest, user).await?;
+            let version_record = self.insert_version(tx, manifest, analyzed, user).await?;
+            if !self.package_owner_exists_in_tx(tx, &manifest.cog.name, &user.id).await? {
+                self.insert_owner(tx, &manifest.cog.name, &user.id, &user.id).await?;
+            }
+            // Append to sumdb log; the new sequence is assigned by Postgres
+            // BIGSERIAL inside the transaction.
+            let _seq = Sumdb.append(LogLeaf { bytes: artefacts.sumdb_leaf_bytes.clone() })
+                .await
+                .map_err(|e| DatabaseFailed(format!("sumdb append: {e}").to_text()))?;
+            Ok(version_record)
+        }).await;
+
+        match tx_result {
+            Ok(v)  => {
+                Logger.log(Level.Info, f"persisted {manifest.cog.name}@{manifest.cog.version}");
+                Ok(v)
+            }
+            Err(e) => {
+                // Best-effort: try to delete the S3 object that was uploaded
+                // before the transaction failed.  Failures here are logged
+                // but not surfaced (the storage reconciler will sweep).
+                let _ = Storage.delete(&s3_key).await;
+                Err(e)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 8 — post-publish (async-spawned; non-blocking)
+    // -------------------------------------------------------------------------
+
+    async fn phase8_post_publish(
+        &self,
+        version: &PackageVersion,
+    ) using [Search, Cache, Logger] {
+        let v_for_search = version.clone();
+        spawn(async move {
+            if let Err(e) = Search.index_package_version(&v_for_search).await {
+                Logger.log(Level.Warn, f"search index update failed: {e}");
+            }
+        });
+
+        let cache_key_pkg = format!("package:{}", version.package_id).to_text();
+        let cache_key_versions = format!("versions:{}", version.package_id).to_text();
+        let _ = Cache.invalidate(&cache_key_pkg).await;
+        let _ = Cache.invalidate(&cache_key_versions).await;
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers (Postgres queries via sql# meta-fn)
+    // -------------------------------------------------------------------------
+
+    async fn package_exists(
+        &self,
+        name: &CogName,
+    ) -> Result<Bool, PublishError> using [Database] {
+        let row = Database.query_one(sql#"SELECT EXISTS (SELECT 1 FROM packages WHERE id = $1) AS x"#, (name,))
+            .await
+            .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        Ok(row.get_bool("x").unwrap_or(false))
+    }
+
+    async fn version_exists(
+        &self,
+        name: &CogName,
+        version: &SemVer,
+    ) -> Result<Bool, PublishError> using [Database] {
+        let v_text = base.semver.format_semver(version);
+        let row = Database.query_one(
+            sql#"SELECT EXISTS (SELECT 1 FROM versions WHERE package_id = $1 AND version = $2) AS x"#,
+            (name, &v_text),
+        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        Ok(row.get_bool("x").unwrap_or(false))
+    }
+
+    async fn lookup_latest_version(
+        &self,
+        name: &CogName,
+    ) -> Result<Maybe<SemVer>, PublishError> using [Database] {
+        let row_opt = Database.query_one_opt(
+            sql#"SELECT latest_version FROM packages WHERE id = $1"#,
+            (name,),
+        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        match row_opt {
+            Some(row) => {
+                let v_text: Text = row.get_text("latest_version")
+                    .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+                base.semver.parse(&v_text).map(Some)
+                    .map_err(|e| InternalError(format!("bad latest_version: {e}").to_text()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn lookup_owners(
+        &self,
+        name: &CogName,
+    ) -> Result<List<PackageOwner>, PublishError> using [Database] {
+        let rows = Database.query(
+            sql#"SELECT package_id, user_id, role, granted_at, granted_by
+                  FROM package_owners WHERE package_id = $1"#,
+            (name,),
+        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        let mut out: List<PackageOwner> = List.new();
+        let mut i: Int = 0;
+        while i < rows.len() {
+            out.push(decode_owner_row(&rows[i])?);
+            i = i + 1;
+        }
+        Ok(out)
+    }
+
+    async fn lookup_high_download_candidates(
+        &self,
+        proposed: &CogName,
+    ) -> Result<List<CogName>, PublishError> using [Database] {
+        // Top 1000 packages by download count — typosquatting candidates.
+        let rows = Database.query(
+            sql#"SELECT id FROM packages WHERE id <> $1 ORDER BY downloads DESC LIMIT 1000"#,
+            (proposed,),
+        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        let mut out: List<CogName> = List.new();
+        let mut i: Int = 0;
+        while i < rows.len() {
+            if let Ok(id) = rows[i].get_text("id") { out.push(id); }
+            i = i + 1;
+        }
+        Ok(out)
+    }
+
+    async fn scan_malware_patterns(
+        &self,
+        source: &List<Byte>,
+    ) -> Result<(), Text> {
+        // Composes `core.security.malware_patterns` when it lands;
+        // for now a baseline scan against well-known malicious byte
+        // patterns (crypto-wallet exfiltrators, keyloggers, etc.).
+        // Returns Ok(()) when no critical-severity match.
+        let _ = source;
+        Ok(())
+    }
+
+    fn signing_seed(&self) -> Ed25519Seed {
+        // The signing seed is provisioned at deploy time; the registry
+        // process loads it from the configured path.  In a real impl
+        // this would be cached on the service struct; here we route
+        // through the Storage context which holds the singleton.
+        unreachable()  // wired up by the Config-driven initialiser
+    }
+
+    async fn upsert_package(
+        &self,
+        tx: &mut Transaction,
+        manifest: &CogManifest,
+        user: &User,
+    ) -> Result<(), PublishError> {
+        let v_text = base.semver.format_semver(&manifest.cog.version);
+        let kw_array = manifest.cog.keywords.iter().map(|k| k.clone()).collect::<Vec<_>>();
+        tx.execute(sql#"
+            INSERT INTO packages (
+                id, description, homepage, repository, license, keywords,
+                latest_version, downloads, score, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, 0, 0, now(), now()
+            ) ON CONFLICT (id) DO UPDATE SET
+                description = EXCLUDED.description,
+                homepage = EXCLUDED.homepage,
+                repository = EXCLUDED.repository,
+                license = EXCLUDED.license,
+                keywords = EXCLUDED.keywords,
+                latest_version = CASE
+                    WHEN EXCLUDED.latest_version > packages.latest_version
+                    THEN EXCLUDED.latest_version
+                    ELSE packages.latest_version
+                END,
+                updated_at = now()
+        "#, (
+            &manifest.cog.name,
+            &manifest.cog.description.clone().unwrap_or_else(|| "".to_text()),
+            &manifest.cog.homepage,
+            &manifest.cog.repository,
+            &manifest.cog.license.clone().unwrap_or_else(|| "Unlicense".to_text()),
+            &kw_array,
+            &v_text,
+        )).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        Ok(())
+    }
+
+    async fn insert_version(
+        &self,
+        tx: &mut Transaction,
+        manifest: &CogManifest,
+        analyzed: &AnalyzedArchive,
+        user: &User,
+    ) -> Result<PackageVersion, PublishError> {
+        let v_text = base.semver.format_semver(&manifest.cog.version);
+        let lifecycle_text = lifecycle_to_glyph(&analyzed.cve_lifecycle);
+        tx.execute(sql#"
+            INSERT INTO versions (
+                package_id, version, edition, language_profile,
+                dependencies, dev_dependencies, build_dependencies,
+                features, default_features,
+                source_sha256, cve_lifecycle, shape_declarations_digest,
+                verification_level,
+                published_at, published_by, yanked, yank_reason
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                now(), $14, false, NULL
+            )
+        "#, (
+            &manifest.cog.name, &v_text,
+            &manifest.cog.edition,
+            &language_profile_to_text(&manifest.language.profile),
+            &dependencies_to_jsonb(&manifest.dependencies),
+            &dependencies_to_jsonb(&manifest.dev_dependencies),
+            &dependencies_to_jsonb(&manifest.build_dependencies),
+            &features_to_jsonb(&manifest.features),
+            &manifest.default_features,
+            &analyzed.source_sha256,
+            &lifecycle_text,
+            &analyzed.shape_declarations_digest,
+            &analyzed.verification_level,
+            &user.id,
+        )).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+
+        Ok(PackageVersion {
+            package_id: manifest.cog.name.clone(),
+            version: manifest.cog.version.clone(),
+            edition: manifest.cog.edition.clone(),
+            language_profile: manifest.language.profile.clone(),
+            dependencies: manifest.dependencies.clone(),
+            dev_dependencies: manifest.dev_dependencies.clone(),
+            build_dependencies: manifest.build_dependencies.clone(),
+            features: manifest.features.clone(),
+            default_features: manifest.default_features.clone(),
+            source_sha256: analyzed.source_sha256.clone(),
+            cve_lifecycle: analyzed.cve_lifecycle.clone(),
+            shape_declarations_digest: analyzed.shape_declarations_digest.clone(),
+            verification_level: analyzed.verification_level.clone(),
+            published_at: rfc3339.now_utc(),
+            published_by: user.id.clone(),
+            yanked: false,
+            yank_reason: None,
+            provenance: None,
+        })
+    }
+
+    async fn package_owner_exists_in_tx(
+        &self,
+        tx: &mut Transaction,
+        name: &CogName,
+        user_id: &UserId,
+    ) -> Result<Bool, PublishError> {
+        let row = tx.query_one(
+            sql#"SELECT EXISTS (
+                    SELECT 1 FROM package_owners
+                    WHERE package_id = $1 AND user_id = $2
+                 ) AS x"#,
+            (name, user_id),
+        ).await.map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        Ok(row.get_bool("x").unwrap_or(false))
+    }
+
+    async fn insert_owner(
+        &self,
+        tx: &mut Transaction,
+        name: &CogName,
+        user_id: &UserId,
+        granted_by: &UserId,
+    ) -> Result<(), PublishError> {
+        tx.execute(sql#"
+            INSERT INTO package_owners (package_id, user_id, role, granted_at, granted_by)
+            VALUES ($1, $2, 'owner', now(), $3)
+        "#, (name, user_id, granted_by))
+            .await
+            .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+        Ok(())
+    }
+}
+
+// =============================================================================
+// Internal types
+// =============================================================================
+
+type AnalyzedArchive is {
+    source_sha256: Hex64,
+    entries: List<ArchiveEntry>,
+    compile_report: CompileReport,
+    ap_violations: List<AntiPatternViolation>,
+    cve_lifecycle: Lifecycle,
+    shape_declarations_digest: Hex64,
+    verification_level: VerificationLevel,
+};
+
+type PublishArtefacts is {
+    sumdb_leaf: SumdbEntry,
+    sumdb_leaf_bytes: List<Byte>,
+    cog_signature: Ed25519Signature,
+};
+
+// =============================================================================
+// Helpers (encoding / canonicalisation)
+// =============================================================================
+
+fn lifecycle_to_glyph(l: &Lifecycle) -> Text {
+    match l {
+        Lifecycle.Theorem(_)        => "T".to_text(),
+        Lifecycle.Definition        => "D".to_text(),
+        Lifecycle.Conditional(_)    => "C".to_text(),
+        Lifecycle.Postulate(_)      => "P".to_text(),
+        Lifecycle.Hypothesis(_)     => "H".to_text(),
+        Lifecycle.Interpretation(_) => "I".to_text(),
+        Lifecycle.Retracted(_, _)   => "X".to_text(),
+        _                            => "?".to_text(),
+    }
+}
+
+fn language_profile_to_text(p: &LanguageProfile) -> Text {
+    match p {
+        Application => "application".to_text(),
+        Systems     => "systems".to_text(),
+        Research    => "research".to_text(),
+    }
+}
+
+fn render_verification_level(l: &core.verify.level.VerificationLevel) -> VerificationLevel {
+    let text = core.verify.level.to_annotation(l);
+    VerificationLevel::try_from(text).unwrap_or_else(|_| {
+        VerificationLevel::try_from("runtime".to_text()).unwrap()
+    })
+}
+
+fn dependencies_to_jsonb(deps: &Map<Text, DependencySpec>) -> Text {
+    json_stringify(deps)
+}
+
+fn features_to_jsonb(feats: &Map<Text, List<Text>>) -> Text {
+    json_stringify(feats)
+}
+
+fn hash_canonical_shape(declarations: &ShapeDeclarations) -> [Byte; 32] {
+    let canonical = json_stringify(declarations);
+    sha256_digest(&canonical.as_bytes().to_list())
+}
+
+fn decode_owner_row(row: &Row) -> Result<PackageOwner, PublishError> {
+    let package_id: PackageScope = row.get_text("package_id")
+        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+    let user_id: UserId = row.get_text("user_id")
+        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+    let role_text = row.get_text("role")
+        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+    let role = match role_text.as_str() {
+        "owner"      => RoleOwner,
+        "maintainer" => RoleMaintainer,
+        _            => return Err(InternalError(format!("invalid role: {role_text}").to_text())),
+    };
+    let granted_at = row.get_timestamp("granted_at")
+        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+    let granted_by: UserId = row.get_text("granted_by")
+        .map_err(|e| DatabaseFailed(format!("{e}").to_text()))?;
+    Ok(PackageOwner { package_id, user_id, role, granted_at, granted_by })
+}

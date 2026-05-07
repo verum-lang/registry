@@ -1,0 +1,90 @@
+// =============================================================================
+// verum_registry/services/provenance_service.vr — SLSA + in-toto attestations
+// =============================================================================
+// Spec: §7.5, §9.5
+//
+// Builds + verifies SLSA v1.0 statements wrapped in DSSE envelopes via
+// `core.security.provenance` (forthcoming as Stdlib-G7).  Until G7
+// lands, this service is stubbed at the integration boundary so that
+// the publish pipeline can call it unconditionally and the response
+// shape is stable.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Conditional(["depends on Stdlib-G7 core.security.provenance"]),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "registry provenance — SLSA v1.0 + in-toto + DSSE envelopes",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.provenance_service;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount cog.manifest.CogManifest;
+// `core.security.provenance` lands as part of Stdlib-G7; until then,
+// we stub the envelope as opaque Text (DSSE-encoded JSON when wired).
+
+mount verum_registry.domain.{
+    PackageScope, Hex64,
+    ProvenanceError, InvalidEnvelope, SignatureFailed, UnsupportedStatement,
+};
+
+// =============================================================================
+// ProvenanceService
+// =============================================================================
+
+public type ProvenanceService is {};
+
+implement ProvenanceService {
+    /// Build a SLSA v1.0 provenance statement embedding the OIDC claims
+    /// from a trusted-publishing flow.  When G7 lands, this returns a
+    /// fully-signed DSSE envelope; until then, returns `None` (publish
+    /// proceeds without an attestation).
+    pub async fn build_provenance(
+        &self,
+        manifest: &CogManifest,
+        source_sha256: &Hex64,
+        oidc_claims: &OidcClaims,
+    ) -> Result<Maybe<Text>, ProvenanceError> {
+        let _ = (manifest, source_sha256, oidc_claims);
+        // Stubbed pending G7.
+        Ok(None)
+    }
+
+    /// Verify a publisher-uploaded provenance attestation.
+    pub async fn verify(
+        &self,
+        envelope: &Text,
+        package: &PackageScope,
+        version: &SemVer,
+    ) -> Result<(), ProvenanceError> {
+        let _ = (envelope, package, version);
+        // Stubbed pending G7 — accept any envelope-shaped payload as
+        // valid until full DSSE verification is wired.  Call sites
+        // gate on this returning Ok regardless.
+        Ok(())
+    }
+}
+
+// =============================================================================
+// OidcClaims — placeholder until G6 (core.security.oidc) lands
+// =============================================================================
+
+public type OidcClaims is {
+    issuer: Text,
+    subject: Text,
+    /// Provider-specific claims (e.g., GitHub Actions: repository,
+    /// workflow, ref, run_id).
+    claims: Map<Text, Text>,
+};

@@ -1,0 +1,225 @@
+// =============================================================================
+// verum_registry/services/auth_service.vr — authentication
+// =============================================================================
+// Spec: §7.4
+//
+// Two authentication paths (preferred → fallback):
+//   1. OIDC trusted publishing  — Bearer JWT validated against issuer's
+//      JWKS via `core.security.oidc` (forthcoming G6).  Short-lived
+//      tokens (≤ 15 min); registry returns a 15-minute publish token
+//      (decoupled from per-RPC OIDC overhead).
+//   2. API token              — `Authorization: Token <id>:<secret>`,
+//      stored as Argon2id-hashed secret + per-token scopes + expiry.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "authentication via OIDC trusted publishing or API token",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.auth_service;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount net.weft.WeftRequest;
+mount security.password_hash.{verify as argon2_verify};
+// `core.security.oidc` is forthcoming (G6); when it lands, this import
+// becomes the canonical path:
+//   mount security.oidc.{OidcProviderRegistry, OidcClaims, validate_jwt};
+mount time.rfc3339.now_utc;
+
+mount verum_registry.config.OidcConfig;
+mount verum_registry.domain.{
+    User, ApiToken, OidcIdentity, TokenScope,
+    AuthError, MissingCredentials, InvalidApiToken, RevokedApiToken,
+    ExpiredApiToken, InvalidOidcToken, OidcIssuerNotTrusted,
+};
+
+// =============================================================================
+// AuthenticatedUser — what successful authentication produces
+// =============================================================================
+
+public type AuthenticatedUser is {
+    user: User,
+    /// The path used to authenticate.
+    authentication: AuthenticationPath,
+    /// Effective scopes available for this request.
+    effective_scopes: List<TokenScope>,
+};
+
+public type AuthenticationPath is
+      AuthOidc { issuer: Text, subject: Text }
+    | AuthApiToken { token_id: Text };
+
+// =============================================================================
+// AuthService
+// =============================================================================
+
+public type AuthService is {
+    oidc_config: OidcConfig,
+};
+
+implement AuthService {
+    pub async fn from_config(config: &OidcConfig) -> Result<AuthService, Text> {
+        Ok(AuthService { oidc_config: config.clone() })
+    }
+
+    /// Authenticate a request.  Returns an `AuthenticatedUser` on
+    /// success.  Logs but does NOT surface the specific failure mode
+    /// to the caller (security: avoid credential-stuffing oracles);
+    /// distinct error variants are kept internally for observability.
+    pub async fn authenticate(
+        &self,
+        req: &WeftRequest,
+    ) -> Result<AuthenticatedUser, AuthError>
+        using [Database, Cache, Logger, Metrics]
+    {
+        // Path 1: OIDC trusted publishing (preferred).
+        if let Some(bearer) = bearer_token(req) {
+            match self.authenticate_oidc(&bearer).await {
+                Ok(u)  => return Ok(u),
+                Err(e) => {
+                    Logger.log(Level.Debug, f"oidc auth failed: {e:?}");
+                    Metrics.increment("auth.oidc_failed");
+                    // Fall through to try API-token path.
+                }
+            }
+        }
+
+        // Path 2: API token.
+        if let Some((token_id, secret)) = api_token_header(req) {
+            return self.authenticate_api_token(&token_id, &secret).await;
+        }
+
+        Metrics.increment("auth.missing");
+        Err(MissingCredentials)
+    }
+
+    async fn authenticate_oidc(
+        &self,
+        _bearer_jwt: &Text,
+    ) -> Result<AuthenticatedUser, AuthError>
+        using [Database, Cache]
+    {
+        // When `core.security.oidc` lands, this validates the JWT
+        // against the issuer's JWKS, extracts (issuer, subject), looks
+        // up the linked User, and returns AuthenticatedUser.  Until
+        // then we surface a clear "not yet wired" error so handlers
+        // can fall through to API-token path during the transition.
+        Err(InvalidOidcToken("oidc subsystem pending (G6)".to_text()))
+    }
+
+    async fn authenticate_api_token(
+        &self,
+        token_id: &Text,
+        secret: &Text,
+    ) -> Result<AuthenticatedUser, AuthError>
+        using [Database, Metrics]
+    {
+        let row_opt = Database.query_one_opt(
+            sql#"SELECT t.id, t.user_id, t.secret_hash, t.scopes,
+                        t.expires_at, t.revoked_at,
+                        u.id AS uid, u.username, u.email, u.password_hash, u.created_at
+                 FROM api_tokens t
+                 INNER JOIN users u ON u.id = t.user_id
+                 WHERE t.id = $1"#,
+            (token_id,),
+        ).await.map_err(|_| InvalidApiToken)?;
+
+        let row = match row_opt {
+            Some(r) => r,
+            None    => {
+                Metrics.increment("auth.api_token_missing");
+                return Err(InvalidApiToken);
+            }
+        };
+
+        // Argon2id verify.
+        let secret_hash = row.get_text("secret_hash").map_err(|_| InvalidApiToken)?;
+        if !argon2_verify(secret, &secret_hash).unwrap_or(false) {
+            Metrics.increment("auth.api_token_bad_secret");
+            return Err(InvalidApiToken);
+        }
+
+        // Revocation check.
+        if let Ok(Some(_)) = row.get_timestamp_opt("revoked_at") {
+            Metrics.increment("auth.api_token_revoked");
+            return Err(RevokedApiToken);
+        }
+
+        // Expiry check.
+        let expires_at = row.get_timestamp("expires_at").map_err(|_| InvalidApiToken)?;
+        if expires_at < now_utc() {
+            Metrics.increment("auth.api_token_expired");
+            return Err(ExpiredApiToken);
+        }
+
+        // Update last_used_at (best-effort; failures here don't block auth).
+        let _ = Database.execute(
+            sql#"UPDATE api_tokens SET last_used_at = now() WHERE id = $1"#,
+            (token_id,),
+        ).await;
+
+        // Decode user + scopes.
+        let user = decode_user_row(&row)?;
+        let scopes = decode_scopes_jsonb(&row.get_text("scopes").unwrap_or_else(|_| "[]".to_text()));
+
+        Ok(AuthenticatedUser {
+            user: user,
+            authentication: AuthApiToken { token_id: token_id.clone() },
+            effective_scopes: scopes,
+        })
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+fn bearer_token(req: &WeftRequest) -> Maybe<Text> {
+    let auth = req.header("Authorization")?;
+    if !auth.starts_with("Bearer ") { return None; }
+    Some(auth[7..].to_text())
+}
+
+fn api_token_header(req: &WeftRequest) -> Maybe<(Text, Text)> {
+    let auth = req.header("Authorization")?;
+    if !auth.starts_with("Token ") { return None; }
+    let rest = &auth[6..];
+    let colon_idx = rest.find(':')?;
+    Some((
+        rest[..colon_idx].to_text(),
+        rest[colon_idx + 1..].to_text(),
+    ))
+}
+
+fn decode_user_row(row: &Row) -> Result<User, AuthError> {
+    Ok(User {
+        id: row.get_text("uid").map_err(|_| InvalidApiToken)?,
+        username: row.get_text("username").map_err(|_| InvalidApiToken)?,
+        email: row.get_text("email").map_err(|_| InvalidApiToken)?,
+        password_hash: row.get_text_opt("password_hash").ok().flatten(),
+        oidc_identities: List.new(),
+        created_at: row.get_timestamp("created_at").map_err(|_| InvalidApiToken)?,
+    })
+}
+
+fn decode_scopes_jsonb(s: &Text) -> List<TokenScope> {
+    // Simple JSON-array decode.  When `core.security.oidc` lands, scopes
+    // can be derived from OIDC claims; for API tokens this is the
+    // canonical persisted form.
+    let _ = s;
+    List.new()  // placeholder until persistence layer fully wired
+}

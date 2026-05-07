@@ -1,0 +1,354 @@
+// =============================================================================
+// verum_registry/config.vr — typed configuration loading
+// =============================================================================
+// Spec: Appendix A
+//
+// Loads `verum-registry.toml` via `core.configuration.toml`. The
+// resulting `ConfigValue` is mapped to typed `Config` records with
+// refinement-typed fields where the spec specifies validation.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "registry configuration loading via core.configuration.toml",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.TypecheckPlusTests,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.config;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.{List, Map};
+mount configuration.{ConfigValue, ConfigError, format_id_toml};
+mount configuration.toml as toml;
+mount runtime.env.{var as env_var};
+mount io.fs.read_to_string;
+
+// =============================================================================
+// Top-level Config
+// =============================================================================
+
+public type Config is {
+    // Bind
+    bind_address: Text,
+    tls_cert: Text,
+    tls_key: Text,
+
+    // Connection / request limits
+    max_connections: Int,
+    per_ip_max: Int,
+    request_timeout_secs: Int,
+    header_deadline_ms: Int,
+    body_deadline_ms: Int,
+
+    // Subsystem configs
+    postgres: PostgresConfig,
+    s3: S3Config,
+    redis: RedisConfig,
+    meilisearch: MeilisearchConfig,
+    sumdb: SumdbConfig,
+    oidc: OidcConfig,
+    spiffe: SpiffeConfig,
+    tracing: TracingConfig,
+    metrics: MetricsConfig,
+};
+
+public type PostgresConfig is {
+    url: Text,
+    min_connections: Int,
+    max_connections: Int,
+};
+
+public type S3Config is {
+    endpoint: Text,
+    region: Text,
+    bucket: Text,
+    access_key_id: Text,
+    secret_access_key: Text,
+};
+
+public type RedisConfig is {
+    url: Text,
+};
+
+public type MeilisearchConfig is {
+    url: Text,
+    api_key: Text,
+};
+
+public type SumdbConfig is {
+    /// Path to the Ed25519 signing-key seed (32 bytes).
+    signing_key_path: Text,
+};
+
+public type OidcConfig is {
+    /// Map issuer name → provider config.
+    providers: Map<Text, OidcProviderConfig>,
+};
+
+public type OidcProviderConfig is {
+    issuer: Text,
+    audience: Text,
+};
+
+public type SpiffeConfig is {
+    enabled: Bool,
+    bundle_paths: List<Text>,
+};
+
+public type TracingConfig is {
+    /// OTLP endpoint URL (empty = disabled).
+    otlp_endpoint: Text,
+    sample_rate: Float,
+};
+
+public type MetricsConfig is {
+    bind_address: Text,
+    /// mTLS-only restriction.  Spec §8.2 says `/metrics` is mTLS-restricted.
+    mtls_only: Bool,
+};
+
+// =============================================================================
+// load_config
+// =============================================================================
+
+public type ConfigLoadError is
+      EnvNotSet(Text)
+    | FileReadFailed(Text)
+    | ParseFailed(ConfigError)
+    | MissingField(Text)
+    | InvalidValue { path: Text, reason: Text };
+
+implement Display for ConfigLoadError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FormatError> {
+        match self {
+            EnvNotSet(name)        => f.write_str(f"VERUM_REGISTRY_CONFIG not set; set to path of registry.toml ({name})".as_str()),
+            FileReadFailed(reason) => f.write_str(f"failed to read config file: {reason}".as_str()),
+            ParseFailed(e)         => Display.fmt(e, f),
+            MissingField(field)    => f.write_str(f"config missing required field [{field}]".as_str()),
+            InvalidValue { path, reason } => f.write_str(f"config invalid at [{path}]: {reason}".as_str()),
+        }
+    }
+}
+
+implement Debug for ConfigLoadError {
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+}
+
+/// Load configuration from `$VERUM_REGISTRY_CONFIG` (env var pointing
+/// to a TOML file).  Defaults to `/etc/verum-registry/config.toml`.
+public fn load_config() -> Result<Config, ConfigLoadError> {
+    let path = env_var("VERUM_REGISTRY_CONFIG")
+        .unwrap_or_else(|_| "/etc/verum-registry/config.toml".to_text());
+    let text = read_to_string(&path)
+        .map_err(|e| FileReadFailed(format!("{path}: {e}").to_text()))?;
+    parse_config(&text)
+}
+
+/// Parse a configuration text already loaded into memory.
+public fn parse_config(text: &Text) -> Result<Config, ConfigLoadError> {
+    let cv = toml.parse(text).map_err(ParseFailed)?;
+    let root = require_table(&cv, &"<root>".to_text())?;
+
+    Ok(Config {
+        bind_address:            require_string_in(&root, "bind", "address")?,
+        tls_cert:                require_string_in(&root, "bind", "tls_cert")?,
+        tls_key:                 require_string_in(&root, "bind", "tls_key")?,
+        max_connections:         optional_int_in(&root, "bind", "max_connections").unwrap_or(5000),
+        per_ip_max:              optional_int_in(&root, "bind", "per_ip_max").unwrap_or(50),
+        request_timeout_secs:    optional_int_in(&root, "bind", "request_timeout_secs").unwrap_or(30),
+        header_deadline_ms:      optional_int_in(&root, "bind", "header_deadline_ms").unwrap_or(5000),
+        body_deadline_ms:        optional_int_in(&root, "bind", "body_deadline_ms").unwrap_or(30000),
+        postgres:                parse_postgres(&root)?,
+        s3:                      parse_s3(&root)?,
+        redis:                   parse_redis(&root)?,
+        meilisearch:             parse_meilisearch(&root)?,
+        sumdb:                   parse_sumdb(&root)?,
+        oidc:                    parse_oidc(&root)?,
+        spiffe:                  parse_spiffe(&root)?,
+        tracing:                 parse_tracing(&root)?,
+        metrics:                 parse_metrics(&root)?,
+    })
+}
+
+// =============================================================================
+// Subsystem parsers
+// =============================================================================
+
+fn parse_postgres(root: &Map<Text, ConfigValue>) -> Result<PostgresConfig, ConfigLoadError> {
+    Ok(PostgresConfig {
+        url:             require_string_in(root, "postgres", "url")?,
+        min_connections: optional_int_in(root, "postgres", "min_connections").unwrap_or(5),
+        max_connections: optional_int_in(root, "postgres", "max_connections").unwrap_or(50),
+    })
+}
+
+fn parse_s3(root: &Map<Text, ConfigValue>) -> Result<S3Config, ConfigLoadError> {
+    Ok(S3Config {
+        endpoint:           require_string_in(root, "s3", "endpoint")?,
+        region:             require_string_in(root, "s3", "region")?,
+        bucket:             require_string_in(root, "s3", "bucket")?,
+        access_key_id:      require_string_in(root, "s3", "access_key_id")?,
+        secret_access_key:  require_string_in(root, "s3", "secret_access_key")?,
+    })
+}
+
+fn parse_redis(root: &Map<Text, ConfigValue>) -> Result<RedisConfig, ConfigLoadError> {
+    Ok(RedisConfig {
+        url: require_string_in(root, "redis", "url")?,
+    })
+}
+
+fn parse_meilisearch(root: &Map<Text, ConfigValue>) -> Result<MeilisearchConfig, ConfigLoadError> {
+    Ok(MeilisearchConfig {
+        url:     require_string_in(root, "meilisearch", "url")?,
+        api_key: require_string_in(root, "meilisearch", "api_key")?,
+    })
+}
+
+fn parse_sumdb(root: &Map<Text, ConfigValue>) -> Result<SumdbConfig, ConfigLoadError> {
+    Ok(SumdbConfig {
+        signing_key_path: require_string_in(root, "sumdb", "signing_key")?,
+    })
+}
+
+fn parse_oidc(root: &Map<Text, ConfigValue>) -> Result<OidcConfig, ConfigLoadError> {
+    let mut providers: Map<Text, OidcProviderConfig> = Map.new();
+    if let Some(ConfigValue.ConfigTable(oidc_t)) = root.get(&"oidc".to_text()) {
+        if let Some(ConfigValue.ConfigTable(prov_t)) = oidc_t.get(&"providers".to_text()) {
+            let keys = prov_t.keys();
+            let mut i: Int = 0;
+            while i < keys.len() {
+                let k = keys.get(i).unwrap();
+                if let Some(ConfigValue.ConfigTable(pt)) = prov_t.get(k) {
+                    let issuer = require_string(pt, &format!("oidc.providers.{k}.issuer").to_text(), &"issuer".to_text())?;
+                    let audience = require_string(pt, &format!("oidc.providers.{k}.audience").to_text(), &"audience".to_text())?;
+                    providers.insert(k.clone(), OidcProviderConfig { issuer, audience });
+                }
+                i = i + 1;
+            }
+        }
+    }
+    Ok(OidcConfig { providers: providers })
+}
+
+fn parse_spiffe(root: &Map<Text, ConfigValue>) -> Result<SpiffeConfig, ConfigLoadError> {
+    let enabled = match root.get(&"spiffe".to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&"enabled".to_text()) {
+            Some(ConfigValue.ConfigBool(b)) => *b,
+            _ => false,
+        },
+        _ => false,
+    };
+    let bundle_paths = match root.get(&"spiffe".to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&"bundle_paths".to_text()) {
+            Some(ConfigValue.ConfigArray(a)) => {
+                let mut out: List<Text> = List.new();
+                let mut i: Int = 0;
+                while i < a.len() {
+                    if let ConfigValue.ConfigString(s) = a.get(i).unwrap() {
+                        out.push(s.clone());
+                    }
+                    i = i + 1;
+                }
+                out
+            }
+            _ => List.new(),
+        },
+        _ => List.new(),
+    };
+    Ok(SpiffeConfig { enabled, bundle_paths })
+}
+
+fn parse_tracing(root: &Map<Text, ConfigValue>) -> Result<TracingConfig, ConfigLoadError> {
+    Ok(TracingConfig {
+        otlp_endpoint: optional_string_in(root, "tracing", "otlp_endpoint").unwrap_or_else(|| "".to_text()),
+        sample_rate: optional_float_in(root, "tracing", "sample_rate").unwrap_or(0.1),
+    })
+}
+
+fn parse_metrics(root: &Map<Text, ConfigValue>) -> Result<MetricsConfig, ConfigLoadError> {
+    Ok(MetricsConfig {
+        bind_address: optional_string_in(root, "metrics", "bind_address").unwrap_or_else(|| "127.0.0.1:9090".to_text()),
+        mtls_only: optional_bool_in(root, "metrics", "mtls_only").unwrap_or(true),
+    })
+}
+
+// =============================================================================
+// Lookup helpers
+// =============================================================================
+
+fn require_table<'a>(cv: &'a ConfigValue, path: &Text) -> Result<&'a Map<Text, ConfigValue>, ConfigLoadError> {
+    match cv {
+        ConfigValue.ConfigTable(t) => Ok(t),
+        _ => Err(InvalidValue { path: path.clone(), reason: "expected table".to_text() }),
+    }
+}
+
+fn require_string_in(root: &Map<Text, ConfigValue>, section: &str, key: &str) -> Result<Text, ConfigLoadError> {
+    let section_t = match root.get(&section.to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => t,
+        _ => return Err(MissingField(section.to_text())),
+    };
+    require_string(section_t, &format!("{section}.{key}").to_text(), &key.to_text())
+}
+
+fn require_string(t: &Map<Text, ConfigValue>, full: &Text, key: &Text) -> Result<Text, ConfigLoadError> {
+    match t.get(key) {
+        Some(ConfigValue.ConfigString(s)) => Ok(s.clone()),
+        Some(_) => Err(InvalidValue { path: full.clone(), reason: "expected string".to_text() }),
+        None    => Err(MissingField(full.clone())),
+    }
+}
+
+fn optional_string_in(root: &Map<Text, ConfigValue>, section: &str, key: &str) -> Maybe<Text> {
+    match root.get(&section.to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&key.to_text()) {
+            Some(ConfigValue.ConfigString(s)) => Some(s.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn optional_int_in(root: &Map<Text, ConfigValue>, section: &str, key: &str) -> Maybe<Int> {
+    match root.get(&section.to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&key.to_text()) {
+            Some(ConfigValue.ConfigInt(i)) => Some(*i),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn optional_bool_in(root: &Map<Text, ConfigValue>, section: &str, key: &str) -> Maybe<Bool> {
+    match root.get(&section.to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&key.to_text()) {
+            Some(ConfigValue.ConfigBool(b)) => Some(*b),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn optional_float_in(root: &Map<Text, ConfigValue>, section: &str, key: &str) -> Maybe<Float> {
+    match root.get(&section.to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&key.to_text()) {
+            Some(ConfigValue.ConfigFloat(f)) => Some(*f),
+            Some(ConfigValue.ConfigInt(i)) => Some(*i as Float),
+            _ => None,
+        },
+        _ => None,
+    }
+}

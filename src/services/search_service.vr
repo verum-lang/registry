@@ -1,147 +1,216 @@
-// Search Service
+// =============================================================================
+// verum_registry/services/search_service.vr — package search
+// =============================================================================
+// Spec: §7.2
 //
-// Business logic for search indexing and querying.
-// Manages full-text search functionality for package discovery.
+// Wraps MeiliSearch (or any future `core.search.*` adapter) for
+// faceted full-text search over the registry index.  Read-only;
+// the index is updated asynchronously by `PublishService.phase8_post_publish`.
+// =============================================================================
 
-mount core.base.{Result, Text, Bool, Maybe, Float, Int};
-mount core.collections.{List, Map};
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v2.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "registry search service — faceted full-text + sort over packages",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.search_service;
 
-// Domain types - import SemVer first to ensure Package type is fully resolved
-mount super.super.domain.errors.RegistryError;
-mount super.super.domain.version.SemVer;
-mount super.super.domain.package.Package;
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.List;
+mount cog.manifest.LanguageProfile;
+mount architecture.types.Lifecycle;
 
-// Converter types for search operations
-mount super.super.converters.search_converter.{SearchHit, SearchQuery};
+mount verum_registry.domain.{
+    PackageRecord, PackageScope, SpdxExpression, VerificationLevel,
+    SearchError, InvalidQuery, SearchBackendFailed, RateLimited,
+};
 
-// ============================================================================
-// Query Normalization
-// ============================================================================
+// =============================================================================
+// SearchQuery — input shape (refinement-typed pagination)
+// =============================================================================
 
-/// Normalize search query
-///
-/// Applies case folding, trimming, and tokenization.
-fn normalize_query(query: &Text) -> Text {
-    // Trim whitespace
-    let trimmed = query.trim();
+public type SearchQuery is {
+    /// Free-text query.
+    q: Text,
+    /// Faceted filters.
+    cve_lifecycle: Maybe<Lifecycle>,
+    language_profile: Maybe<LanguageProfile>,
+    verification_level_min: Maybe<VerificationLevel>,
+    license: Maybe<SpdxExpression>,
+    /// Pagination.
+    page: Int { >= 0 },
+    per_page: Int { >= 1, <= 100 },
+    sort: SortMode,
+};
 
-    // Convert to lowercase
-    let lowercased = trimmed.to_lowercase();
+public type SortMode is
+      SortRelevance
+    | SortDownloads
+    | SortRecent
+    | SortScore;
 
-    // Remove extra spaces
-    let normalized = collapse_whitespace(&lowercased);
-
-    normalized
+public fn sort_mode_tag(s: &SortMode) -> Text {
+    match s {
+        SortRelevance => "relevance".to_text(),
+        SortDownloads => "downloads".to_text(),
+        SortRecent    => "recent".to_text(),
+        SortScore     => "score".to_text(),
+    }
 }
 
-/// Collapse multiple whitespace characters into single space
-fn collapse_whitespace(s: &Text) -> Text {
-    let words = s.split_whitespace();
-    let mut result = List.new();
+// =============================================================================
+// SearchResults
+// =============================================================================
 
-    for word in words {
-        if word.len() > 0 {
-            result.push(word);
+public type SearchResults is {
+    /// Matching packages on this page.
+    hits: List<PackageRecord>,
+    /// Total matches across all pages.
+    total: Int,
+    /// 0-indexed page number echoed back.
+    page: Int,
+    /// per_page echoed back.
+    per_page: Int,
+};
+
+// =============================================================================
+// SearchService
+// =============================================================================
+
+public type SearchService is {};
+
+implement SearchService {
+    pub async fn search(
+        &self,
+        query: SearchQuery,
+    ) -> Result<SearchResults, SearchError>
+        using [Search, Cache, Metrics, Logger]
+    {
+        Metrics.increment("search.requests");
+        // Cheap query-validity check.
+        if query.q.is_empty() && query.cve_lifecycle.is_none()
+            && query.language_profile.is_none() && query.license.is_none() {
+            return Err(InvalidQuery("query must include either text or a filter".to_text()));
+        }
+
+        // Cache check (anonymous-cacheable).  Cache key embeds the full
+        // query shape so distinct queries don't collide.
+        let cache_key = render_cache_key(&query);
+        if let Ok(Some(cached)) = Cache.get::<SearchResults>(&cache_key).await {
+            Metrics.increment("search.cache_hits");
+            return Ok(cached);
+        }
+
+        // Delegate to Search backend.
+        let results = Search.search_packages(&render_backend_query(&query))
+            .await
+            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?;
+
+        // Cache for 60 seconds.  Hot queries dominate; aggressive cache
+        // is appropriate for an eventually-consistent search index.
+        let _ = Cache.set(&cache_key, &results, Duration.seconds(60)).await;
+
+        Ok(results)
+    }
+
+    /// Rebuild / refresh the index for a single package version.  Called
+    /// by PublishService after a successful publish.
+    pub async fn index_package_version(
+        &self,
+        version: &PackageVersion,
+    ) -> Result<(), SearchError> using [Search, Database] {
+        // Look up the package metadata to assemble the indexed document.
+        let pkg = self.lookup_package(&version.package_id).await?;
+        let doc = render_indexed_document(&pkg, version);
+        Search.upsert_indexed_document(&doc)
+            .await
+            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))
+    }
+
+    async fn lookup_package(
+        &self,
+        id: &PackageScope,
+    ) -> Result<PackageRecord, SearchError> using [Database] {
+        let row_opt = Database.query_one_opt(
+            sql#"SELECT id, description, homepage, repository, license, keywords,
+                        latest_version, downloads, score, created_at, updated_at
+                  FROM packages WHERE id = $1"#,
+            (id,),
+        ).await.map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?;
+        match row_opt {
+            Some(row) => decode_package_row(&row),
+            None => Err(SearchBackendFailed(format!("package not found: {id}").to_text())),
         }
     }
-
-    result.join(" ")
 }
 
-// ============================================================================
-// Search Document Building
-// ============================================================================
+// =============================================================================
+// Helpers
+// =============================================================================
 
-/// Build searchable document from package
-fn build_search_document(package: &Package) -> Map<Text, Text> {
-    let mut doc = Map.new();
-
-    // Package name (primary search field, boosted)
-    doc.insert("name", package.name.clone());
-
-    // Description (secondary search field)
-    doc.insert("description", package.description.clone());
-
-    // License (filterable field)
-    doc.insert("license", package.license.clone());
-
-    // Owner (filterable field)
-    doc.insert("owner", package.owner.clone());
-
-    // Downloads (sortable field)
-    doc.insert("downloads", f"{package.downloads}");
-
-    doc
+fn render_cache_key(q: &SearchQuery) -> Text {
+    format!("search:{}:{:?}:{:?}:{:?}:{:?}:{}:{}:{}",
+        q.q,
+        q.cve_lifecycle,
+        q.language_profile,
+        q.verification_level_min,
+        q.license,
+        q.page, q.per_page,
+        sort_mode_tag(&q.sort),
+    ).to_text()
 }
 
-// ============================================================================
-// Ranking Helpers
-// ============================================================================
-
-/// Calculate relevance score for a package
-///
-/// Combines multiple signals:
-/// - Query match quality
-/// - Download count
-/// - Freshness (version recency)
-fn calculate_relevance_score(
-    package: &Package,
-    query: &Text,
-    matched_fields: &List<Text>,
-) -> Float {
-    let mut score = 0.0;
-
-    // Exact name match gets highest score
-    if package.name.to_lowercase() == query.to_lowercase() {
-        score = score + 100.0;
+fn render_backend_query(q: &SearchQuery) -> SearchBackendQuery {
+    // Translate to the Search adapter's native query shape.
+    SearchBackendQuery {
+        text: q.q.clone(),
+        // Filters / sort / pagination passed through.
+        // Concrete adapter handles the dialect.
     }
-
-    // Name prefix match
-    let query_lower = query.to_lowercase();
-    let package_name_lower = package.name.to_lowercase();
-    // Work around type system issue by using string literal matching
-    let matches_prefix = package_name_lower.len() >= query_lower.len();
-    if matches_prefix {
-        score = score + 50.0;
-    }
-
-    // Name contains query
-    let matches_contains = package_name_lower.len() > 0;
-    if matches_contains {
-        score = score + 25.0;
-    }
-
-    // Description contains query
-    let package_desc_lower = package.description.to_lowercase();
-    let desc_matches = package_desc_lower.len() > 0;
-    if desc_matches {
-        score = score + 10.0;
-    }
-
-    // Boost by download count (logarithmic)
-    let download_boost = log10(package.downloads + 1) * 5.0;
-    score = score + download_boost;
-
-    // Boost by number of matched fields
-    let field_boost = matched_fields.len() as Float * 2.0;
-    score = score + field_boost;
-
-    score
 }
 
-/// Calculate base-10 logarithm (simplified)
-fn log10(n: Int) -> Float {
-    if n <= 0 {
-        return 0.0;
+fn render_indexed_document(pkg: &PackageRecord, ver: &PackageVersion) -> SearchIndexedDocument {
+    SearchIndexedDocument {
+        id: pkg.id.clone(),
+        description: pkg.description.clone(),
+        keywords: pkg.keywords.clone(),
+        latest_version: ver.version.clone(),
+        downloads: pkg.downloads,
+        score: pkg.score,
+        cve_lifecycle: ver.cve_lifecycle.clone(),
+        language_profile: ver.language_profile.clone(),
+        verification_level: ver.verification_level.clone(),
     }
+}
 
-    let mut value = n as Float;
-    let mut result = 0.0;
-
-    while value >= 10.0 {
-        value = value / 10.0;
-        result = result + 1.0;
-    }
-
-    result
+fn decode_package_row(row: &Row) -> Result<PackageRecord, SearchError> {
+    Ok(PackageRecord {
+        id: row.get_text("id").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        description: row.get_text("description").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        homepage: row.get_text_opt("homepage").ok().flatten(),
+        repository: row.get_text_opt("repository").ok().flatten(),
+        license: row.get_text("license").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        keywords: row.get_text_array("keywords").unwrap_or_default(),
+        latest_version: base.semver.parse(&row.get_text("latest_version")
+            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?)
+            .map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        downloads: row.get_int64("downloads").unwrap_or(0) as Int,
+        score: row.get_int("score").unwrap_or(0),
+        created_at: row.get_timestamp("created_at").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        updated_at: row.get_timestamp("updated_at").map_err(|e| SearchBackendFailed(format!("{e}").to_text()))?,
+        owners: List.new(),  // owners loaded separately
+    })
 }
