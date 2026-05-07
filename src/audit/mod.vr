@@ -1,0 +1,74 @@
+// =============================================================================
+// verum_registry/audit/mod.vr — load-bearing audit subsystem (spec §12)
+// =============================================================================
+//
+// The audit subsystem implements the registry's `Lifecycle.Theorem`
+// audit-protocol obligations. Every primitive in
+// `architecture-types/audit-protocol.md` and `dual-audience.md` is
+// exercised:
+//
+//   - L0..L6 layered verdicts per cog.
+//   - Dual-audience surface (terse summary + exhaustive JSON).
+//   - 40-AP catalog enumeration via verum_kernel::arch_anti_pattern.
+//   - Lifecycle distribution observatory (corpus health).
+//   - SelfReferenceWitness audit dogfood (registry audits itself).
+//
+// **Categorical structure.** The audit subsystem is the right
+// adjoint of the publish operation: every successful publish
+// produces a `CogAuditRecord` that compactly witnesses the
+// audit-protocol verdict. The dual-audience surface factors as
+// (compiled Shape) → (developer summary) and (compiled Shape) →
+// (auditor JSON), with both arrows commuting through the canonical
+// `CogAuditRecord` mediator — guaranteeing zero drift between the
+// two views.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    at_tier:       Tier.Aot,
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "audit-protocol implementation: L0..L6 verdicts + 40-AP roster + dual-audience bundle".to_text(),
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate:      Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring:      Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:        Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.audit;
+
+public mount verum_registry.audit.lifecycle.{
+    LifecycleDistribution, lifecycle_distribution_for_corpus,
+    PosetViolation, detect_poset_violations,
+};
+public mount verum_registry.audit.anti_patterns.{
+    AntiPatternRoster, anti_pattern_roster_for_cog,
+    CorpusAntiPatternSummary, summarise_corpus_anti_patterns,
+    AntiPatternFinding, AntiPatternVerdict, AntiPatternId, all_ap_ids,
+};
+public mount verum_registry.audit.cve_bundle.{
+    CveBundle, generate_cve_bundle,
+    LayerVerdict, AxisVerdict,
+    DeveloperSummary, render_developer_summary,
+    AuditorJson, render_auditor_json,
+};
+public mount verum_registry.audit.self_reference.{
+    SelfAuditResult, run_self_audit,
+};
+
+// =============================================================================
+// AuditService — service-layer entry point used by the HTTP handlers
+// =============================================================================
+
+@derive(Clone, Debug)
+public type AuditService is {};
+
+implement AuditService {
+    public fn new() -> AuditService { AuditService {} }
+}

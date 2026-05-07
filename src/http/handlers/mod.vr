@@ -29,3 +29,8 @@ public mount verum_registry.http.handlers.auth;
 public mount verum_registry.http.handlers.owners;
 public mount verum_registry.http.handlers.advisories;
 public mount verum_registry.http.handlers.health;
+
+// NEW v3.0 handlers
+public mount verum_registry.http.handlers.webauthn;
+public mount verum_registry.http.handlers.tuf;
+public mount verum_registry.http.handlers.sigstore;

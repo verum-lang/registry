@@ -1,0 +1,491 @@
+// =============================================================================
+// verum_registry/audit/anti_patterns.vr — 40-AP catalog enumeration
+// =============================================================================
+//
+// Spec: §12.2; architecture-types/anti-patterns/overview.md
+//
+// Every published cog is checked against the AP-001..AP-040 catalog
+// via `verum_kernel::arch_anti_pattern::check_all_anti_patterns`.
+// Findings are persisted as part of the CogAuditRecord and exposed
+// at `GET /api/audit/anti-patterns/:scope/:name/:version`.
+//
+// The catalog is **append-only**: AP-001 always means
+// CapabilityEscalation; codes are never renumbered. The full id list
+// lives in `core.architecture.anti_patterns::all_anti_pattern_ids`
+// and is mirrored here for type-safe persistence.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "40-AP catalog enumeration + corpus-wide observatory".to_text(),
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.audit.anti_patterns;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount collections.{List, Map};
+mount architecture.types.{AntiPatternId as ArchAntiPatternId, Severity};
+
+// =============================================================================
+// Catalog
+// =============================================================================
+
+/// Full enumeration of AP-001..AP-040 names. Stable identifiers;
+/// new entries are *appended*, never renumbered.
+@derive(Eq, Clone, Debug)
+public type AntiPatternId is
+    // Classical / Composition (AP-001..AP-010)
+    | AP_001_CapabilityEscalation
+    | AP_002_CapabilityLeak
+    | AP_003_DependencyCycle
+    | AP_004_TierMixing
+    | AP_005_FoundationDrift
+    | AP_006_RegisterMixing
+    | AP_007_StratumAdmissibility
+    | AP_008_TxStraddling
+    | AP_009_LifecycleRegression
+    | AP_010_CveIncomplete
+    // Boundary / Ontology (AP-011..AP-026)
+    | AP_011_AbsoluteBoundaryAttempt
+    | AP_012_LinearCapabilityFlavour
+    | AP_013_AffineCapabilityFlavour
+    | AP_014_RelevantCapabilityFlavour
+    | AP_015_BoundaryInvariantViolation
+    | AP_016_WireEncodingMismatch
+    | AP_017_AuthenticationGap
+    | AP_018_DeterminismViolation
+    | AP_019_FoundationDowngradeTransitive
+    | AP_020_TimeBoundContractViolation
+    | AP_021_TransitiveLifecycleRegression
+    | AP_022_ProtocolMismatch
+    | AP_023_CapabilityTransferLeak
+    | AP_024_LifecycleRegressionTransitive
+    | AP_025_DeclarationDrift
+    | AP_026_FoundationContentMisalignment
+    // Modal-Temporal (AP-027..AP-032)
+    | AP_027_TemporalInconsistency
+    | AP_028_CounterfactualBrittleness
+    | AP_029_MissedAdjoint
+    | AP_030_UniversalPropertyViolation
+    | AP_031_PhantomEvolution
+    | AP_032_YonedaInequivalentRefactor
+    // CVE Articulation Hygiene (AP-033..AP-040)
+    | AP_033_RetractedCitationUse
+    | AP_034_HypothesisWithoutMaturationPlan
+    | AP_035_InterpretationInMatureCorpus
+    | AP_036_ObserverImpersonation
+    | AP_037_BoundlessAudit
+    | AP_038_ImplicitSubstrate
+    | AP_039_AnchoringOverextension
+    | AP_040_SelfReferenceWithoutOperator;
+
+/// Stable string identifier per the spec (AP-NNN format).
+public fn ap_id_text(id: &AntiPatternId) -> Text {
+    match id {
+        AntiPatternId.AP_001_CapabilityEscalation         => "AP-001".to_text(),
+        AntiPatternId.AP_002_CapabilityLeak               => "AP-002".to_text(),
+        AntiPatternId.AP_003_DependencyCycle              => "AP-003".to_text(),
+        AntiPatternId.AP_004_TierMixing                   => "AP-004".to_text(),
+        AntiPatternId.AP_005_FoundationDrift              => "AP-005".to_text(),
+        AntiPatternId.AP_006_RegisterMixing               => "AP-006".to_text(),
+        AntiPatternId.AP_007_StratumAdmissibility         => "AP-007".to_text(),
+        AntiPatternId.AP_008_TxStraddling                 => "AP-008".to_text(),
+        AntiPatternId.AP_009_LifecycleRegression          => "AP-009".to_text(),
+        AntiPatternId.AP_010_CveIncomplete                => "AP-010".to_text(),
+        AntiPatternId.AP_011_AbsoluteBoundaryAttempt      => "AP-011".to_text(),
+        AntiPatternId.AP_012_LinearCapabilityFlavour      => "AP-012".to_text(),
+        AntiPatternId.AP_013_AffineCapabilityFlavour      => "AP-013".to_text(),
+        AntiPatternId.AP_014_RelevantCapabilityFlavour    => "AP-014".to_text(),
+        AntiPatternId.AP_015_BoundaryInvariantViolation   => "AP-015".to_text(),
+        AntiPatternId.AP_016_WireEncodingMismatch         => "AP-016".to_text(),
+        AntiPatternId.AP_017_AuthenticationGap            => "AP-017".to_text(),
+        AntiPatternId.AP_018_DeterminismViolation         => "AP-018".to_text(),
+        AntiPatternId.AP_019_FoundationDowngradeTransitive => "AP-019".to_text(),
+        AntiPatternId.AP_020_TimeBoundContractViolation   => "AP-020".to_text(),
+        AntiPatternId.AP_021_TransitiveLifecycleRegression => "AP-021".to_text(),
+        AntiPatternId.AP_022_ProtocolMismatch             => "AP-022".to_text(),
+        AntiPatternId.AP_023_CapabilityTransferLeak       => "AP-023".to_text(),
+        AntiPatternId.AP_024_LifecycleRegressionTransitive => "AP-024".to_text(),
+        AntiPatternId.AP_025_DeclarationDrift             => "AP-025".to_text(),
+        AntiPatternId.AP_026_FoundationContentMisalignment => "AP-026".to_text(),
+        AntiPatternId.AP_027_TemporalInconsistency        => "AP-027".to_text(),
+        AntiPatternId.AP_028_CounterfactualBrittleness    => "AP-028".to_text(),
+        AntiPatternId.AP_029_MissedAdjoint                => "AP-029".to_text(),
+        AntiPatternId.AP_030_UniversalPropertyViolation   => "AP-030".to_text(),
+        AntiPatternId.AP_031_PhantomEvolution             => "AP-031".to_text(),
+        AntiPatternId.AP_032_YonedaInequivalentRefactor   => "AP-032".to_text(),
+        AntiPatternId.AP_033_RetractedCitationUse         => "AP-033".to_text(),
+        AntiPatternId.AP_034_HypothesisWithoutMaturationPlan => "AP-034".to_text(),
+        AntiPatternId.AP_035_InterpretationInMatureCorpus => "AP-035".to_text(),
+        AntiPatternId.AP_036_ObserverImpersonation        => "AP-036".to_text(),
+        AntiPatternId.AP_037_BoundlessAudit               => "AP-037".to_text(),
+        AntiPatternId.AP_038_ImplicitSubstrate            => "AP-038".to_text(),
+        AntiPatternId.AP_039_AnchoringOverextension       => "AP-039".to_text(),
+        AntiPatternId.AP_040_SelfReferenceWithoutOperator => "AP-040".to_text(),
+    }
+}
+
+/// Short human-readable name (CamelCase form).
+public fn ap_name(id: &AntiPatternId) -> Text {
+    let id_text = ap_id_text(id);
+    let camel = match id {
+        AntiPatternId.AP_001_CapabilityEscalation         => "CapabilityEscalation",
+        AntiPatternId.AP_002_CapabilityLeak               => "CapabilityLeak",
+        AntiPatternId.AP_003_DependencyCycle              => "DependencyCycle",
+        AntiPatternId.AP_004_TierMixing                   => "TierMixing",
+        AntiPatternId.AP_005_FoundationDrift              => "FoundationDrift",
+        AntiPatternId.AP_006_RegisterMixing               => "RegisterMixing",
+        AntiPatternId.AP_007_StratumAdmissibility         => "StratumAdmissibility",
+        AntiPatternId.AP_008_TxStraddling                 => "TxStraddling",
+        AntiPatternId.AP_009_LifecycleRegression          => "LifecycleRegression",
+        AntiPatternId.AP_010_CveIncomplete                => "CveIncomplete",
+        AntiPatternId.AP_011_AbsoluteBoundaryAttempt      => "AbsoluteBoundaryAttempt",
+        AntiPatternId.AP_012_LinearCapabilityFlavour      => "LinearCapabilityFlavour",
+        AntiPatternId.AP_013_AffineCapabilityFlavour      => "AffineCapabilityFlavour",
+        AntiPatternId.AP_014_RelevantCapabilityFlavour    => "RelevantCapabilityFlavour",
+        AntiPatternId.AP_015_BoundaryInvariantViolation   => "BoundaryInvariantViolation",
+        AntiPatternId.AP_016_WireEncodingMismatch         => "WireEncodingMismatch",
+        AntiPatternId.AP_017_AuthenticationGap            => "AuthenticationGap",
+        AntiPatternId.AP_018_DeterminismViolation         => "DeterminismViolation",
+        AntiPatternId.AP_019_FoundationDowngradeTransitive => "FoundationDowngradeTransitive",
+        AntiPatternId.AP_020_TimeBoundContractViolation   => "TimeBoundContractViolation",
+        AntiPatternId.AP_021_TransitiveLifecycleRegression => "TransitiveLifecycleRegression",
+        AntiPatternId.AP_022_ProtocolMismatch             => "ProtocolMismatch",
+        AntiPatternId.AP_023_CapabilityTransferLeak       => "CapabilityTransferLeak",
+        AntiPatternId.AP_024_LifecycleRegressionTransitive => "LifecycleRegressionTransitive",
+        AntiPatternId.AP_025_DeclarationDrift             => "DeclarationDrift",
+        AntiPatternId.AP_026_FoundationContentMisalignment => "FoundationContentMisalignment",
+        AntiPatternId.AP_027_TemporalInconsistency        => "TemporalInconsistency",
+        AntiPatternId.AP_028_CounterfactualBrittleness    => "CounterfactualBrittleness",
+        AntiPatternId.AP_029_MissedAdjoint                => "MissedAdjoint",
+        AntiPatternId.AP_030_UniversalPropertyViolation   => "UniversalPropertyViolation",
+        AntiPatternId.AP_031_PhantomEvolution             => "PhantomEvolution",
+        AntiPatternId.AP_032_YonedaInequivalentRefactor   => "YonedaInequivalentRefactor",
+        AntiPatternId.AP_033_RetractedCitationUse         => "RetractedCitationUse",
+        AntiPatternId.AP_034_HypothesisWithoutMaturationPlan => "HypothesisWithoutMaturationPlan",
+        AntiPatternId.AP_035_InterpretationInMatureCorpus => "InterpretationInMatureCorpus",
+        AntiPatternId.AP_036_ObserverImpersonation        => "ObserverImpersonation",
+        AntiPatternId.AP_037_BoundlessAudit               => "BoundlessAudit",
+        AntiPatternId.AP_038_ImplicitSubstrate            => "ImplicitSubstrate",
+        AntiPatternId.AP_039_AnchoringOverextension       => "AnchoringOverextension",
+        AntiPatternId.AP_040_SelfReferenceWithoutOperator => "SelfReferenceWithoutOperator",
+    };
+    format!("{}/{}", id_text, camel).to_text()
+}
+
+public fn all_ap_ids() -> List<AntiPatternId> {
+    let mut out: List<AntiPatternId> = List.with_capacity(40);
+    out.push(AntiPatternId.AP_001_CapabilityEscalation);
+    out.push(AntiPatternId.AP_002_CapabilityLeak);
+    out.push(AntiPatternId.AP_003_DependencyCycle);
+    out.push(AntiPatternId.AP_004_TierMixing);
+    out.push(AntiPatternId.AP_005_FoundationDrift);
+    out.push(AntiPatternId.AP_006_RegisterMixing);
+    out.push(AntiPatternId.AP_007_StratumAdmissibility);
+    out.push(AntiPatternId.AP_008_TxStraddling);
+    out.push(AntiPatternId.AP_009_LifecycleRegression);
+    out.push(AntiPatternId.AP_010_CveIncomplete);
+    out.push(AntiPatternId.AP_011_AbsoluteBoundaryAttempt);
+    out.push(AntiPatternId.AP_012_LinearCapabilityFlavour);
+    out.push(AntiPatternId.AP_013_AffineCapabilityFlavour);
+    out.push(AntiPatternId.AP_014_RelevantCapabilityFlavour);
+    out.push(AntiPatternId.AP_015_BoundaryInvariantViolation);
+    out.push(AntiPatternId.AP_016_WireEncodingMismatch);
+    out.push(AntiPatternId.AP_017_AuthenticationGap);
+    out.push(AntiPatternId.AP_018_DeterminismViolation);
+    out.push(AntiPatternId.AP_019_FoundationDowngradeTransitive);
+    out.push(AntiPatternId.AP_020_TimeBoundContractViolation);
+    out.push(AntiPatternId.AP_021_TransitiveLifecycleRegression);
+    out.push(AntiPatternId.AP_022_ProtocolMismatch);
+    out.push(AntiPatternId.AP_023_CapabilityTransferLeak);
+    out.push(AntiPatternId.AP_024_LifecycleRegressionTransitive);
+    out.push(AntiPatternId.AP_025_DeclarationDrift);
+    out.push(AntiPatternId.AP_026_FoundationContentMisalignment);
+    out.push(AntiPatternId.AP_027_TemporalInconsistency);
+    out.push(AntiPatternId.AP_028_CounterfactualBrittleness);
+    out.push(AntiPatternId.AP_029_MissedAdjoint);
+    out.push(AntiPatternId.AP_030_UniversalPropertyViolation);
+    out.push(AntiPatternId.AP_031_PhantomEvolution);
+    out.push(AntiPatternId.AP_032_YonedaInequivalentRefactor);
+    out.push(AntiPatternId.AP_033_RetractedCitationUse);
+    out.push(AntiPatternId.AP_034_HypothesisWithoutMaturationPlan);
+    out.push(AntiPatternId.AP_035_InterpretationInMatureCorpus);
+    out.push(AntiPatternId.AP_036_ObserverImpersonation);
+    out.push(AntiPatternId.AP_037_BoundlessAudit);
+    out.push(AntiPatternId.AP_038_ImplicitSubstrate);
+    out.push(AntiPatternId.AP_039_AnchoringOverextension);
+    out.push(AntiPatternId.AP_040_SelfReferenceWithoutOperator);
+    out
+}
+
+// =============================================================================
+// Findings
+// =============================================================================
+
+@derive(Eq, Clone, Debug)
+public type AntiPatternVerdict is
+    /// No instances of this AP detected — the canonical positive result.
+    | Ok
+    /// Detected with `Severity.Warning` — recorded but does not block publish.
+    | Warning(Text)
+    /// Detected with `Severity.Error` — blocks publish at Phase 5b.
+    | Error(Text);
+
+@derive(Eq, Clone, Debug)
+public type AntiPatternFinding is {
+    id: AntiPatternId,
+    verdict: AntiPatternVerdict,
+    /// Human-readable cite for the developer view.
+    cite: Maybe<Text>,
+};
+
+// =============================================================================
+// Per-cog roster
+// =============================================================================
+
+/// AP roster for a single cog. Storing all 40 entries explicitly
+/// gives the dual-audience auditor view exhaustive coverage; the
+/// developer view summarises to "N/40 ok".
+@derive(Clone, Debug)
+public type AntiPatternRoster is {
+    cog: Text,
+    findings: List<AntiPatternFinding>,
+    error_count: Int { >= 0 },
+    warning_count: Int { >= 0 },
+};
+
+/// Compute the AP roster for a single cog by invoking
+/// `verum_kernel::arch_anti_pattern::check_all_anti_patterns` over
+/// the cog's compiled Shape.  The kernel surface returns a
+/// flat `List<KernelFinding>`; we lift each finding to our typed
+/// `AntiPatternFinding` and densify the missing entries to `Ok`.
+pub async fn anti_pattern_roster_for_cog(
+    cog_id: &Text,
+    compiled_shape_blob: &List<Byte>,
+) -> Result<AntiPatternRoster, AuditError>
+    using [Logger]
+{
+    // Kernel intrinsic — runs the full 40-pattern catalog.
+    let kernel_findings = run_anti_pattern_check(compiled_shape_blob)
+        .map_err(|e| AuditError.KernelDispatchFailed(format!("{e}").to_text()))?;
+
+    let mut roster_map: Map<Text, AntiPatternFinding> = Map.new();
+    let mut errors: Int = 0;
+    let mut warnings: Int = 0;
+
+    let mut i: Int = 0;
+    while i < kernel_findings.len() {
+        let kf = &kernel_findings[i];
+        let id = match kernel_id_to_local(&kf.id) {
+            Some(x) => x,
+            None    => { i = i + 1; continue; },
+        };
+        let verdict = match kf.severity {
+            Severity.Error   => { errors = errors + 1;   AntiPatternVerdict.Error(kf.message.clone()) },
+            Severity.Warning => { warnings = warnings + 1; AntiPatternVerdict.Warning(kf.message.clone()) },
+            _                => AntiPatternVerdict.Ok,
+        };
+        roster_map.insert(ap_id_text(&id), AntiPatternFinding {
+            id, verdict, cite: Some(kf.cite.clone()),
+        });
+        i = i + 1;
+    }
+
+    // Densify: fill missing entries with `Ok`.
+    let all = all_ap_ids();
+    let mut findings: List<AntiPatternFinding> = List.with_capacity(40);
+    let mut k: Int = 0;
+    while k < all.len() {
+        let id = all[k].clone();
+        let key = ap_id_text(&id);
+        match roster_map.remove(&key) {
+            Some(f) => findings.push(f),
+            None => findings.push(AntiPatternFinding {
+                id, verdict: AntiPatternVerdict.Ok, cite: None,
+            }),
+        }
+        k = k + 1;
+    }
+
+    Ok(AntiPatternRoster {
+        cog: cog_id.clone(),
+        findings,
+        error_count: errors,
+        warning_count: warnings,
+    })
+}
+
+@intrinsic("kernel_arch_check_all_anti_patterns")
+fn run_anti_pattern_check(compiled_shape: &List<Byte>) -> Result<List<KernelFinding>, Text>;
+
+@derive(Clone, Debug)
+struct KernelFinding {
+    id:        ArchAntiPatternId,
+    severity:  Severity,
+    message:   Text,
+    cite:      Text,
+}
+
+fn kernel_id_to_local(id: &ArchAntiPatternId) -> Maybe<AntiPatternId> {
+    // The kernel surface has a `code: Text` like "AP-001"; we map by
+    // string. This mirrors the cross-side-pin discipline (the kernel
+    // and Verum side enumerate the same 40 entries, pinned by name).
+    let code = arch_anti_pattern_code(id);
+    match code.as_str() {
+        "AP-001" => Some(AntiPatternId.AP_001_CapabilityEscalation),
+        "AP-002" => Some(AntiPatternId.AP_002_CapabilityLeak),
+        "AP-003" => Some(AntiPatternId.AP_003_DependencyCycle),
+        "AP-004" => Some(AntiPatternId.AP_004_TierMixing),
+        "AP-005" => Some(AntiPatternId.AP_005_FoundationDrift),
+        "AP-006" => Some(AntiPatternId.AP_006_RegisterMixing),
+        "AP-007" => Some(AntiPatternId.AP_007_StratumAdmissibility),
+        "AP-008" => Some(AntiPatternId.AP_008_TxStraddling),
+        "AP-009" => Some(AntiPatternId.AP_009_LifecycleRegression),
+        "AP-010" => Some(AntiPatternId.AP_010_CveIncomplete),
+        "AP-011" => Some(AntiPatternId.AP_011_AbsoluteBoundaryAttempt),
+        "AP-012" => Some(AntiPatternId.AP_012_LinearCapabilityFlavour),
+        "AP-013" => Some(AntiPatternId.AP_013_AffineCapabilityFlavour),
+        "AP-014" => Some(AntiPatternId.AP_014_RelevantCapabilityFlavour),
+        "AP-015" => Some(AntiPatternId.AP_015_BoundaryInvariantViolation),
+        "AP-016" => Some(AntiPatternId.AP_016_WireEncodingMismatch),
+        "AP-017" => Some(AntiPatternId.AP_017_AuthenticationGap),
+        "AP-018" => Some(AntiPatternId.AP_018_DeterminismViolation),
+        "AP-019" => Some(AntiPatternId.AP_019_FoundationDowngradeTransitive),
+        "AP-020" => Some(AntiPatternId.AP_020_TimeBoundContractViolation),
+        "AP-021" => Some(AntiPatternId.AP_021_TransitiveLifecycleRegression),
+        "AP-022" => Some(AntiPatternId.AP_022_ProtocolMismatch),
+        "AP-023" => Some(AntiPatternId.AP_023_CapabilityTransferLeak),
+        "AP-024" => Some(AntiPatternId.AP_024_LifecycleRegressionTransitive),
+        "AP-025" => Some(AntiPatternId.AP_025_DeclarationDrift),
+        "AP-026" => Some(AntiPatternId.AP_026_FoundationContentMisalignment),
+        "AP-027" => Some(AntiPatternId.AP_027_TemporalInconsistency),
+        "AP-028" => Some(AntiPatternId.AP_028_CounterfactualBrittleness),
+        "AP-029" => Some(AntiPatternId.AP_029_MissedAdjoint),
+        "AP-030" => Some(AntiPatternId.AP_030_UniversalPropertyViolation),
+        "AP-031" => Some(AntiPatternId.AP_031_PhantomEvolution),
+        "AP-032" => Some(AntiPatternId.AP_032_YonedaInequivalentRefactor),
+        "AP-033" => Some(AntiPatternId.AP_033_RetractedCitationUse),
+        "AP-034" => Some(AntiPatternId.AP_034_HypothesisWithoutMaturationPlan),
+        "AP-035" => Some(AntiPatternId.AP_035_InterpretationInMatureCorpus),
+        "AP-036" => Some(AntiPatternId.AP_036_ObserverImpersonation),
+        "AP-037" => Some(AntiPatternId.AP_037_BoundlessAudit),
+        "AP-038" => Some(AntiPatternId.AP_038_ImplicitSubstrate),
+        "AP-039" => Some(AntiPatternId.AP_039_AnchoringOverextension),
+        "AP-040" => Some(AntiPatternId.AP_040_SelfReferenceWithoutOperator),
+        _ => None,
+    }
+}
+
+@intrinsic("kernel_arch_anti_pattern_code")
+fn arch_anti_pattern_code(id: &ArchAntiPatternId) -> Text;
+
+// =============================================================================
+// Corpus-wide observatory
+// =============================================================================
+
+@derive(Clone, Debug)
+public type CorpusAntiPatternSummary is {
+    /// Per-AP-id: how many cogs in the corpus currently violate it
+    /// (Error or Warning combined).
+    counts_by_id: List<(AntiPatternId, Int)>,
+    /// Total cogs surveyed.
+    cogs_total: Int { >= 0 },
+    /// Cogs with at least one Error (load-bearing breakage).
+    cogs_with_errors: Int { >= 0 },
+    /// Cogs with only Warnings (no Errors).
+    cogs_warning_only: Int { >= 0 },
+    /// Cogs with zero findings — the "clean" set.
+    cogs_clean: Int { >= 0 },
+};
+
+pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary, AuditError>
+    using [Database]
+{
+    // Read the per-cog AP findings from cog_audit_records and aggregate.
+    let rows = sql#"
+        SELECT ap_id, COUNT(*) as n
+        FROM cog_audit_findings
+        WHERE verdict <> 'ok'
+        GROUP BY ap_id
+    "#.fetch_all().await
+        .map_err(|e| AuditError.QueryFailed(format!("{e}").to_text()))?;
+
+    let mut counts: Map<Text, Int> = Map.new();
+    let mut i: Int = 0;
+    while i < rows.len() {
+        counts.insert(rows[i].ap_id.clone(), rows[i].n);
+        i = i + 1;
+    }
+    let mut counts_by_id: List<(AntiPatternId, Int)> = List.with_capacity(40);
+    let all = all_ap_ids();
+    let mut j: Int = 0;
+    while j < all.len() {
+        let id = &all[j];
+        let key = ap_id_text(id);
+        let n = counts.get(&key).cloned().unwrap_or(0);
+        counts_by_id.push((id.clone(), n));
+        j = j + 1;
+    }
+
+    let totals: TotalsRow = sql#"
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END)   AS with_errors,
+            SUM(CASE WHEN error_count = 0 AND warning_count > 0 THEN 1 ELSE 0 END) AS warning_only,
+            SUM(CASE WHEN error_count = 0 AND warning_count = 0 THEN 1 ELSE 0 END) AS clean
+        FROM cog_audit_records
+    "#.fetch_one().await
+        .map_err(|e| AuditError.QueryFailed(format!("{e}").to_text()))?;
+
+    Ok(CorpusAntiPatternSummary {
+        counts_by_id,
+        cogs_total:        totals.total,
+        cogs_with_errors:  totals.with_errors.unwrap_or(0),
+        cogs_warning_only: totals.warning_only.unwrap_or(0),
+        cogs_clean:        totals.clean.unwrap_or(0),
+    })
+}
+
+@derive(FromRow)
+struct TotalsRow {
+    total:        Int,
+    with_errors:  Maybe<Int>,
+    warning_only: Maybe<Int>,
+    clean:        Maybe<Int>,
+}
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+public type AuditError is
+    | KernelDispatchFailed(Text)
+    | QueryFailed(Text)
+    | NotFound(Text);
+
+implement Display for AuditError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FormatError> {
+        match self {
+            KernelDispatchFailed(r) => f.write_str(f"audit: kernel dispatch: {r}".as_str()),
+            QueryFailed(r)          => f.write_str(f"audit: query: {r}".as_str()),
+            NotFound(r)             => f.write_str(f"audit: not found: {r}".as_str()),
+        }
+    }
+}
+
+implement Debug for AuditError {
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+}

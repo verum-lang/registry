@@ -1,7 +1,11 @@
 // =============================================================================
-// verum_registry/domain/version.vr — PackageVersion
+// verum_registry/domain/version.vr — PackageVersion (spec v3.0 §5.1.3)
 // =============================================================================
-// Spec: §5.1.3
+// v3.0 changes from v2.0:
+//   - `published_by: UserId` → `published_by: PublishIdentity` (4 pathways:
+//     Sigstore / OidcDirect / ApiToken / WebAuthn).
+//   - `provenance: Maybe<Text>` → `bundle_id: Maybe<Ulid>` referencing
+//     the SigstoreBundleRecord.
 // =============================================================================
 
 @arch_module(
@@ -10,7 +14,7 @@
     lifecycle:     Lifecycle.Definition,
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
-            role: "PackageVersion domain type with refinement-typed checksum",
+            role: "PackageVersion domain type with refinement-typed checksum + 4-pathway PublishIdentity",
             k_min: CveThresholdK.FullWitness,
             v_min: CveThresholdV.TypecheckPlusTests,
             e_min: CveThresholdE.StructurallyReady,
@@ -24,9 +28,10 @@
 module verum_registry.domain.version;
 
 mount core.*;
-mount base.{Text, Maybe};
+mount base.{Text, Maybe, Some, None, Bool, Int};
 mount collections.{List, Map};
 mount base.semver.SemVer;
+mount base.ulid.Ulid;
 mount time.rfc3339.Rfc3339Time;
 mount cog.manifest.{DependencySpec, LanguageProfile};
 mount architecture.types.Lifecycle;
@@ -38,23 +43,89 @@ mount verum_registry.domain.user.UserId;
 // Refinement-typed leaves
 // =============================================================================
 
-/// Lowercase hex-encoded SHA-256 (64 chars).
 @derive(Serialize, Deserialize, Eq, Clone, Hash)
 public type Hex64 is Text {
     where self.len() == 64 && self.matches(r"^[0-9a-f]{64}$")
 };
 
-/// Verification level achieved at compile-time.  Mirrors the 9-strategy
-/// verification ladder; recorded per version for filtering.  See
-/// `core.verify.level::VerificationLevel` for the canonical enum;
-/// the registry stores the textual annotation.
 @derive(Serialize, Deserialize, Eq, Clone)
 public type VerificationLevel is Text {
     where self.matches(r"^(runtime|static|fast|formal|proof|thorough|reliable|certified|coherent_static|coherent_runtime|coherent|synthesize)$")
 };
 
 // =============================================================================
-// PackageVersion
+// PublishIdentity (NEW v3.0)
+// =============================================================================
+//
+// Discriminated union over the four authentication pathways the
+// registry accepts. The persistence layer stores this as four
+// columns (kind + subject + issuer + bundle_id) per spec v3.0
+// §6.1 migration 0005 — see `version_repository.vr`'s row→domain
+// mapping.
+
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type PublishIdentity is
+    /// Sigstore-keyless: OIDC subject in the cert SAN.
+    | Sigstore {
+        issuer:           Text,
+        subject:          Text,
+        log_index:        Int { >= 0 },
+        integrated_time:  Rfc3339Time,
+      }
+    /// Legacy direct OIDC token (no Sigstore Bundle).
+    | OidcDirect {
+        issuer:  Text,
+        subject: Text,
+      }
+    /// Long-lived API token used by an offline CI environment.
+    | ApiToken(UserId)
+    /// Manual web publish authenticated via a WebAuthn passkey.
+    | WebAuthn(UserId);
+
+implement PublishIdentity {
+    /// Persistence-friendly discriminant for the
+    /// `versions.published_by_kind` column.
+    public fn kind_text(&self) -> Text {
+        match self {
+            PublishIdentity.Sigstore { .. }   => "sigstore".to_text(),
+            PublishIdentity.OidcDirect { .. } => "oidc_direct".to_text(),
+            PublishIdentity.ApiToken(_)       => "api_token".to_text(),
+            PublishIdentity.WebAuthn(_)       => "webauthn".to_text(),
+        }
+    }
+
+    /// OIDC subject when sigstore/oidc_direct; None for token/webauthn.
+    public fn oidc_subject(&self) -> Maybe<Text> {
+        match self {
+            PublishIdentity.Sigstore { subject, .. }   => Some(subject.clone()),
+            PublishIdentity.OidcDirect { subject, .. } => Some(subject.clone()),
+            _ => None,
+        }
+    }
+
+    /// OIDC issuer when sigstore/oidc_direct; None for token/webauthn.
+    public fn oidc_issuer(&self) -> Maybe<Text> {
+        match self {
+            PublishIdentity.Sigstore { issuer, .. }   => Some(issuer.clone()),
+            PublishIdentity.OidcDirect { issuer, .. } => Some(issuer.clone()),
+            _ => None,
+        }
+    }
+
+    /// User ID when api_token/webauthn; None for sigstore/oidc_direct
+    /// (those bind to a Sigstore identity, not a registry user — the
+    /// owner-mapping happens via the trusted-publishers config).
+    public fn user_id(&self) -> Maybe<UserId> {
+        match self {
+            PublishIdentity.ApiToken(uid) => Some(uid.clone()),
+            PublishIdentity.WebAuthn(uid) => Some(uid.clone()),
+            _ => None,
+        }
+    }
+}
+
+// =============================================================================
+// PackageVersion (extended for Sigstore)
 // =============================================================================
 
 @derive(Serialize, Deserialize, Eq, Clone)
@@ -70,20 +141,17 @@ public type PackageVersion is {
     default_features: List<Text>,
     /// SHA-256 of the source archive (hex-encoded, lowercase, 64 chars).
     source_sha256: Hex64,
-    /// CVE Lifecycle declared by the cog's `@arch_module(...)`.
     cve_lifecycle: Lifecycle,
-    /// Hash of the cog's canonicalised ShapeDeclarations record
-    /// — drift detection between manifest and compiled cog.
     shape_declarations_digest: Hex64,
-    /// Verification level achieved.
     verification_level: VerificationLevel,
     published_at: Rfc3339Time,
-    published_by: UserId,
+    /// 4-pathway authenticated identity at publish time.
+    published_by: PublishIdentity,
     yanked: Bool,
-    /// Required when `yanked == true` (spec §10.1).  Refinement
-    /// enforced at construction.
     yank_reason: Maybe<Text>,
-    /// Optional SLSA / in-toto attestation envelope.
-    provenance: Maybe<Text>,  // DSSE-encoded JSON; full type forthcoming
-                              // as `core.security.provenance::DsseEnvelope`.
+    /// FK to SigstoreBundleRecord when published_by = Sigstore;
+    /// None otherwise. For non-Sigstore publishes that still carried
+    /// a publisher-supplied DSSE envelope, the envelope is stored
+    /// directly in the version row (legacy column retained for now).
+    bundle_id: Maybe<Ulid>,
 };

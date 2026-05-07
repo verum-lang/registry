@@ -1,16 +1,37 @@
 // =============================================================================
-// verum_registry/http/mod.vr — HTTP layer entry
+// verum_registry/http/mod.vr — HTTP layer entry (spec §9)
 // =============================================================================
-// Spec: §8
+//
+// **ATS-V articulation.** HTTP layer is the registry's *external
+// boundary*. Stratum = LCls. Tier = Aot. Capability exposes:
+// Network(Http2, Inbound). Composes against the full weft stack.
 // =============================================================================
 
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
-    stratum:       MsfsStratum.LFnd,
-    lifecycle:     Lifecycle.Theorem("v2.0"),
+    stratum:       MsfsStratum.LCls,
+    at_tier:       Tier.Aot,
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    exposes: [
+        Capability.Network(NetProtocol.Http2, NetDirection.Inbound),
+        Capability.Network(NetProtocol.Http,  NetDirection.Inbound),
+        Capability.TimeBound(Duration.from_seconds(60)),
+    ],
+    requires:      [],
+    composes_with: [
+        "core.net.weft".to_text(),
+        "core.net.weft.router".to_text(),
+        "core.net.weft.tls".to_text(),
+        "core.net.weft.backpressure".to_text(),
+        "core.net.weft.spiffe".to_text(),
+        "core.net.weft.json_extractor".to_text(),
+        "core.net.weft.http2".to_text(),
+        "core.encoding.json".to_text(),
+    ],
+    strict:        true,
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
-            role: "HTTP layer entry — router + middleware + handlers + error envelope",
+            role: "HTTP layer entry — router + middleware + handlers + error envelope".to_text(),
             k_min: CveThresholdK.FullWitness,
             v_min: CveThresholdV.NamedCertification,
             e_min: CveThresholdE.StructurallyReady,

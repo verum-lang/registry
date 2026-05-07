@@ -1,0 +1,198 @@
+// =============================================================================
+// verum_registry/persistence/tuf_metadata_repository.vr (spec v3.0 §6.1)
+// =============================================================================
+// CRUD for `tuf_root_history` + `tuf_signed_metadata`. Used by
+// `TufService` to persist + serve TUF metadata at /tuf/<role>.json.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "Postgres CRUD for TUF root_history + signed_metadata",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.tuf_metadata_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
+mount collections.List;
+mount time.rfc3339.Rfc3339Time;
+mount database.postgres.PgError;
+mount security.tuf.types.RoleName;
+
+mount verum_registry.domain.tuf_state.{
+    TufRootSnapshot, TufSignedMetadata, role_to_db_text,
+};
+
+public type TufMetadataRepository is {};
+
+implement TufMetadataRepository {
+    // =========================================================================
+    // Root history
+    // =========================================================================
+
+    public async fn insert_root(
+        &self,
+        snap: &TufRootSnapshot,
+    ) -> Result<(), PgError>
+        using [Database]
+    {
+        sql#"
+            INSERT INTO tuf_root_history (
+                version, content_bytes, content_sha256, expires_at, created_at
+            ) VALUES (
+                ${snap.version}, ${&snap.content_bytes}, ${&snap.content_sha256.0},
+                ${&snap.expires_at}, ${&snap.created_at}
+            )
+        "#.execute().await.map(|_| ())
+    }
+
+    public async fn get_root(
+        &self,
+        version: Int,
+    ) -> Result<Maybe<TufRootSnapshot>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT version, content_bytes, content_sha256, expires_at, created_at
+            FROM tuf_root_history
+            WHERE version = ${version}
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_root))
+    }
+
+    public async fn latest_root(&self) -> Result<Maybe<TufRootSnapshot>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT version, content_bytes, content_sha256, expires_at, created_at
+            FROM tuf_root_history
+            ORDER BY version DESC
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_root))
+    }
+
+    // =========================================================================
+    // Signed metadata (timestamp / snapshot / targets)
+    // =========================================================================
+
+    public async fn insert_signed(
+        &self,
+        meta: &TufSignedMetadata,
+    ) -> Result<(), PgError>
+        using [Database]
+    {
+        sql#"
+            INSERT INTO tuf_signed_metadata (
+                role, version, content_bytes, content_sha256, expires_at, created_at
+            ) VALUES (
+                ${&meta.role}, ${meta.version}, ${&meta.content_bytes},
+                ${&meta.content_sha256.0}, ${&meta.expires_at}, ${&meta.created_at}
+            )
+        "#.execute().await.map(|_| ())
+    }
+
+    public async fn get_signed(
+        &self,
+        role: &RoleName,
+        version: Int,
+    ) -> Result<Maybe<TufSignedMetadata>, PgError>
+        using [Database]
+    {
+        let role_text = role_to_db_text(role);
+        sql#"
+            SELECT role, version, content_bytes, content_sha256, expires_at, created_at
+            FROM tuf_signed_metadata
+            WHERE role = ${&role_text} AND version = ${version}
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_signed))
+    }
+
+    public async fn latest_signed(
+        &self,
+        role: &RoleName,
+    ) -> Result<Maybe<TufSignedMetadata>, PgError>
+        using [Database]
+    {
+        let role_text = role_to_db_text(role);
+        sql#"
+            SELECT role, version, content_bytes, content_sha256, expires_at, created_at
+            FROM tuf_signed_metadata
+            WHERE role = ${&role_text}
+            ORDER BY version DESC
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_signed))
+    }
+
+    /// Atomically increment-and-fetch the next version for a role.
+    /// Used by TufService.resign_targets() and the timestamp/snapshot
+    /// refresh ticker.
+    public async fn next_version(
+        &self,
+        role: &RoleName,
+    ) -> Result<Int, PgError>
+        using [Database]
+    {
+        let role_text = role_to_db_text(role);
+        sql#"
+            SELECT COALESCE(MAX(version), 0) + 1
+            FROM tuf_signed_metadata
+            WHERE role = ${&role_text}
+        "#.fetch_one_scalar().await
+    }
+}
+
+// =============================================================================
+// Row → domain
+// =============================================================================
+
+fn row_to_root(row: TufRootRow) -> TufRootSnapshot {
+    TufRootSnapshot {
+        version:        row.version,
+        content_bytes:  row.content_bytes,
+        content_sha256: domain.tuf_state.Hex64(row.content_sha256),
+        expires_at:     row.expires_at,
+        created_at:     row.created_at,
+    }
+}
+
+fn row_to_signed(row: TufSignedRow) -> TufSignedMetadata {
+    TufSignedMetadata {
+        role:           row.role,
+        version:        row.version,
+        content_bytes:  row.content_bytes,
+        content_sha256: domain.tuf_state.Hex64(row.content_sha256),
+        expires_at:     row.expires_at,
+        created_at:     row.created_at,
+    }
+}
+
+@derive(FromRow)
+type TufRootRow is {
+    version:        Int,
+    content_bytes:  List<Byte>,
+    content_sha256: Text,
+    expires_at:     Rfc3339Time,
+    created_at:     Rfc3339Time,
+};
+
+@derive(FromRow)
+type TufSignedRow is {
+    role:           Text,
+    version:        Int,
+    content_bytes:  List<Byte>,
+    content_sha256: Text,
+    expires_at:     Rfc3339Time,
+    created_at:     Rfc3339Time,
+};

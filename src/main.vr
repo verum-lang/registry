@@ -2,28 +2,74 @@
 // verum_registry/main.vr — entry point + service registry assembly
 // =============================================================================
 //
-// Implements the bootstrap described in spec §8.6.
+// Bootstraps the canonical Verum cog registry per spec §9.4.
+// Composes the registry against the full Verum stdlib + ATS-V
+// architectural type system:
 //
-// Composes the entire registry against the enriched Verum stdlib:
-//   * `core.configuration.toml`  — config loading
-//   * `core.database.postgres`   — connection pooling + sql# meta-fn
+//   * `core.configuration.toml`        — config loading
+//   * `core.database.postgres`         — connection pooling + sql# meta-fn
 //   * `core.database.postgres.migrations` — schema evolution
-//   * `core.net.weft`            — HTTP server + middleware composition
-//   * `core.security.{oidc, transparency_log, ecc.ed25519}` — security
-//   * `core.archive.tar` + `core.compress.zstd` — source bundle handling
+//   * `core.net.weft`                  — HTTP/2 server + middleware
+//   * `core.cog.{manifest,sign,archive,resolve}` — cog tooling
+//   * `core.security.{oidc,sigstore,tuf,webauthn,x509,provenance,transparency_log}` — supply chain
+//   * `core.archive.tar` + `core.compress.zstd` — source bundles
+//   * `core.architecture.types`        — ATS-V primitives
 //
-// CVE Self-application per spec §13: this cog declares its
-// `@arch_module(...)` ShapeDeclarations including a non-trivial
-// `self_reference` witness (the registry serves itself).
+// **CVE Self-application** (spec §15). This module's `@arch_module`
+// declaration is the canonical ATS-V demonstrator: every primitive
+// (Foundation, Stratum, Tier, Capability, Lifecycle, Purpose,
+// CognitiveSubstrate, FormalAnchoring, ExecutabilitySense,
+// SelfReferenceWitness) appears in load-bearing position. The
+// SelfReferenceWitness articulates the Banach fixed point of the
+// registry-serves-itself relation: `cog_registry serves the cog
+// that publishes cog_registry`.
 // =============================================================================
 
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
-    stratum:       MsfsStratum.LFnd,
-    lifecycle:     Lifecycle.Theorem("v2.0"),
+    stratum:       MsfsStratum.LCls,
+    at_tier:       Tier.MultiTier([Tier.Aot, Tier.Check]),
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    exposes: [
+        // Network — inbound HTTP/2 + outbound HTTP for Fulcio / Rekor / OIDC discovery.
+        Capability.Network(NetProtocol.Http2, NetDirection.Inbound),
+        Capability.Network(NetProtocol.Http,  NetDirection.Outbound),
+        // Filesystem — config + TLS material + TUF offline keys.
+        Capability.Read(ResourceTag.Filesystem),
+        Capability.Write(ResourceTag.Filesystem),
+        // Persistence — three durable backends.
+        Capability.Persist(PersistenceMedium.Postgres),
+        Capability.Persist(PersistenceMedium.S3),
+        Capability.Persist(PersistenceMedium.Ledger),       // sumdb
+        // Concurrency — bounded worker spawns for publish-pipeline phases
+        // + the TUF refresh ticker.
+        Capability.Spawn(TaskLifetime.Bounded),
+        // Time-bound contracts — Sigstore certs ≤ 10 min, sessions ≤ 1 h.
+        Capability.TimeBound(Duration.from_hours(1)),
+    ],
+    requires:      [],
+    composes_with: [
+        "core.architecture.types".to_text(),
+        "core.architecture.anti_patterns".to_text(),
+        "core.architecture.lifecycle".to_text(),
+        "core.cog.manifest".to_text(),
+        "core.cog.sign".to_text(),
+        "core.cog.archive".to_text(),
+        "core.cog.resolve".to_text(),
+        "core.security.sigstore".to_text(),
+        "core.security.tuf".to_text(),
+        "core.security.webauthn".to_text(),
+        "core.security.x509".to_text(),
+        "core.security.oidc".to_text(),
+        "core.security.provenance".to_text(),
+        "core.security.transparency_log".to_text(),
+        "core.database.postgres".to_text(),
+        "core.net.weft".to_text(),
+    ],
+    strict:        true,
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
-            role: "Verum package registry — entry point + service assembly",
+            role: "canonical Verum cog registry — exposes seven-symbol Lifecycle + 40-AP catalog + audit-protocol + Sigstore + TUF + WebAuthn".to_text(),
             k_min: CveThresholdK.FullWitness,
             v_min: CveThresholdV.NamedCertification,
             e_min: CveThresholdE.StructurallyReady,
@@ -32,12 +78,15 @@
         anchoring: Some(FormalAnchoring.CurryHowardLawvere),
         e_sense:   Some(ExecutabilitySense.StructuralReadiness),
         // The registry serves cogs; the registry is itself a cog; the
-        // registry's cog is served by the registry. Self-reference is
-        // articulated through the publish-pipeline operator and the
-        // Banach contracting fixed point — see spec §13.2.
+        // registry's cog is served by the registry. Banach fixed point:
+        // each Sigstore-verified self-publish narrows admissible
+        // registry-cog versions to those passing the publish pipeline;
+        // convergence is the published-and-verified state. Operator
+        // names the publish entry point through which the recursion
+        // is closed.
         self_reference: Some(SelfReferenceWitness {
-            operator:       "verum_registry.services.publish_service".to_text(),
-            fixed_point:    "verum_registry@2.0.0".to_text(),
+            operator:       "verum_registry.services.publish_service.publish_with_sigstore".to_text(),
+            fixed_point:    "verum-registry@self".to_text(),
             fixpoint_class: fixpoint_class_banach(),
         }),
     },
@@ -61,12 +110,15 @@ mount verum_registry.config.{Config, load_config};
 mount verum_registry.http.{make_router};
 mount verum_registry.services.{
     PublishService, SearchService, SumdbService, AuthService, ProvenanceService,
+    SigstoreService, TufService, TufKeyMaterial, WebAuthnService,
     ServiceRegistry,
 };
+mount verum_registry.audit.AuditService;
 mount verum_registry.persistence.{
     open_postgres, open_object_store, open_cache, open_search,
 };
 mount verum_registry.observability.{tracing_init, metrics_init};
+mount async_::spawn;
 
 // =============================================================================
 // Entry point
@@ -97,7 +149,31 @@ public async fn main() -> Result<(), Text> {
     apply_migrations(&db_pool).await
         .map_err(|e| format!("migration failed: {e}").to_text())?;
 
-    // 5. Assemble service registry.
+    // 5. Assemble service registry — v3.0 adds TUF, Sigstore, WebAuthn.
+    //
+    // Boot order: TUF first (it owns the keys + DB state); then load
+    // the Sigstore trust root from TUF metadata; then construct
+    // SigstoreService with that trust root pinned. WebAuthn is
+    // independent.
+    let tuf_keys: TufKeyMaterial = TufKeyMaterial.from_config(&config.tuf)
+        .map_err(|e| format!("tuf keys load failed: {e}").to_text())?;
+    let tuf = TufService.new(tuf_keys).await
+        .map_err(|e| format!("tuf init failed: {e}").to_text())?;
+    let trust_root = tuf.fetch_sigstore_trust_root(&config.tuf).await
+        .map_err(|e| format!("sigstore trust-root load failed: {e}").to_text())?;
+    let sigstore = SigstoreService.new(trust_root);
+    let webauthn = WebAuthnService.new(
+        config.webauthn.rp_id.clone(),
+        config.webauthn.rp_name.clone(),
+        config.webauthn.origins.clone(),
+    );
+
+    // Background TUF refresh ticker (timestamp every hour, snapshot
+    // every day).
+    spawn(tuf.clone().run_refresh_loop());
+
+    let audit = AuditService.new();
+
     let services = ServiceRegistry {
         publish:    PublishService {},
         search:     SearchService {},
@@ -106,6 +182,10 @@ public async fn main() -> Result<(), Text> {
         auth:       AuthService.from_config(&config.oidc).await
             .map_err(|e| format!("auth init failed: {e}").to_text())?,
         provenance: ProvenanceService {},
+        sigstore,
+        tuf,
+        webauthn,
+        audit,
     };
 
     // 6. Build router + middleware chain (outside-in order).
@@ -153,6 +233,23 @@ fn load_migrations() -> List<core.database.common.migrations.Migration> {
     steps.push(migration_new(
         1, "initial_schema".to_text(),
         include_str!("../migrations/0001_initial_schema.sql").to_text(),
+    ));
+    // NEW v3.0
+    steps.push(migration_new(
+        2, "passkeys".to_text(),
+        include_str!("../migrations/0002_passkeys.sql").to_text(),
+    ));
+    steps.push(migration_new(
+        3, "tuf_metadata".to_text(),
+        include_str!("../migrations/0003_tuf_metadata.sql").to_text(),
+    ));
+    steps.push(migration_new(
+        4, "sigstore_bundles".to_text(),
+        include_str!("../migrations/0004_sigstore_bundles.sql").to_text(),
+    ));
+    steps.push(migration_new(
+        5, "publish_identity".to_text(),
+        include_str!("../migrations/0005_publish_identity.sql").to_text(),
     ));
     steps
 }

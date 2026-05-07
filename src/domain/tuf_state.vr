@@ -1,0 +1,78 @@
+// =============================================================================
+// verum_registry/domain/tuf_state.vr — TUF metadata state (spec v3.0 §5.1.6)
+// =============================================================================
+//
+// Persistable forms of the registry's TUF metadata. Each TUF role
+// (root / timestamp / snapshot / targets) is stored as a versioned
+// row with the canonical JSON content + SHA-256 + expiry.
+//
+// Composes against:
+//   - core.security.tuf.types.{Signed, RootMetadata, TimestampMetadata,
+//                              SnapshotMetadata, TargetsMetadata}
+//   - core.security.tuf.canonical.canonical_signing_payload
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "domain entity: registry-side TUF metadata snapshot for /tuf/<role>.json serving",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.tuf_state;
+
+mount core.*;
+mount base.{Maybe, Some, None, Text, Bool, Int};
+mount collections.List;
+mount time.rfc3339.Rfc3339Time;
+mount security.tuf.types.RoleName;
+
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type Hex64 is Text { where self.matches(r"^[0-9a-f]{64}$") };
+
+/// Snapshot of the registry's TUF root metadata at a given version.
+/// Persisted on every root rotation (quarterly); served via
+/// `/tuf/<version>.root.json`.
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type TufRootSnapshot is {
+    version:        Int { >= 1 },
+    /// Canonical JSON of the `Signed<RootMetadata>` envelope.
+    content_bytes:  List<Byte>,
+    content_sha256: Hex64,
+    expires_at:     Rfc3339Time,
+    created_at:     Rfc3339Time,
+};
+
+/// Snapshot of a non-root TUF role (timestamp / snapshot / targets).
+/// Multiple versions retained to support consistent-snapshot mode.
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type TufSignedMetadata is {
+    /// One of "timestamp" / "snapshot" / "targets".
+    role:           Text,
+    version:        Int { >= 1 },
+    content_bytes:  List<Byte>,
+    content_sha256: Hex64,
+    expires_at:     Rfc3339Time,
+    created_at:     Rfc3339Time,
+};
+
+/// Helper — convert a `RoleName` to the persistence-string form.
+public fn role_to_db_text(r: &RoleName) -> Text {
+    match r {
+        RoleName.Root         => "root".to_text(),
+        RoleName.Timestamp    => "timestamp".to_text(),
+        RoleName.Snapshot     => "snapshot".to_text(),
+        RoleName.Targets      => "targets".to_text(),
+        RoleName.Delegated(_) => "targets".to_text(), // delegations stored under targets bucket
+    }
+}

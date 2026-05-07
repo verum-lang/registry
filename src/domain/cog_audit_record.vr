@@ -1,0 +1,59 @@
+// =============================================================================
+// verum_registry/domain/cog_audit_record.vr (spec §6.1.7)
+// =============================================================================
+//
+// Per-version audit verdict — the persistable form of the
+// `CveBundle` produced at PublishService Phase 5b.  One row per
+// version_id; aggregated for corpus-wide observatories at §12.3.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Definition,
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "domain entity: persistable per-version audit verdict (CVE bundle + AP findings + L0..L6)".to_text(),
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.cog_audit_record;
+
+mount core.*;
+mount base.{Maybe, Text, Bool, Int};
+mount collections.List;
+mount time.rfc3339.Rfc3339Time;
+
+mount verum_registry.audit.cve_bundle.{AxisVerdict, LayerVerdict};
+mount verum_registry.audit.anti_patterns.AntiPatternFinding;
+
+@derive(Serialize, Deserialize, Eq, Clone)
+public type CogAuditRecord is {
+    /// FK to versions.id.
+    version_id: Int,
+    constructive: AxisVerdict,
+    verifiable:   AxisVerdict,
+    executable:   AxisVerdict,
+    /// Sparse — only entries firing Error or Warning are stored.
+    /// The dual-audience renderer densifies to all 40 by querying
+    /// `core.architecture.anti_patterns::all_anti_pattern_ids`.
+    anti_pattern_findings: List<AntiPatternFinding>,
+    /// `verum audit --bundle` truth-value: load-bearing iff every
+    /// layer passes AND every axis is Closed AND every AP is Ok.
+    load_bearing: Bool,
+    layer_l0: LayerVerdict,
+    layer_l1: LayerVerdict,
+    layer_l2: LayerVerdict,
+    layer_l3: LayerVerdict,
+    layer_l4: LayerVerdict,
+    layer_l5: LayerVerdict,
+    layer_l6: LayerVerdict,
+    audited_at: Rfc3339Time,
+};

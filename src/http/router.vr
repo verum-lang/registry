@@ -1,17 +1,14 @@
 // =============================================================================
-// verum_registry/http/router.vr — route table
+// verum_registry/http/router.vr — route table (spec v3.0 §8.2)
 // =============================================================================
-// Spec: §8.2
-//
-// All routes under `/api/v2/...`, plus `/sumdb/`, `/health/`, `/metrics`.
-// Path parameters use refined extractors via `core.net.weft.refined_routes`
-// where the path component carries a refinement (scope, name, version).
+// All routes under `/api/v3/...`, plus `/tuf/...`, `/sumdb/...`,
+// `/health/...`, `/metrics`. v2 paths return 301 → v3 equivalents.
 // =============================================================================
 
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
     stratum:       MsfsStratum.LFnd,
-    lifecycle:     Lifecycle.Theorem("v2.0"),
+    lifecycle:     Lifecycle.Theorem("v3.0"),
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
             role: "registry HTTP route table — wires handlers to URL paths",
@@ -28,59 +25,92 @@
 module verum_registry.http.router;
 
 mount core.*;
-mount net.weft.{Router, Method};
+mount net.weft.{Router, Method, Response, StatusCode};
 
 mount verum_registry.services.ServiceRegistry;
 mount verum_registry.http.handlers.{
     packages, publish, search, sumdb, auth, owners, advisories,
     health as health_handlers,
+    webauthn as webauthn_h,
+    tuf as tuf_h,
+    sigstore as sigstore_h,
 };
 
-/// Build the full registry router.
+/// Build the full registry router for v3.0.
 public fn make_router(services: ServiceRegistry) -> Router {
     let mut router = Router.new()
         .with_state(services);
 
-    // ===== /api/v2/packages =====
+    // ===== /api/v3/packages =====
     router = router
-        .get("/api/v2/packages/:scope/:name", packages.get_package)
-        .get("/api/v2/packages/:scope/:name/versions", packages.list_versions)
-        .get("/api/v2/packages/:scope/:name/:version", packages.get_version)
-        .get("/api/v2/packages/:scope/:name/:version/source", packages.get_source)
-        .get("/api/v2/packages/:scope/:name/:version/manifest", packages.get_manifest)
-        .get("/api/v2/packages/:scope/:name/:version/provenance", packages.get_provenance)
-        .post("/api/v2/packages", publish.handle_publish)
-        .post("/api/v2/packages/:scope/:name/:version/yank", publish.handle_yank)
-        .post("/api/v2/packages/:scope/:name/:version/unyank", publish.handle_unyank);
+        .get("/api/v3/packages/:scope/:name", packages.get_package)
+        .get("/api/v3/packages/:scope/:name/versions", packages.list_versions)
+        .get("/api/v3/packages/:scope/:name/:version", packages.get_version)
+        .get("/api/v3/packages/:scope/:name/:version/source", packages.get_source)
+        .get("/api/v3/packages/:scope/:name/:version/manifest", packages.get_manifest)
+        // Sigstore Bundle (NEW v3.0)
+        .get("/api/v3/packages/:scope/:name/:version/bundle", sigstore_h.get_bundle)
+        // Legacy provenance retained for non-Sigstore publishes
+        .get("/api/v3/packages/:scope/:name/:version/provenance", packages.get_provenance)
+        .post("/api/v3/packages", publish.handle_publish)
+        .post("/api/v3/packages/:scope/:name/:version/yank", publish.handle_yank)
+        .post("/api/v3/packages/:scope/:name/:version/unyank", publish.handle_unyank);
 
-    // Owners
+    // ===== /api/v3/packages/.../owners =====
     router = router
-        .get("/api/v2/packages/:scope/:name/owners", owners.list_owners)
-        .post("/api/v2/packages/:scope/:name/owners", owners.invite_owner)
-        .delete("/api/v2/packages/:scope/:name/owners/:user", owners.remove_owner);
+        .get("/api/v3/packages/:scope/:name/owners", owners.list_owners)
+        .post("/api/v3/packages/:scope/:name/owners", owners.invite_owner)
+        .delete("/api/v3/packages/:scope/:name/owners/:user", owners.remove_owner);
 
-    // ===== /api/v2/search =====
-    router = router.get("/api/v2/search", search.handle_search);
+    // ===== /api/v3/search =====
+    router = router.get("/api/v3/search", search.handle_search);
 
-    // ===== /api/v2/resolve =====
-    router = router.post("/api/v2/resolve", search.handle_resolve);
+    // ===== /api/v3/resolve =====
+    router = router.post("/api/v3/resolve", search.handle_resolve);
 
-    // ===== /api/v2/auth =====
+    // ===== /api/v3/auth =====
     router = router
-        .post("/api/v2/auth/login", auth.handle_login)
-        .post("/api/v2/auth/oidc/discover/:provider", auth.handle_oidc_discover)
-        .post("/api/v2/auth/tokens", auth.handle_create_token)
-        .delete("/api/v2/auth/tokens/:id", auth.handle_revoke_token);
+        .post("/api/v3/auth/login", auth.handle_login)
+        .post("/api/v3/auth/oidc/discover/:provider", auth.handle_oidc_discover)
+        .post("/api/v3/auth/tokens", auth.handle_create_token)
+        .delete("/api/v3/auth/tokens/:id", auth.handle_revoke_token);
 
-    // ===== /api/v2/users =====
-    router = router.get("/api/v2/users/:username", auth.handle_get_user_profile);
-
-    // ===== /api/v2/advisories =====
+    // ===== /api/v3/auth/webauthn =====  (NEW v3.0)
     router = router
-        .get("/api/v2/advisories", advisories.list_advisories)
-        .get("/api/v2/advisories/:id", advisories.get_advisory);
+        .post("/api/v3/auth/webauthn/register/begin",      webauthn_h.register_begin)
+        .post("/api/v3/auth/webauthn/register/finish",     webauthn_h.register_finish)
+        .post("/api/v3/auth/webauthn/authenticate/begin",  webauthn_h.authenticate_begin)
+        .post("/api/v3/auth/webauthn/authenticate/finish", webauthn_h.authenticate_finish);
 
-    // ===== /sumdb =====
+    // ===== /api/v3/auth/passkeys =====  (NEW v3.0)
+    router = router
+        .get("/api/v3/auth/passkeys",     webauthn_h.list_passkeys)
+        .delete("/api/v3/auth/passkeys/:id", webauthn_h.revoke_passkey);
+
+    // ===== /api/v3/sigstore =====  (NEW v3.0)
+    router = router
+        .post("/api/v3/sigstore/verify", sigstore_h.verify_bundle);
+
+    // ===== /api/v3/users =====
+    router = router.get("/api/v3/users/:username", auth.handle_get_user_profile);
+
+    // ===== /api/v3/advisories =====
+    router = router
+        .get("/api/v3/advisories", advisories.list_advisories)
+        .get("/api/v3/advisories/:id", advisories.get_advisory);
+
+    // ===== /tuf/ =====  (NEW v3.0)
+    // Routes: /tuf/<version>.<role>.json — refined-route extractor
+    // breaks the path component into `version` (Int) and `role` (one
+    // of "root","snapshot","targets") then dispatches; timestamp.json
+    // is unversioned per spec.
+    router = router
+        .get("/tuf/:version.root.json",     tuf_h.root)
+        .get("/tuf/timestamp.json",         tuf_h.timestamp)
+        .get("/tuf/:version.snapshot.json", tuf_h.snapshot)
+        .get("/tuf/:version.targets.json",  tuf_h.targets);
+
+    // ===== /sumdb (legacy registry-side log) =====
     router = router
         .get("/sumdb/lookup/:scope/:name@:version", sumdb.handle_lookup)
         .get("/sumdb/latest", sumdb.handle_latest)
@@ -92,5 +122,16 @@ public fn make_router(services: ServiceRegistry) -> Router {
         .get("/health/ready", health_handlers.handle_readiness)
         .get("/health/version", health_handlers.handle_version);
 
+    // ===== v2 → v3 redirects =====
+    // Permanently redirect old `/api/v2/...` paths to their v3
+    // equivalents. v2 was the previous spec; v3 supersedes it.
+    router = router.fallback_v2_redirect(redirect_v2_to_v3);
+
     router
+}
+
+fn redirect_v2_to_v3(path: &Text) -> Maybe<Text> {
+    if path.starts_with("/api/v2/") {
+        Some(format!("/api/v3/{}", path.byte_substring(8, path.len())).to_text())
+    } else { None }
 }

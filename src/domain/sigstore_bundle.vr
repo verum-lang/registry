@@ -1,0 +1,88 @@
+// =============================================================================
+// verum_registry/domain/sigstore_bundle.vr — SigstoreBundleRecord (spec v3.0 §5.1.5)
+// =============================================================================
+//
+// Persistable form of a verified Sigstore Bundle. Wraps
+// `core.security.sigstore::SigstoreBundle` with registry-side
+// indexing fields: ULID id, FK to versions, hash digests for binding,
+// extracted OIDC identity for audit queries.
+//
+// Created in PublishService Phase 7 after `core.security.sigstore.
+// verify_bundle` returns Ok(ValidationResult). The bundle JSON is
+// stored verbatim so clients fetching `/api/v3/.../bundle` get the
+// canonical Sigstore wire form for re-verification.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "domain entity: persistable Sigstore Bundle with envelope+chain hashes + OIDC identity index",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.sigstore_bundle;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount base.ulid.Ulid;
+mount time.rfc3339.Rfc3339Time;
+mount security.sigstore.types.SigstoreBundle;
+mount security.sigstore.verify.ValidationResult;
+
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type Hex64 is Text { where self.matches(r"^[0-9a-f]{64}$") };
+
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type SigstoreBundleRecord is {
+    id:                       Ulid,
+    /// FK to versions.id.
+    version_id:               Int,
+    /// Verbatim Sigstore Bundle JSON (canonicalised).
+    bundle_json:              Text,
+    /// SHA-256 of the canonical DSSE envelope.
+    envelope_sha256:          Hex64,
+    /// SHA-256 of the leaf cert in the Fulcio-issued chain (DER).
+    cert_chain_leaf_sha256:   Hex64,
+    /// Rekor log index — the cog's transparency-log coordinate.
+    rekor_log_index:          Int { >= 0 },
+    integrated_time:          Rfc3339Time,
+    /// OIDC issuer URL extracted from cert custom extension.
+    oidc_issuer:              Text,
+    /// OIDC subject (email / URI / SPIFFE) from cert SAN.
+    oidc_subject:             Text,
+    created_at:               Rfc3339Time,
+};
+
+/// Build a `SigstoreBundleRecord` from the bundle JSON + the
+/// `ValidationResult` produced by `core.security.sigstore.verify_bundle`.
+public fn sigstore_bundle_record_new(
+    version_id:    Int,
+    bundle_json:   Text,
+    envelope_sha:  Hex64,
+    leaf_cert_sha: Hex64,
+    result:        &ValidationResult,
+    now:           Rfc3339Time,
+) -> SigstoreBundleRecord {
+    SigstoreBundleRecord {
+        id:                     Ulid.now(),
+        version_id,
+        bundle_json,
+        envelope_sha256:        envelope_sha,
+        cert_chain_leaf_sha256: leaf_cert_sha,
+        rekor_log_index:        result.tlog_entry.log_index,
+        integrated_time:        result.tlog_entry.integrated_time.clone(),
+        oidc_issuer:            result.oidc_issuer.clone(),
+        oidc_subject:           result.oidc_subject.clone(),
+        created_at:             now,
+    }
+}

@@ -1,0 +1,188 @@
+// =============================================================================
+// verum_registry/http/handlers/sigstore.vr (spec v3.0 §8.2)
+// =============================================================================
+// Routes:
+//   GET  /api/v3/packages/:scope/:name/:version/bundle  — fetch Sigstore Bundle
+//   POST /api/v3/sigstore/verify                         — server-side bundle verify
+//
+// The /verify endpoint is a helper for clients with constrained
+// crypto stacks (e.g., embedded devices, browsers without WebCrypto
+// access to the relevant primitives) — they POST a bundle + expected
+// identity and the registry runs the full verification on their behalf.
+// Authentication-bound and rate-limited (60/min anonymous).
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "HTTP handlers for Sigstore Bundle fetch + server-side verification",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.handlers.sigstore;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
+mount collections.List;
+mount net.weft.{WeftRequest, Response, StatusCode};
+mount net.http.HttpClient;
+mount encoding.json.{JsonValue, json_object, json_string, json_bool, json_array};
+
+mount verum_registry.services.sigstore_service.{SigstoreService, SigstoreError};
+mount verum_registry.persistence.version_repository.{VersionRepository, lookup_version};
+mount verum_registry.domain.package.PackageScope;
+mount verum_registry.domain.sigstore_bundle.SigstoreBundleRecord;
+mount verum_registry.http.error_response.render_error;
+mount security.sigstore.types.SIGSTORE_BUNDLE_MEDIA_TYPE;
+mount security.sigstore.verify.{IdentityMatcher, ExpectedIdentity};
+
+const BUNDLE_CONTENT_TYPE: Text = SIGSTORE_BUNDLE_MEDIA_TYPE;
+
+/// GET /api/v3/packages/:scope/:name/:version/bundle
+pub async fn get_bundle(req: WeftRequest) -> Response
+    using [SigstoreService, VersionRepository, Database, Cache, Logger]
+{
+    let scope_text = req.path_param("scope").unwrap_or_else(|| "".to_text());
+    let name_text  = req.path_param("name").unwrap_or_else(|| "".to_text());
+    let version_text = req.path_param("version").unwrap_or_else(|| "".to_text());
+    let pkg_id_text = if scope_text.is_empty() { name_text.clone() }
+                      else { format!("{}/{}", scope_text, name_text).to_text() };
+    let pkg_id: PackageScope = match pkg_id_text.try_into() {
+        Ok(s)  => s,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid package scope".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let semver: base.semver.SemVer = match base.semver.parse_semver(&version_text) {
+        Ok(v)  => v,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid SemVer".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+
+    let v_row = match lookup_version(&VersionRepository, &pkg_id, &semver).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return render_error("not_found".to_text(),
+            format!("version {}@{}", pkg_id, version_text).to_text(), None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &format!("get_bundle: {e}").to_text());
+            return render_error("internal_error".to_text(),
+                "version lookup failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError);
+        }
+    };
+
+    let version_id = v_row.id_for_persistence; // lower-level FK column
+    match SigstoreService.fetch_bundle(version_id).await {
+        Ok(rec) => Response.text(rec.bundle_json)
+            .header("content-type", &BUNDLE_CONTENT_TYPE)
+            .header("cache-control", "public, max-age=31536000, immutable"),
+        Err(SigstoreError.NoBundle(_)) => render_error("not_found".to_text(),
+            "no Sigstore bundle on file for this version".to_text(), None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &format!("fetch_bundle: {e}").to_text());
+            render_error("internal_error".to_text(),
+                "bundle fetch failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError)
+        }
+    }
+}
+
+/// POST /api/v3/sigstore/verify
+///
+/// Body shape:
+/// ```json
+/// {
+///   "bundle": <SigstoreBundle JSON>,
+///   "expected": {
+///     "issuer":  "https://token.actions.githubusercontent.com",
+///     "subject": { "kind": "exact"|"glob"|"domain", "value": "..." }
+///   }
+/// }
+/// ```
+pub async fn verify_bundle(req: WeftRequest) -> Response
+    using [SigstoreService, HttpClient, Logger]
+{
+    let body: VerifyBody = match req.json().await {
+        Ok(b)  => b,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid JSON body".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let bundle = match security.sigstore.types.parse_sigstore_bundle(&body.bundle) {
+        Ok(b)  => b,
+        Err(e) => return render_error("validation_failed".to_text(),
+            format!("invalid bundle: {e}").to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let expected = match parse_expected(&body.expected) {
+        Ok(e)  => e,
+        Err(m) => return render_error("validation_failed".to_text(),
+            m, None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    match SigstoreService.verify_publish_bundle(&HttpClient, &bundle, &expected).await {
+        Ok(result) => {
+            let mut obj = encoding.json.JsonObject.new();
+            obj.insert("verified".to_text(), json_bool(true));
+            obj.insert("oidcIssuer".to_text(), json_string(result.oidc_issuer));
+            obj.insert("oidcSubject".to_text(), json_string(result.oidc_subject));
+            obj.insert("integratedTime".to_text(),
+                encoding.json.json_number(result.integrated_time as Float));
+            Response.json(&json_object(obj))
+        }
+        Err(e) => {
+            let mut obj = encoding.json.JsonObject.new();
+            obj.insert("verified".to_text(), json_bool(false));
+            obj.insert("reason".to_text(), json_string(format!("{e}").to_text()));
+            Response.json(&json_object(obj)).status(StatusCode.BadRequest)
+        }
+    }
+}
+
+// =============================================================================
+// DTOs
+// =============================================================================
+
+@derive(Deserialize)
+struct VerifyBody {
+    bundle:   JsonValue,
+    expected: ExpectedDto,
+}
+
+@derive(Deserialize)
+struct ExpectedDto {
+    issuer:  Text,
+    subject: SubjectDto,
+}
+
+@derive(Deserialize)
+struct SubjectDto {
+    kind:  Text,
+    value: Text,
+}
+
+fn parse_expected(d: &ExpectedDto) -> Result<ExpectedIdentity, Text> {
+    let matcher = match d.subject.kind.as_str() {
+        "exact"  => IdentityMatcher.Exact(d.subject.value.clone()),
+        "glob"   => IdentityMatcher.Glob(d.subject.value.clone()),
+        "domain" => IdentityMatcher.Domain(d.subject.value.clone()),
+        other    => return Err(format!("unknown subject matcher kind: {other}").to_text()),
+    };
+    Ok(ExpectedIdentity {
+        issuer:           d.issuer.clone(),
+        subject_matcher:  matcher,
+    })
+}

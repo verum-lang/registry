@@ -1,0 +1,119 @@
+// =============================================================================
+// verum_registry/domain/passkey.vr — Passkey domain entity (spec v3.0 §5.1.4)
+// =============================================================================
+//
+// Persistable form of a WebAuthn VerifiedCredential. Wraps
+// `core.security.webauthn::VerifiedCredential` with registry-specific
+// concerns: ULID stable id, FK to user, optional nickname, last-used
+// tracking, transports hints.
+//
+// Cloning detection (per WebAuthn §6.1.1): the registry tracks the
+// last observed `signCount` and rejects authentication assertions
+// whose presented signCount ≤ stored signCount (unless both are 0,
+// indicating the authenticator does not implement counters).
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "domain entity: persistable WebAuthn passkey with cloning-detection state",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.domain.passkey;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount collections.List;
+mount base.ulid.Ulid;
+mount time.rfc3339.Rfc3339Time;
+mount security.webauthn.types.{VerifiedCredential, AttestationFormat};
+
+mount verum_registry.domain.user.UserId;
+
+@derive(Serialize, Deserialize, Eq, Clone, Debug)
+public type Passkey is {
+    /// Stable registry-side identifier (ULID).
+    id:                 Ulid,
+    user_id:            UserId,
+    /// Authenticator-chosen credentialId; UNIQUE per registry.
+    credential_id:      List<Byte>,
+    /// COSE_Key bytes (canonical CBOR).
+    public_key_cose:    List<Byte>,
+    /// Negotiated COSE algorithm (-7 ES256 / -8 EdDSA / -257 RS256 / -37 PS256).
+    cose_alg:           Int,
+    /// 16-byte AAGUID identifying the authenticator model.
+    aaguid:             List<Byte> { len == 16 },
+    /// Last observed signCount; updated on every successful auth.
+    sign_count:         Int { >= 0 },
+    /// Backup-eligible bit at registration.
+    backup_eligible:    Bool,
+    /// Last observed backup-state bit.
+    backup_state:       Bool,
+    /// Attestation format observed at registration.
+    attestation_format: AttestationFormat,
+    /// User-friendly nickname (e.g., "Yubikey 5 — work").
+    nickname:           Maybe<Text>,
+    /// Authenticator transport hints.
+    transports:         List<Text>,
+    created_at:         Rfc3339Time,
+    last_used_at:       Maybe<Rfc3339Time>,
+};
+
+/// Build a fresh `Passkey` from a verified registration response.
+public fn passkey_from_verified_credential(
+    user_id: UserId,
+    cred:    VerifiedCredential,
+    nickname: Maybe<Text>,
+    now:     Rfc3339Time,
+) -> Passkey {
+    let mut aaguid_list: List<Byte> = List.with_capacity(16);
+    let mut i: Int = 0;
+    while i < 16 { aaguid_list.push(cred.aaguid[i]); i = i + 1; }
+    Passkey {
+        id:                 Ulid.now(),
+        user_id,
+        credential_id:      cred.credential_id,
+        public_key_cose:    cred.public_key_cose,
+        cose_alg:           cred.cose_alg,
+        aaguid:             aaguid_list,
+        sign_count:         cred.sign_count,
+        backup_eligible:    cred.backup_eligible,
+        backup_state:       cred.backup_state,
+        attestation_format: cred.attestation_format,
+        nickname,
+        transports:         List.new(),
+        created_at:         now,
+        last_used_at:       None,
+    }
+}
+
+/// Lift a `Passkey` back to a `VerifiedCredential` for use with
+/// `core.security.webauthn.authenticate.verify_authentication`.
+public fn passkey_to_verified_credential(p: &Passkey) -> VerifiedCredential {
+    let mut aaguid: [Byte; 16] = [0_u8; 16];
+    let mut i: Int = 0;
+    while i < 16 { aaguid[i] = p.aaguid[i]; i = i + 1; }
+    VerifiedCredential {
+        credential_id:        p.credential_id.clone(),
+        public_key_cose:      p.public_key_cose.clone(),
+        cose_alg:             p.cose_alg,
+        aaguid,
+        sign_count:           p.sign_count,
+        backup_eligible:      p.backup_eligible,
+        backup_state:         p.backup_state,
+        attestation_format:   p.attestation_format.clone(),
+        attestation_chain:    List.new(),
+        user_handle:          Some(p.user_id.0.as_bytes().to_list()),
+    }
+}

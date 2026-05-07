@@ -1,0 +1,209 @@
+// =============================================================================
+// verum_registry/persistence/passkey_repository.vr (spec v3.0 §6.1)
+// =============================================================================
+// CRUD operations for the `passkeys` table backing the WebAuthn
+// passwordless-login flow. Composes against
+// `core.database.postgres` + the compile-time `sql#"..."` meta-fn
+// for type-safe queries.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "Postgres CRUD for passkeys (WebAuthn VerifiedCredential)",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.passkey_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount collections.List;
+mount base.ulid.Ulid;
+mount time.rfc3339.{Rfc3339Time, now_utc};
+mount database.postgres.{AsyncPgPool, AsyncTransaction, PgError};
+mount security.webauthn.types.AttestationFormat;
+
+mount verum_registry.domain.passkey.Passkey;
+mount verum_registry.domain.user.UserId;
+
+// =============================================================================
+// Public API
+// =============================================================================
+
+public type PasskeyRepository is {};
+
+implement PasskeyRepository {
+    /// Insert a fresh passkey on registration.
+    public async fn insert(
+        &self,
+        p: &Passkey,
+    ) -> Result<(), PgError>
+        using [Database]
+    {
+        let attestation_text = attestation_format_to_text(&p.attestation_format);
+        sql#"
+            INSERT INTO passkeys (
+                id, user_id, credential_id, public_key_cose, cose_alg,
+                aaguid, sign_count, backup_eligible, backup_state,
+                attestation_format, nickname, transports,
+                created_at, last_used_at
+            ) VALUES (
+                ${p.id.0}, ${p.user_id.0}, ${&p.credential_id},
+                ${&p.public_key_cose}, ${p.cose_alg},
+                ${&p.aaguid}, ${p.sign_count},
+                ${p.backup_eligible}, ${p.backup_state},
+                ${&attestation_text}, ${&p.nickname},
+                ${&p.transports},
+                ${&p.created_at}, ${&p.last_used_at}
+            )
+        "#.execute().await.map(|_| ())
+    }
+
+    /// Find by the authenticator-chosen credential id (used during
+    /// authentication when allow_credentials is empty).
+    public async fn find_by_credential_id(
+        &self,
+        credential_id: &List<Byte>,
+    ) -> Result<Maybe<Passkey>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT id, user_id, credential_id, public_key_cose, cose_alg,
+                   aaguid, sign_count, backup_eligible, backup_state,
+                   attestation_format, nickname, transports,
+                   created_at, last_used_at
+            FROM passkeys
+            WHERE credential_id = ${credential_id}
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_passkey))
+    }
+
+    /// All passkeys for a user (settings UI).
+    public async fn find_by_user(
+        &self,
+        user_id: &UserId,
+    ) -> Result<List<Passkey>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT id, user_id, credential_id, public_key_cose, cose_alg,
+                   aaguid, sign_count, backup_eligible, backup_state,
+                   attestation_format, nickname, transports,
+                   created_at, last_used_at
+            FROM passkeys
+            WHERE user_id = ${user_id.0}
+            ORDER BY last_used_at DESC NULLS LAST, created_at DESC
+        "#.fetch_all().await.map(|rows| rows.into_iter().map(row_to_passkey).collect())
+    }
+
+    /// Update sign_count + backup_state + last_used_at after a
+    /// successful authentication. Used as the cloning-detection
+    /// commit point — the row's prior sign_count was already checked.
+    public async fn update_after_auth(
+        &self,
+        id: &Ulid,
+        new_sign_count: Int,
+        new_backup_state: Bool,
+        used_at: &Rfc3339Time,
+    ) -> Result<(), PgError>
+        using [Database]
+    {
+        sql#"
+            UPDATE passkeys
+               SET sign_count   = ${new_sign_count},
+                   backup_state = ${new_backup_state},
+                   last_used_at = ${used_at}
+             WHERE id = ${id.0}
+        "#.execute().await.map(|_| ())
+    }
+
+    /// Revoke (hard-delete) a passkey.
+    public async fn revoke(
+        &self,
+        user_id: &UserId,
+        passkey_id: &Ulid,
+    ) -> Result<Int, PgError>
+        using [Database]
+    {
+        sql#"
+            DELETE FROM passkeys
+             WHERE id = ${passkey_id.0}
+               AND user_id = ${user_id.0}
+        "#.execute().await
+    }
+
+    /// How many passkeys a user has — UX hint for "your last passkey
+    /// would leave you locked out" warnings.
+    public async fn count_by_user(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Int, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT COUNT(*)::BIGINT
+            FROM passkeys
+            WHERE user_id = ${user_id.0}
+        "#.fetch_one_scalar().await
+    }
+}
+
+// =============================================================================
+// Row → domain mapping
+// =============================================================================
+
+fn row_to_passkey(row: PasskeyRow) -> Passkey {
+    Passkey {
+        id:                 Ulid.parse(&row.id).unwrap_or_else(|_| Ulid.now()),
+        user_id:            UserId(row.user_id),
+        credential_id:      row.credential_id,
+        public_key_cose:    row.public_key_cose,
+        cose_alg:           row.cose_alg,
+        aaguid:             row.aaguid,
+        sign_count:         row.sign_count,
+        backup_eligible:    row.backup_eligible,
+        backup_state:       row.backup_state,
+        attestation_format: attestation_format_from_text(&row.attestation_format),
+        nickname:           row.nickname,
+        transports:         row.transports,
+        created_at:         row.created_at,
+        last_used_at:       row.last_used_at,
+    }
+}
+
+@derive(FromRow)
+type PasskeyRow is {
+    id:                 Text,
+    user_id:            Text,
+    credential_id:      List<Byte>,
+    public_key_cose:    List<Byte>,
+    cose_alg:           Int,
+    aaguid:             List<Byte>,
+    sign_count:         Int,
+    backup_eligible:    Bool,
+    backup_state:       Bool,
+    attestation_format: Text,
+    nickname:           Maybe<Text>,
+    transports:         List<Text>,
+    created_at:         Rfc3339Time,
+    last_used_at:       Maybe<Rfc3339Time>,
+};
+
+fn attestation_format_to_text(f: &AttestationFormat) -> Text {
+    security.webauthn.types.attestation_format_to_text(f)
+}
+
+fn attestation_format_from_text(s: &Text) -> AttestationFormat {
+    security.webauthn.types.attestation_format_from_text(s)
+}

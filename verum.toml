@@ -1,94 +1,112 @@
 # =============================================================================
-# verum.toml — registry cog manifest (v2.0)
+# verum.toml — registry cog manifest (v3.0)
 # =============================================================================
-# This is the registry's own cog manifest.  By the recursive
-# self-application discipline (spec §13), the registry serves cogs;
-# the registry IS a cog; the registry's cog is served by the
-# registry — captured by the Banach self-reference witness in
-# `src/main.vr`.
+# This is the registry's own cog manifest.  Per the recursive
+# self-application discipline (spec v3.0 §13), the registry serves
+# cogs; the registry IS a cog; the registry's cog is served by the
+# registry. v3.0 strengthens the self-reference: the registry's own
+# publishes go through the Sigstore keyless pathway, making every
+# released registry version end-to-end Sigstore-verified.
 # =============================================================================
 
 [cog]
 name        = "verum-registry"
-version     = "2.0.0"
-edition     = "2025"
+version     = "3.0.0"
+edition     = "2026"
 authors     = ["Verum Language Team"]
-description = "The canonical Verum package registry — vcogs.io reference implementation"
+description = "The canonical Verum package registry — vcogs.io reference implementation (v3.0 with Sigstore + TUF + WebAuthn)"
 license     = "Apache-2.0"
 repository  = "https://github.com/verum-lang/registry"
 homepage    = "https://vcogs.io"
-keywords    = ["registry", "package-manager", "transparency-log"]
+keywords    = ["registry", "package-manager", "transparency-log", "sigstore", "tuf", "webauthn"]
 categories  = ["development-tools"]
 
 [language]
 profile = "application"
 
 # =============================================================================
-# Dependencies — composed against the enriched stdlib at every layer
+# Dependencies — composed against the mature stdlib at every layer
 # =============================================================================
 
 [dependencies]
 # All stdlib facilities — single dependency on the stdlib bundle.
-# Specific modules used (per spec §4):
+# Specific modules used (per spec v3.0 §4):
 #
 #   * core.configuration.toml          — manifest parsing
 #   * core.cog.manifest                — typed CogManifest
+#   * core.cog.{sign, archive, resolve} — G5 (now shipped)
 #   * core.base.semver_constraint      — dependency constraints
 #   * core.base.semver                 — version comparison
 #   * core.base.string_distance        — typosquatting Damerau-Levenshtein
 #   * core.base.ulid                   — monotonic IDs
 #   * core.archive.{tar, zstd}         — source bundles
 #   * core.compress.zstd               — archive decompression
-#   * core.security.transparency_log   — sumdb (RFC 6962 + RFC 9162)
+#   * core.security.transparency_log   — local sumdb (RFC 6962 + RFC 9162)
 #   * core.security.merkle             — Merkle-tree primitive
-#   * core.security.ecc.ed25519        — cog signing
+#   * core.security.ecc.{ed25519, p256} — signing
 #   * core.security.hash.sha256        — content addressing
 #   * core.security.password_hash      — Argon2id token hashing
-#   * core.security.oidc               — OIDC trusted publishing (G6)
-#   * core.security.provenance         — SLSA + in-toto (G7)
+#   * core.security.oidc               — OIDC discovery + JWKS  (G6 shipped)
+#   * core.security.provenance         — SLSA + in-toto + DSSE  (G7 shipped)
+#   * core.security.x509               — RFC 5280 chain validation + revocation
+#   * core.security.tuf                — TUF spec v1.0+ client + server  (NEW v3.0)
+#   * core.security.sigstore           — Rekor v2 + Fulcio + verify       (NEW v3.0)
+#   * core.security.webauthn           — WebAuthn L3 + FIDO2              (NEW v3.0)
 #   * core.database.postgres           — connection pool + sql# meta-fn
 #   * core.database.postgres.migrations — schema evolution
 #   * core.net.weft                    — HTTP/2 server + middleware
-#   * core.cache.redis                 — cache adapter
+#   * core.net.http                    — HTTP client (Sigstore Rekor / Fulcio)
+#   * core.cache.redis                 — cache + WebAuthn challenge store
 #   * core.search.meilisearch          — search adapter
-#   * core.storage.s3                  — object store adapter
+#   * core.storage.s3                  — object store (source archives + bundles)
 #   * core.tracing                     — OTLP traces
 #   * core.metrics                     — Prometheus exposition
 #   * core.time.{rfc3339, system_time} — timestamps
-#   * core.encoding.{json, hex}        — encoding adapters
-verum-stdlib = { version = "^0.4" }
+#   * core.encoding.{json, jcs, hex, base64, pem, cbor} — encoding adapters
+verum-stdlib = { version = "^0.5" }
 
 [dev_dependencies]
-# Test helpers; minimal — the registry's tests run integration-heavy.
 
 [build_dependencies]
-# None — the registry is a pure-Verum cog with no native build steps.
 
 # =============================================================================
 # Feature flags
 # =============================================================================
 
 [features]
-default = ["postgres", "s3-aws", "redis-cluster"]
+default = [
+    "postgres",
+    "s3-aws",
+    "redis-cluster",
+    "sigstore-keyless",
+    "webauthn-passkeys",
+    "tuf-rotation",
+]
 
-# Backend selection — alternative drivers can be plugged in.
+# Backend selection
 postgres      = []
 s3-aws        = []
 s3-minio      = []
 redis-cluster = []
 redis-single  = []
 
-# Optional subsystems.
-oidc-trusted-publishing = []
+# v3.0 subsystems
+sigstore-keyless        = []   # Sigstore Bundle publishing pathway
+webauthn-passkeys       = []   # WebAuthn passwordless login
+tuf-rotation            = []   # TUF metadata distribution + root rotation
+
+# Optional subsystems (legacy + special)
+oidc-trusted-publishing = []   # legacy OIDC pathway (no Sigstore)
 slsa-provenance         = []
 typosquatting-strict    = []
+post-quantum-pq         = []   # core.security.pq integration
 
 # =============================================================================
 # Build profiles
 # =============================================================================
 
 [profile.dev]
-tier              = "0"      # VBC interpreter for fast iteration
+tier              = "0"
 verification      = "runtime"
 opt_level         = 0
 debug             = true
@@ -100,7 +118,7 @@ codegen_units     = 256
 cbgr_checks       = "all"
 
 [profile.release]
-tier              = "2"      # AOT for production
+tier              = "2"
 verification      = "runtime"
 opt_level         = 3
 debug             = false
@@ -128,22 +146,33 @@ platforms          = [
 ]
 
 # =============================================================================
+# Trusted publishing (v3.0 Sigstore-keyless pathway for the registry's own releases)
+# =============================================================================
+
+[publish.trusted_publishers]
+
+[[publish.trusted_publishers.github]]
+repository  = "verum-lang/registry"
+workflow    = ".github/workflows/release.yml"
+ref         = "refs/tags/v*"
+environment = "production"
+
+# =============================================================================
 # Architectural intent — declared at the manifest level
 # =============================================================================
 #
-# The registry is a `Lifecycle.Theorem("v2.0")` cog with
+# The registry is a `Lifecycle.Theorem("v3.0")` cog with
 # CognitiveSubstrate.AnalyticDecompositional, FormalAnchoring
 # .CurryHowardLawvere, ExecutabilitySense.StructuralReadiness, and a
-# non-trivial SelfReferenceWitness (the registry serves itself).
-# These declarations live in `src/main.vr`'s `@arch_module(...)` and
-# are mirrored here as documentation for tooling that does not yet
-# parse Verum source.
+# non-trivial SelfReferenceWitness (the registry serves itself —
+# Sigstore-verified). These declarations live in `src/main.vr`'s
+# `@arch_module(...)` and are mirrored here for tooling.
 
 [meta.cve]
-lifecycle              = "T"
-substrate              = "analytic_decompositional"
-anchoring              = "curry_howard_lawvere"
-e_sense                = "structural_readiness"
-self_reference_class   = "banach"
-self_reference_operator = "verum_registry.services.publish_service"
-self_reference_fixpoint = "verum_registry@2.0.0"
+lifecycle               = "T"
+substrate               = "analytic_decompositional"
+anchoring               = "curry_howard_lawvere"
+e_sense                 = "structural_readiness"
+self_reference_class    = "banach"
+self_reference_operator = "verum_registry.services.publish_service.publish_with_sigstore"
+self_reference_fixpoint = "verum_registry@3.0.0"

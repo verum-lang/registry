@@ -1,0 +1,152 @@
+// =============================================================================
+// verum_registry/persistence/sigstore_bundle_repository.vr (spec v3.0 §6.1)
+// =============================================================================
+// CRUD for `sigstore_bundles`. Composes against
+// `core.database.postgres` for type-safe queries.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "Postgres CRUD for sigstore_bundles (Sigstore-keyless publishes)",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.sigstore_bundle_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
+mount collections.List;
+mount base.ulid.Ulid;
+mount time.rfc3339.Rfc3339Time;
+mount database.postgres.PgError;
+
+mount verum_registry.domain.sigstore_bundle.{SigstoreBundleRecord, Hex64};
+
+public type SigstoreBundleRepository is {};
+
+implement SigstoreBundleRepository {
+    public async fn insert(
+        &self,
+        rec: &SigstoreBundleRecord,
+    ) -> Result<(), PgError>
+        using [Database]
+    {
+        sql#"
+            INSERT INTO sigstore_bundles (
+                id, version_id, bundle_json,
+                envelope_sha256, cert_chain_leaf_sha256,
+                rekor_log_index, integrated_time,
+                oidc_issuer, oidc_subject, created_at
+            ) VALUES (
+                ${rec.id.0}, ${rec.version_id}, ${&rec.bundle_json},
+                ${&rec.envelope_sha256.0}, ${&rec.cert_chain_leaf_sha256.0},
+                ${rec.rekor_log_index}, ${&rec.integrated_time},
+                ${&rec.oidc_issuer}, ${&rec.oidc_subject},
+                ${&rec.created_at}
+            )
+        "#.execute().await.map(|_| ())
+    }
+
+    public async fn fetch_by_version_id(
+        &self,
+        version_id: Int,
+    ) -> Result<Maybe<SigstoreBundleRecord>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT id, version_id, bundle_json,
+                   envelope_sha256, cert_chain_leaf_sha256,
+                   rekor_log_index, integrated_time,
+                   oidc_issuer, oidc_subject, created_at
+            FROM sigstore_bundles
+            WHERE version_id = ${version_id}
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_record))
+    }
+
+    /// Lookup by SHA-256 of the canonical envelope — used by the
+    /// "verify any bundle bytes" admin/diagnostic endpoint.
+    pub async fn find_by_envelope_hash(
+        &self,
+        envelope_sha256: &Hex64,
+    ) -> Result<Maybe<SigstoreBundleRecord>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT id, version_id, bundle_json,
+                   envelope_sha256, cert_chain_leaf_sha256,
+                   rekor_log_index, integrated_time,
+                   oidc_issuer, oidc_subject, created_at
+            FROM sigstore_bundles
+            WHERE envelope_sha256 = ${&envelope_sha256.0}
+            LIMIT 1
+        "#.fetch_optional().await.map(|opt| opt.map(row_to_record))
+    }
+
+    /// Audit query: list all bundles published under a given OIDC
+    /// identity. Drives the "audit by publisher" UX.
+    public async fn list_by_identity(
+        &self,
+        issuer: &Text,
+        subject: &Text,
+        limit: Int,
+    ) -> Result<List<SigstoreBundleRecord>, PgError>
+        using [Database]
+    {
+        sql#"
+            SELECT id, version_id, bundle_json,
+                   envelope_sha256, cert_chain_leaf_sha256,
+                   rekor_log_index, integrated_time,
+                   oidc_issuer, oidc_subject, created_at
+            FROM sigstore_bundles
+            WHERE oidc_issuer  = ${issuer}
+              AND oidc_subject = ${subject}
+            ORDER BY rekor_log_index DESC
+            LIMIT ${limit}
+        "#.fetch_all().await.map(|rows| rows.into_iter().map(row_to_record).collect())
+    }
+}
+
+// =============================================================================
+// Row → domain
+// =============================================================================
+
+fn row_to_record(row: BundleRow) -> SigstoreBundleRecord {
+    SigstoreBundleRecord {
+        id:                     Ulid.parse(&row.id).unwrap_or_else(|_| Ulid.now()),
+        version_id:             row.version_id,
+        bundle_json:            row.bundle_json,
+        envelope_sha256:        Hex64(row.envelope_sha256),
+        cert_chain_leaf_sha256: Hex64(row.cert_chain_leaf_sha256),
+        rekor_log_index:        row.rekor_log_index,
+        integrated_time:        row.integrated_time,
+        oidc_issuer:            row.oidc_issuer,
+        oidc_subject:           row.oidc_subject,
+        created_at:             row.created_at,
+    }
+}
+
+@derive(FromRow)
+type BundleRow is {
+    id:                     Text,
+    version_id:             Int,
+    bundle_json:            Text,
+    envelope_sha256:        Text,
+    cert_chain_leaf_sha256: Text,
+    rekor_log_index:        Int,
+    integrated_time:        Rfc3339Time,
+    oidc_issuer:            Text,
+    oidc_subject:           Text,
+    created_at:             Rfc3339Time,
+};

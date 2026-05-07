@@ -1,0 +1,343 @@
+// =============================================================================
+// verum_registry/audit/cve_bundle.vr — dual-audience CVE bundle
+// =============================================================================
+//
+// Spec: §12.1; architecture-types/dual-audience.md, audit-protocol.md
+//
+// Generates a CVE audit bundle for a (cog, version) pair in two
+// projections:
+//   - DeveloperSummary  — terse, ≤10 lines, suitable for the
+//                         package page hover card.
+//   - AuditorJson       — exhaustive, schema-versioned JSON, suitable
+//                         for archival + automated consumption.
+//
+// Both projections compute from the same canonical CogAuditRecord
+// — guaranteeing zero drift between the views.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "dual-audience CVE bundle generation (developer summary + auditor JSON)".to_text(),
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.audit.cve_bundle;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount collections.List;
+mount encoding.json.{
+    JsonValue, JsonObject, json_object, json_string, json_bool,
+    json_array, json_number, json_null,
+};
+mount time.rfc3339.{Rfc3339Time, format_rfc3339};
+mount architecture.types.Lifecycle;
+
+mount verum_registry.audit.anti_patterns.{
+    AntiPatternRoster, AntiPatternFinding, AntiPatternVerdict, AntiPatternId,
+    AuditError, ap_id_text, ap_name,
+};
+
+// =============================================================================
+// CVE-closure axes
+// =============================================================================
+
+@derive(Eq, Clone, Debug)
+public type AxisVerdict is
+    /// All obligations on the axis discharged.
+    | Closed
+    /// Discharged with stated conditions.
+    | Conditional(Text)
+    /// Outstanding — no discharge.
+    | Open(Text);
+
+public fn axis_verdict_text(v: &AxisVerdict) -> Text {
+    match v {
+        AxisVerdict.Closed         => "Closed".to_text(),
+        AxisVerdict.Conditional(_) => "Conditional".to_text(),
+        AxisVerdict.Open(_)        => "Open".to_text(),
+    }
+}
+
+// =============================================================================
+// Per-layer verdict (L0..L6)
+// =============================================================================
+
+@derive(Eq, Clone, Debug)
+public type LayerVerdict is
+    | Pass
+    | Fail(Text)
+    /// Layer-not-applicable — surfaces as `n/a` rather than `pass`
+    /// to keep the dual-audience semantics honest. Example: a
+    /// Lifecycle.Definition cog has no L1 proof term.
+    | NotApplicable(Text);
+
+public fn layer_verdict_text(v: &LayerVerdict) -> Text {
+    match v {
+        LayerVerdict.Pass             => "pass".to_text(),
+        LayerVerdict.Fail(_)          => "fail".to_text(),
+        LayerVerdict.NotApplicable(_) => "n/a".to_text(),
+    }
+}
+
+// =============================================================================
+// CveBundle — canonical input to dual-audience renderers
+// =============================================================================
+
+@derive(Clone, Debug)
+public type CveBundle is {
+    /// "scope/name@version".
+    cog: Text,
+    lifecycle: Lifecycle,
+    cve_constructive: AxisVerdict,
+    cve_verifiable:   AxisVerdict,
+    cve_executable:   AxisVerdict,
+    layers: SevenLayers,
+    anti_patterns: AntiPatternRoster,
+    /// Top-level verdict — `true` iff every layer passes AND every
+    /// anti-pattern is `Ok` AND every axis is `Closed`. This is the
+    /// `verum audit --bundle` `verdict: load-bearing` truth value.
+    load_bearing: Bool,
+    audited_at: Rfc3339Time,
+};
+
+@derive(Clone, Debug)
+public type SevenLayers is {
+    l0_object:      LayerVerdict,
+    l1_proof_term:  LayerVerdict,
+    l2_proof_method:LayerVerdict,
+    l3_meta_theory: LayerVerdict,
+    l4_arch_shape:  LayerVerdict,
+    l5_audit_report:LayerVerdict,
+    l6_articulation:LayerVerdict,
+};
+
+/// Compute the load-bearing verdict — true iff every check below
+/// passes. This is the canonical `[T]` Theorem witness.
+pub fn compute_load_bearing(
+    constructive: &AxisVerdict,
+    verifiable:   &AxisVerdict,
+    executable:   &AxisVerdict,
+    layers:       &SevenLayers,
+    roster:       &AntiPatternRoster,
+) -> Bool {
+    let cve_ok =
+        is_closed(constructive) && is_closed(verifiable) && is_closed(executable);
+    let layers_ok =
+        is_passing(&layers.l0_object) &&
+        is_passing(&layers.l1_proof_term) &&
+        is_passing(&layers.l2_proof_method) &&
+        is_passing(&layers.l3_meta_theory) &&
+        is_passing(&layers.l4_arch_shape) &&
+        is_passing(&layers.l5_audit_report) &&
+        is_passing(&layers.l6_articulation);
+    let ap_ok = roster.error_count == 0;
+    cve_ok && layers_ok && ap_ok
+}
+
+fn is_closed(v: &AxisVerdict) -> Bool {
+    match v { AxisVerdict.Closed => true, _ => false }
+}
+
+fn is_passing(v: &LayerVerdict) -> Bool {
+    match v {
+        LayerVerdict.Pass | LayerVerdict.NotApplicable(_) => true,
+        _ => false,
+    }
+}
+
+// =============================================================================
+// Bundle generation
+// =============================================================================
+
+pub async fn generate_cve_bundle(
+    cog_id: Text,
+    lifecycle: Lifecycle,
+    constructive: AxisVerdict,
+    verifiable:   AxisVerdict,
+    executable:   AxisVerdict,
+    layers: SevenLayers,
+    roster: AntiPatternRoster,
+    now: Rfc3339Time,
+) -> CveBundle {
+    let load_bearing = compute_load_bearing(
+        &constructive, &verifiable, &executable, &layers, &roster,
+    );
+    CveBundle {
+        cog: cog_id,
+        lifecycle,
+        cve_constructive: constructive,
+        cve_verifiable:   verifiable,
+        cve_executable:   executable,
+        layers,
+        anti_patterns: roster,
+        load_bearing,
+        audited_at: now,
+    }
+}
+
+// =============================================================================
+// Developer summary — terse text projection
+// =============================================================================
+
+@derive(Clone, Debug)
+public type DeveloperSummary is {
+    text: Text,
+}
+
+pub fn render_developer_summary(b: &CveBundle) -> DeveloperSummary {
+    let glyph = lifecycle_glyph(&b.lifecycle);
+    let cve = format!("{} {} {}",
+        if is_closed(&b.cve_constructive) { "✓" } else { "✗" },
+        if is_closed(&b.cve_verifiable)   { "✓" } else { "✗" },
+        if is_closed(&b.cve_executable)   { "✓" } else { "✗" });
+    let ap = format!("{}/40 ok",
+        40 - b.anti_patterns.error_count - b.anti_patterns.warning_count);
+    let verdict = if b.load_bearing { "load-bearing ✓" } else { "non-load-bearing ✗" };
+    DeveloperSummary {
+        text: format!(
+            "{}\n  Lifecycle:  {} {}\n  CVE:        {}\n  AP roster:  {}\n  Audit:      {}",
+            b.cog, glyph, lifecycle_label(&b.lifecycle), cve, ap, verdict,
+        ).to_text(),
+    }
+}
+
+fn lifecycle_glyph(l: &Lifecycle) -> Text {
+    match l {
+        Lifecycle.Theorem(_)        => "[T]".to_text(),
+        Lifecycle.Definition         => "[D]".to_text(),
+        Lifecycle.Conditional        => "[C]".to_text(),
+        Lifecycle.Postulate          => "[P]".to_text(),
+        Lifecycle.Hypothesis         => "[H]".to_text(),
+        Lifecycle.Interpretation     => "[I]".to_text(),
+        Lifecycle.Retracted          => "[✗]".to_text(),
+    }
+}
+
+fn lifecycle_label(l: &Lifecycle) -> Text {
+    match l {
+        Lifecycle.Theorem(v)         => format!("Theorem({v})").to_text(),
+        Lifecycle.Definition         => "Definition".to_text(),
+        Lifecycle.Conditional        => "Conditional".to_text(),
+        Lifecycle.Postulate          => "Postulate".to_text(),
+        Lifecycle.Hypothesis         => "Hypothesis".to_text(),
+        Lifecycle.Interpretation     => "Interpretation".to_text(),
+        Lifecycle.Retracted          => "Retracted".to_text(),
+    }
+}
+
+// =============================================================================
+// Auditor JSON — exhaustive, schema-versioned
+// =============================================================================
+
+@derive(Clone, Debug)
+public type AuditorJson is {
+    value: JsonValue,
+}
+
+const SCHEMA_VERSION: Text = "1.0";
+
+pub fn render_auditor_json(b: &CveBundle) -> AuditorJson {
+    let mut obj: JsonObject = JsonObject.new();
+    obj.insert("schemaVersion".to_text(), json_string(SCHEMA_VERSION.to_text()));
+    obj.insert("cog".to_text(),           json_string(b.cog.clone()));
+    obj.insert("lifecycle".to_text(),     lifecycle_to_json(&b.lifecycle));
+    obj.insert("cveClosure".to_text(),    cve_closure_to_json(b));
+    obj.insert("layers".to_text(),        layers_to_json(&b.layers));
+    obj.insert("antiPatterns".to_text(),  ap_roster_to_json(&b.anti_patterns));
+    obj.insert("loadBearing".to_text(),   json_bool(b.load_bearing));
+    obj.insert("auditedAt".to_text(),     json_string(format_rfc3339(&b.audited_at)));
+    AuditorJson { value: json_object(obj) }
+}
+
+fn lifecycle_to_json(l: &Lifecycle) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("glyph".to_text(), json_string(lifecycle_glyph(l)));
+    o.insert("name".to_text(),  json_string(lifecycle_label(l)));
+    if let Lifecycle.Theorem(v) = l {
+        o.insert("version".to_text(), json_string(v.clone()));
+    }
+    json_object(o)
+}
+
+fn cve_closure_to_json(b: &CveBundle) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("constructive".to_text(), axis_to_json(&b.cve_constructive));
+    o.insert("verifiable".to_text(),   axis_to_json(&b.cve_verifiable));
+    o.insert("executable".to_text(),   axis_to_json(&b.cve_executable));
+    json_object(o)
+}
+
+fn axis_to_json(a: &AxisVerdict) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("verdict".to_text(), json_string(axis_verdict_text(a)));
+    match a {
+        AxisVerdict.Closed         => {}
+        AxisVerdict.Conditional(c) => { o.insert("conditions".to_text(), json_string(c.clone())); }
+        AxisVerdict.Open(reason)   => { o.insert("reason".to_text(),     json_string(reason.clone())); }
+    }
+    json_object(o)
+}
+
+fn layers_to_json(l: &SevenLayers) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("L0".to_text(), layer_to_json(&l.l0_object));
+    o.insert("L1".to_text(), layer_to_json(&l.l1_proof_term));
+    o.insert("L2".to_text(), layer_to_json(&l.l2_proof_method));
+    o.insert("L3".to_text(), layer_to_json(&l.l3_meta_theory));
+    o.insert("L4".to_text(), layer_to_json(&l.l4_arch_shape));
+    o.insert("L5".to_text(), layer_to_json(&l.l5_audit_report));
+    o.insert("L6".to_text(), layer_to_json(&l.l6_articulation));
+    json_object(o)
+}
+
+fn layer_to_json(l: &LayerVerdict) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("verdict".to_text(), json_string(layer_verdict_text(l)));
+    match l {
+        LayerVerdict.Pass             => {}
+        LayerVerdict.Fail(r)          => { o.insert("reason".to_text(), json_string(r.clone())); }
+        LayerVerdict.NotApplicable(r) => { o.insert("reason".to_text(), json_string(r.clone())); }
+    }
+    json_object(o)
+}
+
+fn ap_roster_to_json(r: &AntiPatternRoster) -> JsonValue {
+    let mut arr: List<JsonValue> = List.with_capacity(r.findings.len());
+    let mut i: Int = 0;
+    while i < r.findings.len() {
+        arr.push(ap_finding_to_json(&r.findings[i]));
+        i = i + 1;
+    }
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("errorCount".to_text(),   json_number(r.error_count as Float));
+    o.insert("warningCount".to_text(), json_number(r.warning_count as Float));
+    o.insert("findings".to_text(),     json_array(arr));
+    json_object(o)
+}
+
+fn ap_finding_to_json(f: &AntiPatternFinding) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("id".to_text(),   json_string(ap_id_text(&f.id)));
+    o.insert("name".to_text(), json_string(ap_name(&f.id)));
+    let (verdict_text, payload) = match &f.verdict {
+        AntiPatternVerdict.Ok          => ("ok".to_text(),      None),
+        AntiPatternVerdict.Warning(m)  => ("warning".to_text(), Some(m.clone())),
+        AntiPatternVerdict.Error(m)    => ("error".to_text(),   Some(m.clone())),
+    };
+    o.insert("verdict".to_text(), json_string(verdict_text));
+    if let Some(m) = payload { o.insert("message".to_text(), json_string(m)); }
+    if let Some(c) = &f.cite { o.insert("cite".to_text(), json_string(c.clone())); }
+    json_object(o)
+}

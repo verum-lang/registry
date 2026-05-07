@@ -1,18 +1,39 @@
 // =============================================================================
-// verum_registry/domain/mod.vr — domain entities (spec §5)
+// verum_registry/domain/mod.vr — domain entities (spec §6)
 // =============================================================================
-//
 // Re-exports domain types so callers `mount verum_registry.domain.*`
 // have everything in scope.
+//
+// **ATS-V articulation.** Domain layer is the registry's
+// *boundary* — the surface where wire formats meet typed Verum
+// records. Foundation = ZfcTwoInacc; Stratum = LFnd (foundational —
+// only refinement-typed records); Tier = Check (no runtime
+// behaviour, only types); Lifecycle = Definition (boundary by
+// fiat). No Capability exposed (pure-types layer).
 // =============================================================================
 
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
     stratum:       MsfsStratum.LFnd,
+    at_tier:       Tier.Check,
     lifecycle:     Lifecycle.Definition,
+    exposes:       [],
+    requires:      [],
+    composes_with: [
+        "core.architecture.types".to_text(),
+        "core.base.semver".to_text(),
+        "core.base.ulid".to_text(),
+        "core.cog.manifest".to_text(),
+        "core.security.webauthn".to_text(),
+        "core.security.sigstore".to_text(),
+        "core.security.tuf".to_text(),
+        "core.security.provenance".to_text(),
+        "core.time.rfc3339".to_text(),
+    ],
+    strict:        true,
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
-            role: "domain layer entry point — refinement-typed records over stdlib primitives",
+            role: "domain layer entry point — refinement-typed records over stdlib primitives".to_text(),
             k_min: CveThresholdK.FullWitness,
             v_min: CveThresholdV.TypecheckPlusTests,
             e_min: CveThresholdE.StructurallyReady,
@@ -29,7 +50,7 @@ public mount verum_registry.domain.package.{
     PackageScope, PackageRecord, Keyword, SpdxExpression,
 };
 public mount verum_registry.domain.version.{
-    PackageVersion, Hex64, VerificationLevel,
+    PackageVersion, PublishIdentity, Hex64, VerificationLevel,
 };
 public mount verum_registry.domain.user.{
     User, UserId, Username, EmailAddress,
@@ -47,3 +68,13 @@ public mount verum_registry.domain.errors.{
     PublishError, SearchError, SumdbError, AuthError,
     ProvenanceError, ResolveError,
 };
+public mount verum_registry.domain.passkey.{
+    Passkey, passkey_from_verified_credential, passkey_to_verified_credential,
+};
+public mount verum_registry.domain.sigstore_bundle.{
+    SigstoreBundleRecord, sigstore_bundle_record_new,
+};
+public mount verum_registry.domain.tuf_state.{
+    TufRootSnapshot, TufSignedMetadata, role_to_db_text,
+};
+public mount verum_registry.domain.cog_audit_record.{CogAuditRecord};

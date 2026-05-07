@@ -1,20 +1,53 @@
 // =============================================================================
-// verum_registry/services/mod.vr — service layer
+// verum_registry/services/mod.vr — service layer (spec §8)
 // =============================================================================
-// Spec: §7
 //
-// The service layer is the registry's business-logic core. Each service
-// is a Verum cog with a declared `@arch_module(...)` Shape; CVE
-// ShapeDeclarations are mandatory.
+// **ATS-V articulation.** The service layer is the registry's
+// *business-logic core*. Stratum = LCls (uses classical reasoning
+// for transaction invariants + cryptographic verification).
+// Tier = Aot (real I/O, real crypto). Capabilities required:
+// every concrete capability the registry offers (Network in/out,
+// Persist Postgres+S3+Ledger, Spawn for publish-pipeline phases,
+// TimeBound for short-lived sessions/certs). Composes against the
+// full security + cog stack.
 // =============================================================================
 
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
-    stratum:       MsfsStratum.LFnd,
-    lifecycle:     Lifecycle.Theorem("v2.0"),
+    stratum:       MsfsStratum.LCls,
+    at_tier:       Tier.Aot,
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    exposes: [
+        Capability.Network(NetProtocol.Http2, NetDirection.Inbound),
+        Capability.Network(NetProtocol.Http,  NetDirection.Outbound),
+        Capability.Persist(PersistenceMedium.Postgres),
+        Capability.Persist(PersistenceMedium.S3),
+        Capability.Persist(PersistenceMedium.Ledger),
+        Capability.Spawn(TaskLifetime.Bounded),
+        Capability.TimeBound(Duration.from_minutes(15)),
+    ],
+    requires: [
+        Capability.Read(ResourceTag.Filesystem),
+    ],
+    composes_with: [
+        "core.cog.manifest".to_text(),
+        "core.cog.sign".to_text(),
+        "core.cog.archive".to_text(),
+        "core.cog.resolve".to_text(),
+        "core.security.sigstore".to_text(),
+        "core.security.tuf".to_text(),
+        "core.security.webauthn".to_text(),
+        "core.security.x509".to_text(),
+        "core.security.oidc".to_text(),
+        "core.security.provenance".to_text(),
+        "core.security.transparency_log".to_text(),
+        "core.archive.tar".to_text(),
+        "core.compress.zstd".to_text(),
+    ],
+    strict:        true,
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
-            role: "service-layer entry point + ServiceRegistry assembly",
+            role: "service-layer entry point — publish + search + auth + sumdb + sigstore + tuf + webauthn + audit + provenance".to_text(),
             k_min: CveThresholdK.FullWitness,
             v_min: CveThresholdV.NamedCertification,
             e_min: CveThresholdE.StructurallyReady,
@@ -32,17 +65,18 @@ public mount verum_registry.services.search_service.{SearchService, SearchQuery,
 public mount verum_registry.services.sumdb_service.{SumdbService, SumdbLookupResult};
 public mount verum_registry.services.auth_service.{AuthService, AuthenticatedUser};
 public mount verum_registry.services.provenance_service.{ProvenanceService};
+public mount verum_registry.services.sigstore_service.{SigstoreService, SigstoreError};
+public mount verum_registry.services.tuf_service.{TufService, TufKeyMaterial, TufError};
+public mount verum_registry.services.webauthn_service.{WebAuthnService, WebAuthnServiceError};
 
-// =============================================================================
-// ServiceRegistry — the bundle wired up by main.vr
-// =============================================================================
-//
-// `using` clauses in handlers receive references into this registry.
-// One instance per registry process; immutable after construction.
 public type ServiceRegistry is {
     publish:    PublishService,
     search:     SearchService,
     sumdb:      SumdbService,
     auth:       AuthService,
     provenance: ProvenanceService,
+    sigstore:   SigstoreService,
+    tuf:        TufService,
+    webauthn:   WebAuthnService,
+    audit:      verum_registry.audit.AuditService,
 };

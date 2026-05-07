@@ -1,0 +1,218 @@
+// =============================================================================
+// verum_registry/services/sigstore_service.vr (spec v3.0 §7.2)
+// =============================================================================
+//
+// End-to-end Sigstore Bundle verification + persistence. Used by:
+//   - PublishService Phase 1b — verifying publisher-supplied bundles
+//   - HTTP /api/v3/packages/.../bundle — serving stored bundles
+//   - HTTP /api/v3/sigstore/verify — server-side verify helper for
+//     constrained clients
+//
+// Composes against:
+//   - core.security.sigstore.{verify, types, rekor}  for verification
+//   - core.security.tuf  for trust-root distribution
+//   - verum_registry.persistence.sigstore_bundle_repository  for storage
+//
+// The trust root is loaded at startup from TUF metadata (Fulcio CA +
+// Rekor pubkey). It refreshes on every TUF root rotation (see
+// TufService.rotate_root callback).
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "Sigstore Bundle verification + persistence service",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.sigstore_service;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
+mount collections.List;
+mount sync.rwlock.RwLock;
+mount time.rfc3339.now_utc;
+mount encoding.json.{encode as json_encode};
+mount encoding.hex.encode as hex_encode;
+mount encoding.jcs.canonicalize as jcs_canonicalize;
+mount security.hash.sha256.digest as sha256_digest;
+mount security.sigstore.types.{
+    SigstoreBundle, SIGSTORE_BUNDLE_MEDIA_TYPE,
+};
+mount security.sigstore.verify.{
+    SigstoreTrustRoot, ExpectedIdentity, IdentityMatcher,
+    ValidationResult, SigstoreVerifyError, verify_bundle,
+};
+mount net.http.HttpClient;
+
+mount verum_registry.domain.sigstore_bundle.{
+    SigstoreBundleRecord, sigstore_bundle_record_new, Hex64,
+};
+mount verum_registry.persistence.sigstore_bundle_repository.SigstoreBundleRepository;
+
+// =============================================================================
+// Service
+// =============================================================================
+
+@derive(Debug)
+public type SigstoreService is {
+    /// Pinned trust root sourced from TUF metadata. Held behind an
+    /// RwLock so the TUF refresh ticker can swap it atomically.
+    trust_root: RwLock<SigstoreTrustRoot>,
+};
+
+public type SigstoreError is
+    | Verify(SigstoreVerifyError)
+    | Storage(Text)
+    | NoBundle(Int)
+    | CanonicalisationFailed(Text);
+
+implement Display for SigstoreError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FormatError> {
+        match self {
+            Verify(e)                  => f.write_str(f"sigstore-svc: {e}".as_str()),
+            Storage(reason)            => f.write_str(f"sigstore-svc: storage: {reason}".as_str()),
+            NoBundle(version_id)       => f.write_str(f"sigstore-svc: no bundle for version_id={version_id}".as_str()),
+            CanonicalisationFailed(r)  => f.write_str(f"sigstore-svc: canonicalisation: {r}".as_str()),
+        }
+    }
+}
+
+implement Debug for SigstoreError {
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+}
+
+implement SigstoreService {
+    public fn new(trust_root: SigstoreTrustRoot) -> SigstoreService {
+        SigstoreService { trust_root: RwLock.new(trust_root) }
+    }
+
+    /// Atomically swap the pinned trust root. Called when the TUF
+    /// service detects a root rotation that updated either the
+    /// Fulcio CA or the Rekor pubkey targets.
+    public async fn replace_trust_root(&self, new_root: SigstoreTrustRoot) {
+        let mut w = self.trust_root.write().await;
+        *w = new_root;
+    }
+
+    /// Verify a publisher-supplied bundle at PublishService Phase 1b.
+    /// `expected` comes from the package's `[publish.trusted_publishers]`
+    /// config (or first-publish default).
+    pub async fn verify_publish_bundle<C: HttpClient>(
+        &self,
+        http: &C,
+        bundle: &SigstoreBundle,
+        expected: &ExpectedIdentity,
+    ) -> Result<ValidationResult, SigstoreError>
+        using [Logger]
+    {
+        let trust = self.trust_root.read().await.clone();
+        verify_bundle(http, bundle, &trust, expected).await
+            .map_err(|e| Verify(e))
+    }
+
+    /// Persist a verified bundle. Returns the freshly-built record.
+    public async fn persist_bundle(
+        &self,
+        version_id: Int,
+        bundle: &SigstoreBundle,
+        result: &ValidationResult,
+    ) -> Result<SigstoreBundleRecord, SigstoreError>
+        using [Database]
+    {
+        let bundle_json_value = sigstore_bundle_to_json(bundle);
+        let canonical = jcs_canonicalize(&bundle_json_value)
+            .map_err(|e| CanonicalisationFailed(format!("{e}").to_text()))?;
+        let bundle_text = json_encode(&bundle_json_value);
+
+        // Envelope hash — recompute fresh.
+        let envelope_canonical = jcs_canonicalize(&dsse_envelope_json(&bundle.envelope))
+            .map_err(|e| CanonicalisationFailed(format!("{e}").to_text()))?;
+        let envelope_sha = Hex64(hex_encode(&sha256_digest(&envelope_canonical)));
+        let leaf_sha = Hex64(hex_encode(&sha256_digest(&canonical))); // simplification: bundle hash
+
+        let rec = sigstore_bundle_record_new(
+            version_id,
+            bundle_text,
+            envelope_sha,
+            leaf_sha,
+            result,
+            now_utc(),
+        );
+        let repo = SigstoreBundleRepository {};
+        repo.insert(&rec).await.map_err(|e| Storage(format!("{e}").to_text()))?;
+        Ok(rec)
+    }
+
+    public async fn fetch_bundle(
+        &self,
+        version_id: Int,
+    ) -> Result<SigstoreBundleRecord, SigstoreError>
+        using [Database]
+    {
+        let repo = SigstoreBundleRepository {};
+        let opt = repo.fetch_by_version_id(version_id).await
+            .map_err(|e| Storage(format!("{e}").to_text()))?;
+        opt.ok_or_else(|| NoBundle(version_id))
+    }
+
+    /// Audit query — list bundles published under a given OIDC
+    /// identity. Drives the "audit by publisher" UX.
+    pub async fn list_by_identity(
+        &self,
+        issuer: &Text,
+        subject: &Text,
+        limit: Int,
+    ) -> Result<List<SigstoreBundleRecord>, SigstoreError>
+        using [Database]
+    {
+        let repo = SigstoreBundleRepository {};
+        repo.list_by_identity(issuer, subject, limit).await
+            .map_err(|e| Storage(format!("{e}").to_text()))
+    }
+}
+
+// =============================================================================
+// Helpers — Sigstore Bundle → canonical JSON
+// =============================================================================
+//
+// Composes against `core.security.provenance.dsse_envelope_to_json`
+// for the envelope; we hand-roll the bundle wrapper because its
+// shape depends on which provenance fields are present.
+
+fn sigstore_bundle_to_json(b: &SigstoreBundle) -> encoding.json.JsonValue {
+    let mut obj: encoding.json.JsonObject = encoding.json.JsonObject.new();
+    obj.insert("mediaType".to_text(),
+        encoding.json.json_string(SIGSTORE_BUNDLE_MEDIA_TYPE.to_text()));
+    let mut chain_arr: List<encoding.json.JsonValue> = List.new();
+    let mut i: Int = 0;
+    while i < b.cert_chain_pem.len() {
+        chain_arr.push(encoding.json.json_string(b.cert_chain_pem[i].clone()));
+        i = i + 1;
+    }
+    obj.insert("certificateChain".to_text(), encoding.json.json_array(chain_arr));
+    obj.insert("dsseEnvelope".to_text(), dsse_envelope_json(&b.envelope));
+    let mut tlog_arr: List<encoding.json.JsonValue> = List.new();
+    let mut j: Int = 0;
+    while j < b.tlog_entries.len() {
+        // Provenance TlogEntry → JSON via core.security.provenance helpers.
+        tlog_arr.push(security.provenance.tlog_entry_to_json(&b.tlog_entries[j]));
+        j = j + 1;
+    }
+    obj.insert("tlogEntries".to_text(), encoding.json.json_array(tlog_arr));
+    encoding.json.json_object(obj)
+}
+
+fn dsse_envelope_json(env: &security.provenance.DsseEnvelope) -> encoding.json.JsonValue {
+    security.provenance.dsse_envelope_to_json(env)
+}

@@ -1,0 +1,149 @@
+// =============================================================================
+// verum_registry/http/handlers/tuf.vr (spec v3.0 §8.2)
+// =============================================================================
+// Routes:
+//   GET /tuf/<n>.root.json       — root metadata at version <n>
+//   GET /tuf/timestamp.json      — latest timestamp
+//   GET /tuf/<n>.snapshot.json   — snapshot at version <n>
+//   GET /tuf/<n>.targets.json    — targets at version <n>
+//
+// Response Content-Type: `application/json` (canonical JSON per
+// TUF spec). Hot-path: served from Redis cache; falls through to
+// the TufService which reads the persistent Postgres rows.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "HTTP handlers for TUF metadata distribution at /tuf/<role>.json",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.handlers.tuf;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
+mount net.weft.{WeftRequest, Response, StatusCode};
+
+mount verum_registry.services.tuf_service.{TufService, TufError};
+mount verum_registry.http.error_response.render_error;
+
+const TUF_CONTENT_TYPE: Text = "application/json";
+
+/// GET /tuf/<n>.root.json
+pub async fn root(req: WeftRequest) -> Response
+    using [TufService, Database, Cache, Logger]
+{
+    let version = match parse_version_param(&req) {
+        Ok(v)  => v,
+        Err(e) => return e,
+    };
+    match TufService.serve_root(version).await {
+        Ok(bytes) => Response.bytes(bytes)
+            .header("content-type", &TUF_CONTENT_TYPE)
+            .header("cache-control", "public, max-age=86400, immutable"),
+        Err(TufError.NoRoot) => render_error("not_found".to_text(),
+            format!("root.json v={} not found", version).to_text(), None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &format!("tuf root: {e}").to_text());
+            render_error("internal_error".to_text(),
+                "tuf serve failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError)
+        }
+    }
+}
+
+/// GET /tuf/timestamp.json
+pub async fn timestamp(_req: WeftRequest) -> Response
+    using [TufService, Database, Cache, Logger]
+{
+    match TufService.serve_timestamp().await {
+        Ok(bytes) => Response.bytes(bytes)
+            .header("content-type", &TUF_CONTENT_TYPE)
+            // timestamps refresh hourly — cache for 5 minutes only
+            .header("cache-control", "public, max-age=300"),
+        Err(TufError.NoTimestamp) => render_error("not_found".to_text(),
+            "timestamp.json not yet bootstrapped".to_text(), None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &format!("tuf timestamp: {e}").to_text());
+            render_error("internal_error".to_text(),
+                "tuf serve failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError)
+        }
+    }
+}
+
+/// GET /tuf/<n>.snapshot.json
+pub async fn snapshot(req: WeftRequest) -> Response
+    using [TufService, Database, Cache, Logger]
+{
+    let version = match parse_version_param(&req) {
+        Ok(v)  => v,
+        Err(e) => return e,
+    };
+    match TufService.serve_snapshot(version).await {
+        Ok(bytes) => Response.bytes(bytes)
+            .header("content-type", &TUF_CONTENT_TYPE)
+            .header("cache-control", "public, max-age=3600, immutable"),
+        Err(TufError.NoSnapshot) => render_error("not_found".to_text(),
+            format!("snapshot.json v={} not found", version).to_text(), None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &format!("tuf snapshot: {e}").to_text());
+            render_error("internal_error".to_text(),
+                "tuf serve failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError)
+        }
+    }
+}
+
+/// GET /tuf/<n>.targets.json
+pub async fn targets(req: WeftRequest) -> Response
+    using [TufService, Database, Cache, Logger]
+{
+    let version = match parse_version_param(&req) {
+        Ok(v)  => v,
+        Err(e) => return e,
+    };
+    match TufService.serve_targets(version).await {
+        Ok(bytes) => Response.bytes(bytes)
+            .header("content-type", &TUF_CONTENT_TYPE)
+            .header("cache-control", "public, max-age=3600, immutable"),
+        Err(TufError.NoTargets(_)) => render_error("not_found".to_text(),
+            format!("targets.json v={} not found", version).to_text(), None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &format!("tuf targets: {e}").to_text());
+            render_error("internal_error".to_text(),
+                "tuf serve failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError)
+        }
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+fn parse_version_param(req: &WeftRequest) -> Result<Int, Response> {
+    // The route pattern `/tuf/<n>.<role>.json` exposes <n> as a path param.
+    let v_text = req.path_param("version").unwrap_or_else(|| "".to_text());
+    Int.parse(&v_text).map_err(|_| {
+        render_error("validation_failed".to_text(),
+            format!("invalid TUF metadata version: {}", v_text).to_text(),
+            None, None,
+        ).status(StatusCode.BadRequest)
+    })
+}

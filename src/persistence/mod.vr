@@ -1,20 +1,46 @@
 // =============================================================================
-// verum_registry/persistence/mod.vr — persistence layer
+// verum_registry/persistence/mod.vr — persistence layer (spec §7)
 // =============================================================================
-// Spec: §6
 //
-// Postgres queries via the compile-time `sql#"..."` meta-fn.  Affine
-// `Transaction` enforces commit/rollback at compile time.  S3 object
-// store wraps the configured bucket.
+// Postgres queries via the compile-time `sql#"..."` meta-fn. Affine
+// `Transaction` enforces commit/rollback at compile time. S3 wraps
+// the configured bucket. Redis adapts the cache. MeiliSearch adapts
+// search.
+//
+// **ATS-V articulation.** Persistence is the registry's *durable
+// boundary*. Stratum = LCls (uses classical logic for transactional
+// invariants). Tier = Aot (real I/O). Capabilities exposed:
+// Read+Write filesystem (for TLS material), Persist for each
+// concrete medium (Postgres, S3, Ledger=sumdb), Network (outbound
+// for cache + search). Composes against every concrete storage
+// adapter in the stdlib.
 // =============================================================================
 
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
-    stratum:       MsfsStratum.LFnd,
-    lifecycle:     Lifecycle.Theorem("v2.0"),
+    stratum:       MsfsStratum.LCls,
+    at_tier:       Tier.Aot,
+    lifecycle:     Lifecycle.Theorem("canonical"),
+    exposes: [
+        Capability.Persist(PersistenceMedium.Postgres),
+        Capability.Persist(PersistenceMedium.S3),
+        Capability.Persist(PersistenceMedium.Ledger),
+        Capability.Network(NetProtocol.Tcp, NetDirection.Outbound),
+    ],
+    requires: [
+        Capability.Read(ResourceTag.Filesystem),
+    ],
+    composes_with: [
+        "core.database.postgres".to_text(),
+        "core.database.postgres.migrations".to_text(),
+        "core.cache.redis".to_text(),
+        "core.search.meilisearch".to_text(),
+        "core.storage.s3".to_text(),
+    ],
+    strict:        true,
     declarations: ShapeDeclarations {
         purpose: Some(Purpose {
-            role: "persistence-layer entry point — Postgres queries + S3 + Redis + MeiliSearch",
+            role: "persistence-layer entry point — Postgres + S3 + Redis + MeiliSearch + sumdb".to_text(),
             k_min: CveThresholdK.FullWitness,
             v_min: CveThresholdV.NamedCertification,
             e_min: CveThresholdE.StructurallyReady,
@@ -36,7 +62,6 @@ mount verum_registry.config.{
     PostgresConfig, S3Config, RedisConfig, MeilisearchConfig,
 };
 
-// Repository module re-exports — handlers/services compose against these.
 public mount verum_registry.persistence.package_repository.{
     PackageRepository, lookup_package, upsert_package,
     increment_downloads, set_score, lookup_recent_packages,
@@ -69,12 +94,15 @@ public mount verum_registry.persistence.object_store.{
     ObjectStore, put_source_archive, get_source_archive,
     delete_source_archive,
 };
+public mount verum_registry.persistence.passkey_repository.{PasskeyRepository};
+public mount verum_registry.persistence.tuf_metadata_repository.{TufMetadataRepository};
+public mount verum_registry.persistence.sigstore_bundle_repository.{SigstoreBundleRepository};
+public mount verum_registry.persistence.cog_audit_repository.{CogAuditRepository};
 
 // =============================================================================
-// Connection openers (called from main.vr)
+// Connection openers
 // =============================================================================
 
-/// Open the Postgres async pool.
 public async fn open_postgres(c: &PostgresConfig) -> Result<AsyncPgPool, Text> {
     let pool_cfg = AsyncPoolConfig {
         min_size: c.min_connections as UInt32,
@@ -87,19 +115,16 @@ public async fn open_postgres(c: &PostgresConfig) -> Result<AsyncPgPool, Text> {
         .map_err(|e| format!("postgres: {e}").to_text())
 }
 
-/// Open the S3 object store.
 public async fn open_object_store(c: &S3Config) -> Result<ObjectStore, Text> {
     object_store.connect(c).await
 }
 
-/// Open the Redis cache.
 public async fn open_cache(c: &RedisConfig) -> Result<RedisCache, Text> {
     core.cache.redis.connect(&c.url)
         .await
         .map_err(|e| format!("redis: {e}").to_text())
 }
 
-/// Open the MeiliSearch index.
 public async fn open_search(c: &MeilisearchConfig) -> Result<MeilisearchClient, Text> {
     core.search.meilisearch.connect(&c.url, &c.api_key)
         .await

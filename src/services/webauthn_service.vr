@@ -1,0 +1,419 @@
+// =============================================================================
+// verum_registry/services/webauthn_service.vr (spec v3.0 §7.4)
+// =============================================================================
+//
+// Server-side relying-party for WebAuthn passkey registration +
+// authentication. Composes against:
+//   - core.security.webauthn.{register, authenticate, types} for the
+//     WebAuthn ceremony verification.
+//   - verum_registry.persistence.passkey_repository for storage.
+//   - core.cache.redis for ceremony challenge tracking (5min TTL).
+//
+// Two pairs of methods (begin_*/finish_*) implement the standard
+// WebAuthn dance:
+//
+//   begin_*  → server generates challenge, stores it, returns
+//              the *Options struct for the browser API.
+//   finish_* → server consumes the challenge, verifies the response,
+//              persists the credential (registration) or updates
+//              signCount + returns session (authentication).
+//
+// Cloning detection: `finish_authentication` rejects any presented
+// signCount ≤ stored signCount (unless both are 0; see WebAuthn §6.1.1).
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "WebAuthn registration + authentication ceremonies with cloning-detection persistence",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.webauthn_service;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount collections.{List, Set};
+mount base.ulid.Ulid;
+mount time.rfc3339.{Rfc3339Time, now_utc};
+mount security.random.{secure_random_bytes};
+mount encoding.base64.{encode_url_no_pad as b64url_encode};
+mount encoding.json.{JsonValue, encode as json_encode, decode as json_decode};
+mount cache.redis.RedisCache;
+
+mount security.webauthn.types.{
+    AuthenticatorAttestationResponse, AuthenticatorAssertionResponse,
+    AuthDataFlags, RpEntity, UserEntity, PubKeyCredParam,
+    UserVerificationRequirement, AttestationConveyance,
+    CredentialDescriptor, COSE_ALG_ES256, COSE_ALG_EDDSA, COSE_ALG_RS256,
+    WebAuthnError,
+};
+mount security.webauthn.register.{
+    RegistrationOptions, ExpectedContext, verify_registration,
+};
+mount security.webauthn.authenticate.{
+    AuthenticationOptions, ExpectedAuthContext, AuthenticationResult,
+    verify_authentication,
+};
+
+mount verum_registry.domain.passkey.{
+    Passkey, passkey_from_verified_credential, passkey_to_verified_credential,
+};
+mount verum_registry.domain.user.{User, UserId};
+mount verum_registry.persistence.passkey_repository.PasskeyRepository;
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const CHALLENGE_BYTES: Int = 32;
+const CHALLENGE_TTL_SECONDS: Int = 300;        // 5 min
+const CHALLENGE_KEY_PREFIX: Text = "wa:challenge:".to_text();
+
+// =============================================================================
+// Service
+// =============================================================================
+
+@derive(Clone, Debug)
+public type WebAuthnService is {
+    rp:      RpEntity,
+    origins: List<Text>,
+};
+
+public type WebAuthnServiceError is
+    | InvalidChallenge
+    | ChallengeExpired
+    | ChallengeMismatch
+    | UnknownCredential
+    | StorageError(Text)
+    | CacheError(Text)
+    | WebAuthn(WebAuthnError)
+    | NoPasskeysForUser(UserId);
+
+implement Display for WebAuthnServiceError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FormatError> {
+        match self {
+            InvalidChallenge        => f.write_str("webauthn-svc: invalid challenge id"),
+            ChallengeExpired        => f.write_str("webauthn-svc: challenge expired"),
+            ChallengeMismatch       => f.write_str("webauthn-svc: challenge mismatch"),
+            UnknownCredential       => f.write_str("webauthn-svc: credential not registered"),
+            StorageError(reason)    => f.write_str(f"webauthn-svc: storage: {reason}".as_str()),
+            CacheError(reason)      => f.write_str(f"webauthn-svc: cache: {reason}".as_str()),
+            WebAuthn(e)             => f.write_str(f"webauthn-svc: {e}".as_str()),
+            NoPasskeysForUser(uid)  => f.write_str(f"webauthn-svc: no passkeys for user {uid:?}".as_str()),
+        }
+    }
+}
+
+implement Debug for WebAuthnServiceError {
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+}
+
+// =============================================================================
+// Begin / finish — registration ceremony
+// =============================================================================
+
+implement WebAuthnService {
+    public fn new(rp_id: Text, rp_name: Text, origins: List<Text>) -> WebAuthnService {
+        WebAuthnService {
+            rp: RpEntity { id: rp_id, name: rp_name },
+            origins,
+        }
+    }
+
+    /// Begin a registration ceremony. Generates a 32-byte challenge,
+    /// stashes it in Redis under `wa:challenge:<id>` (5min TTL), and
+    /// returns RegistrationOptions for the client.
+    public async fn begin_registration(
+        &self,
+        user: &User,
+    ) -> Result<(Text, RegistrationOptions), WebAuthnServiceError>
+        using [Cache, Database]
+    {
+        let challenge_bytes = secure_random_bytes(CHALLENGE_BYTES);
+        let challenge_id = b64url_encode(&challenge_bytes);
+
+        // Standard algorithm preference order: EdDSA (smallest sigs)
+        // → ES256 (broadest hardware support) → RS256 (legacy enterprise).
+        let mut params: List<PubKeyCredParam> = List.new();
+        params.push(PubKeyCredParam { type_: "public-key".to_text(), cose_alg: COSE_ALG_EDDSA });
+        params.push(PubKeyCredParam { type_: "public-key".to_text(), cose_alg: COSE_ALG_ES256 });
+        params.push(PubKeyCredParam { type_: "public-key".to_text(), cose_alg: COSE_ALG_RS256 });
+
+        // Existing passkeys to exclude (no double-registration).
+        let repo = PasskeyRepository {};
+        let existing = repo.find_by_user(&user.id).await
+            .map_err(|e| StorageError(format!("{e}").to_text()))?;
+        let mut exclude: List<CredentialDescriptor> = List.with_capacity(existing.len());
+        let mut i: Int = 0;
+        while i < existing.len() {
+            exclude.push(CredentialDescriptor {
+                type_: "public-key".to_text(),
+                credential_id: existing[i].credential_id.clone(),
+                transports: existing[i].transports.clone(),
+            });
+            i = i + 1;
+        }
+
+        let options = RegistrationOptions {
+            challenge:               challenge_bytes.clone(),
+            rp:                      self.rp.clone(),
+            user:                    UserEntity {
+                id:           user.id.0.as_bytes().to_list(),
+                name:         user.username.clone(),
+                display_name: user.display_name.clone(),
+            },
+            pub_key_cred_params:     params,
+            exclude_credentials:     exclude,
+            user_verification:       UserVerificationRequirement.Preferred,
+            attestation_conveyance:  AttestationConveyance.NoneConveyance,
+        };
+
+        Cache.set_with_ttl(
+            &format!("{}{}", CHALLENGE_KEY_PREFIX, challenge_id).to_text(),
+            &challenge_state_json(&user.id, &challenge_bytes, "register"),
+            CHALLENGE_TTL_SECONDS,
+        ).await.map_err(|e| CacheError(format!("{e}").to_text()))?;
+
+        Ok((challenge_id, options))
+    }
+
+    /// Finish the registration ceremony. Looks up the stashed
+    /// challenge, runs `core.security.webauthn.register.verify_registration`,
+    /// and persists the resulting Passkey.
+    public async fn finish_registration(
+        &self,
+        user_id:       &UserId,
+        challenge_id:  &Text,
+        response:      &AuthenticatorAttestationResponse,
+        nickname:      Maybe<Text>,
+    ) -> Result<Passkey, WebAuthnServiceError>
+        using [Cache, Database]
+    {
+        let state = self.consume_challenge(challenge_id, "register").await?;
+        if &state.user_id != user_id {
+            return Err(ChallengeMismatch);
+        }
+        let options_for_verify = registration_options_for_verify(&self.rp, &state.challenge_bytes);
+        let expected = ExpectedContext {
+            origins:        self.origins.clone(),
+            rp_id:          self.rp.id.clone(),
+            allowed_aaguids: Set.new(), // empty = accept any AAGUID
+        };
+        let verified = verify_registration(response, &options_for_verify, &expected)
+            .map_err(|e| WebAuthn(e))?;
+
+        let passkey = passkey_from_verified_credential(
+            user_id.clone(), verified, nickname, now_utc(),
+        );
+        let repo = PasskeyRepository {};
+        repo.insert(&passkey).await
+            .map_err(|e| StorageError(format!("{e}").to_text()))?;
+        Ok(passkey)
+    }
+
+    /// Begin authentication. user_handle = Some when the user has
+    /// already identified themselves; None for discoverable login.
+    public async fn begin_authentication(
+        &self,
+        user_handle: Maybe<&UserId>,
+    ) -> Result<(Text, AuthenticationOptions), WebAuthnServiceError>
+        using [Cache, Database]
+    {
+        let challenge_bytes = secure_random_bytes(CHALLENGE_BYTES);
+        let challenge_id = b64url_encode(&challenge_bytes);
+
+        let allow_credentials = match user_handle {
+            Some(uid) => {
+                let repo = PasskeyRepository {};
+                let pks = repo.find_by_user(uid).await
+                    .map_err(|e| StorageError(format!("{e}").to_text()))?;
+                if pks.is_empty() { return Err(NoPasskeysForUser(uid.clone())); }
+                let mut allow: List<CredentialDescriptor> = List.with_capacity(pks.len());
+                let mut i: Int = 0;
+                while i < pks.len() {
+                    allow.push(CredentialDescriptor {
+                        type_: "public-key".to_text(),
+                        credential_id: pks[i].credential_id.clone(),
+                        transports: pks[i].transports.clone(),
+                    });
+                    i = i + 1;
+                }
+                allow
+            }
+            None => List.new(),
+        };
+
+        let options = AuthenticationOptions {
+            challenge:         challenge_bytes.clone(),
+            rp_id:             self.rp.id.clone(),
+            allow_credentials,
+            user_verification: UserVerificationRequirement.Preferred,
+        };
+
+        let user_id_for_state = match user_handle {
+            Some(uid) => uid.clone(),
+            None      => UserId("".to_text()),  // sentinel for discoverable
+        };
+        Cache.set_with_ttl(
+            &format!("{}{}", CHALLENGE_KEY_PREFIX, challenge_id).to_text(),
+            &challenge_state_json(&user_id_for_state, &challenge_bytes, "authenticate"),
+            CHALLENGE_TTL_SECONDS,
+        ).await.map_err(|e| CacheError(format!("{e}").to_text()))?;
+
+        Ok((challenge_id, options))
+    }
+
+    /// Finish the authentication ceremony. Looks up the credential
+    /// by id, runs `core.security.webauthn.authenticate.verify_authentication`,
+    /// updates sign_count, returns the authenticated user id.
+    public async fn finish_authentication(
+        &self,
+        challenge_id:   &Text,
+        credential_id:  &List<Byte>,
+        response:       &AuthenticatorAssertionResponse,
+    ) -> Result<(UserId, AuthenticationResult), WebAuthnServiceError>
+        using [Cache, Database]
+    {
+        let state = self.consume_challenge(challenge_id, "authenticate").await?;
+
+        let repo = PasskeyRepository {};
+        let stored = repo.find_by_credential_id(credential_id).await
+            .map_err(|e| StorageError(format!("{e}").to_text()))?
+            .ok_or_else(|| UnknownCredential)?;
+
+        if !state.user_id.0.is_empty() && &state.user_id != &stored.user_id {
+            return Err(ChallengeMismatch);
+        }
+
+        let opts = AuthenticationOptions {
+            challenge:         state.challenge_bytes.clone(),
+            rp_id:             self.rp.id.clone(),
+            allow_credentials: List.new(),
+            user_verification: UserVerificationRequirement.Preferred,
+        };
+        let expected = ExpectedAuthContext { origins: self.origins.clone() };
+
+        let verified_cred = passkey_to_verified_credential(&stored);
+        let result = verify_authentication(response, &opts, &expected, &verified_cred)
+            .map_err(|e| WebAuthn(e))?;
+
+        repo.update_after_auth(
+            &stored.id,
+            result.new_sign_count,
+            result.backup_state,
+            &now_utc(),
+        ).await.map_err(|e| StorageError(format!("{e}").to_text()))?;
+
+        Ok((stored.user_id.clone(), result))
+    }
+
+    public async fn list_passkeys(
+        &self,
+        user_id: &UserId,
+    ) -> Result<List<Passkey>, WebAuthnServiceError>
+        using [Database]
+    {
+        let repo = PasskeyRepository {};
+        repo.find_by_user(user_id).await
+            .map_err(|e| StorageError(format!("{e}").to_text()))
+    }
+
+    public async fn revoke_passkey(
+        &self,
+        user_id:    &UserId,
+        passkey_id: &Ulid,
+    ) -> Result<(), WebAuthnServiceError>
+        using [Database]
+    {
+        let repo = PasskeyRepository {};
+        let n = repo.revoke(user_id, passkey_id).await
+            .map_err(|e| StorageError(format!("{e}").to_text()))?;
+        if n == 0 { return Err(UnknownCredential); }
+        Ok(())
+    }
+
+    // =========================================================================
+    // Internal — challenge state helpers
+    // =========================================================================
+
+    async fn consume_challenge(
+        &self,
+        challenge_id: &Text,
+        ceremony:     &str,
+    ) -> Result<ChallengeState, WebAuthnServiceError>
+        using [Cache]
+    {
+        let key = format!("{}{}", CHALLENGE_KEY_PREFIX, challenge_id).to_text();
+        let raw = Cache.get_and_delete(&key).await
+            .map_err(|e| CacheError(format!("{e}").to_text()))?
+            .ok_or_else(|| InvalidChallenge)?;
+        let state = parse_challenge_state(&raw, ceremony)
+            .ok_or_else(|| InvalidChallenge)?;
+        Ok(state)
+    }
+}
+
+// =============================================================================
+// Challenge state encoding (Redis value)
+// =============================================================================
+
+@derive(Clone, Debug)
+struct ChallengeState {
+    user_id:          UserId,
+    challenge_bytes:  List<Byte>,
+}
+
+fn challenge_state_json(uid: &UserId, ch: &List<Byte>, ceremony: &str) -> Text {
+    let obj = JsonValue.Object(json_object_from_pairs(&[
+        ("user_id".to_text(),    JsonValue.String(uid.0.clone())),
+        ("challenge_b64".to_text(),
+                                JsonValue.String(b64url_encode(ch))),
+        ("ceremony".to_text(),   JsonValue.String(ceremony.to_text())),
+    ]));
+    json_encode(&obj)
+}
+
+fn parse_challenge_state(raw: &Text, expected_ceremony: &str) -> Maybe<ChallengeState> {
+    let v = json_decode(raw.as_bytes()).ok()?;
+    let obj = v.as_object()?;
+    let user_id = obj.get("user_id").and_then(|x| x.as_string())?;
+    let challenge_b64 = obj.get("challenge_b64").and_then(|x| x.as_string())?;
+    let ceremony = obj.get("ceremony").and_then(|x| x.as_string())?;
+    if ceremony != expected_ceremony { return None; }
+    let challenge_bytes = encoding.base64.decode_url_no_pad(&challenge_b64).ok()?;
+    Some(ChallengeState { user_id: UserId(user_id), challenge_bytes })
+}
+
+// Internal — synthesize options for verify_registration call site.
+fn registration_options_for_verify(
+    rp: &RpEntity,
+    challenge: &List<Byte>,
+) -> RegistrationOptions {
+    RegistrationOptions {
+        challenge: challenge.clone(),
+        rp:        rp.clone(),
+        user:      UserEntity { id: List.new(), name: "".to_text(), display_name: "".to_text() },
+        pub_key_cred_params:     List.new(),
+        exclude_credentials:     List.new(),
+        user_verification:       UserVerificationRequirement.Preferred,
+        attestation_conveyance:  AttestationConveyance.NoneConveyance,
+    }
+}
+
+fn json_object_from_pairs(pairs: &[(Text, JsonValue)]) -> JsonObject {
+    let mut o: JsonObject = JsonObject.new();
+    let mut i: Int = 0;
+    while i < pairs.len() { o.insert(pairs[i].0.clone(), pairs[i].1.clone()); i = i + 1; }
+    o
+}
