@@ -60,7 +60,7 @@ mount encoding.hex.encode as hex_encode;
 mount encoding.json.{stringify as json_stringify};
 
 mount verum_registry.domain.{
-    PackageVersion, Hex64, VerificationLevel, PackageScope,
+    PackageVersion, PackageOwner, Hex64, VerificationLevel, PackageScope,
     User, UserId, SumdbEntry,
     PublishError, ManifestParseFailed, NotAnOwner, VersionExists,
     VersionNotMonotone, TyposquattingSuspected, MalwareDetected,

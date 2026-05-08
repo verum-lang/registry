@@ -35,7 +35,7 @@ mount architecture.types.Lifecycle;
 mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
-    PackageRecord, PackageScope, SpdxExpression, VerificationLevel,
+    PackageRecord, PackageVersion, PackageScope, SpdxExpression, VerificationLevel,
     SearchError, InvalidQuery, SearchBackendFailed,
 };
 // `RateLimited` collides across PublishError / SearchError; reach
