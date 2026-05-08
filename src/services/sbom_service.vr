@@ -52,8 +52,8 @@ mount encoding.json.{
     json_object, json_array, json_string, json_number, json_bool,
     encode as json_encode,
 };
-mount encoding.hex.encode as hex_encode;
-mount security.hash.sha256.digest as sha256_digest;
+mount encoding.hex.{encode as hex_encode};
+mount security.hash.sha256.{digest as sha256_digest};
 mount time.rfc3339.{format_utc, now_utc};
 mount time.system_time.now_unix_seconds;
 

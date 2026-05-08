@@ -32,7 +32,7 @@ mount architecture.types.Lifecycle;
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
-mount encoding.json.parse as json_parse;
+mount encoding.json.{parse as json_parse};
 
 mount verum_registry.domain.{
     PackageVersion, PackageScope, Hex64, VerificationLevel, UserId,

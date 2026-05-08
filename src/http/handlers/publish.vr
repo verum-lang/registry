@@ -26,7 +26,7 @@ module verum_registry.http.handlers.publish;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode, Multipart};
-mount base.semver.parse as parse_semver;
+mount base.semver.{parse as parse_semver};
 
 mount verum_registry.services.{PublishService, AuthService, AuthenticatedUser};
 mount verum_registry.persistence.{VersionRepository, yank_version, unyank_version};

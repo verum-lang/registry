@@ -41,8 +41,8 @@ module verum_registry.http.handlers.sbom;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
-mount security.hash.sha256.digest as sha256_digest;
-mount encoding.hex.encode as hex_encode;
+mount security.hash.sha256.{digest as sha256_digest};
+mount encoding.hex.{encode as hex_encode};
 
 mount verum_registry.persistence.version_repository.{VersionRepository, lookup_version};
 mount verum_registry.domain.package.PackageScope;

@@ -43,9 +43,9 @@ mount collections.List;
 mount sync.rwlock.RwLock;
 mount time.rfc3339.now_utc;
 mount encoding.json.{encode as json_encode};
-mount encoding.hex.encode as hex_encode;
-mount encoding.jcs.canonicalize as jcs_canonicalize;
-mount security.hash.sha256.digest as sha256_digest;
+mount encoding.hex.{encode as hex_encode};
+mount encoding.jcs.{canonicalize as jcs_canonicalize};
+mount security.hash.sha256.{digest as sha256_digest};
 mount security.sigstore.types.{
     SigstoreBundle, SIGSTORE_BUNDLE_MEDIA_TYPE,
 };

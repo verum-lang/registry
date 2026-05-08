@@ -26,7 +26,7 @@ module verum_registry.http.handlers.sumdb;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
-mount base.semver.parse as parse_semver;
+mount base.semver.{parse as parse_semver};
 mount security.transparency_log.TileCoord;
 
 mount verum_registry.services.SumdbService;
