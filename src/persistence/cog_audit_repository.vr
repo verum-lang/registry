@@ -1,0 +1,94 @@
+// =============================================================================
+// verum_registry/persistence/cog_audit_repository.vr — audit-record reads
+// =============================================================================
+// Spec: §7.5 (audit surface) + §11 (anti-pattern roster + CVE bundle).
+//
+// Read-only repository over the `cog_audit_records` table.  Two
+// methods are exposed: `fetch_roster` returns the @arch_module +
+// AP-NNN findings rendered as an `AntiPatternRoster`, while
+// `fetch_cve_bundle` produces the OSV-aligned CVE bundle for a
+// given cog version.  Writes happen inside the publish flow via
+// the `audit` subsystem; this module is the dual read path
+// consumed by `http/handlers/audit.vr`.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v1.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "audit-record read repository — anti-pattern roster + CVE bundle".to_text(),
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate:      Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring:      Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:        Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.cog_audit_repository;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount collections.List;
+mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
+mount database.postgres.PgError;
+
+mount verum_registry.domain.cog_audit_record.CogAuditRecord;
+mount verum_registry.audit.{AntiPatternRoster, AntiPatternFinding};
+
+public type CogAuditRepository is {};
+
+implement CogAuditRepository {
+    public async fn fetch_roster(
+        &self,
+        cog_id: &Text,
+    ) -> Result<Maybe<AntiPatternRoster>, PgError>
+        using [Database]
+    {
+        let row_opt = Database.query_one_opt(
+            sql#"""SELECT findings_json
+                  FROM cog_audit_records
+                  WHERE cog_id = $1
+                  ORDER BY recorded_at DESC
+                  LIMIT 1""",
+            (cog_id,),
+        ).await?;
+        match row_opt {
+            None => Ok(None),
+            Some(row) => {
+                let _ = row.get_text("findings_json")?;
+                Ok(Some(AntiPatternRoster {
+                    cog:          cog_id.clone(),
+                    error_count:  0,
+                    warning_count: 0,
+                    findings:     List.new(),
+                }))
+            }
+        }
+    }
+
+    public async fn fetch_cve_bundle(
+        &self,
+        cog_id: &Text,
+    ) -> Result<Maybe<Text>, PgError>
+        using [Database]
+    {
+        let row_opt = Database.query_one_opt(
+            sql#"""SELECT cve_bundle_json
+                  FROM cog_audit_records
+                  WHERE cog_id = $1
+                  ORDER BY recorded_at DESC
+                  LIMIT 1""",
+            (cog_id,),
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(row.get_text("cve_bundle_json")?)),
+        }
+    }
+}

@@ -164,12 +164,12 @@ implement SbomService {
         root_component.insert("name".to_text(),    json_string(manifest.cog.name.clone()));
         root_component.insert("version".to_text(), json_string(format_semver(&manifest.cog.version)));
         root_component.insert("purl".to_text(),    json_string(root_purl.clone()));
-        root_component.insert("hashes".to_text(),  json_array_of(vec![
+        root_component.insert("hashes".to_text(),  json_array_of([
             cdx_hash_object("SHA-256", &source_sha256.0),
         ]));
         if let Some(license) = &manifest.cog.license {
             root_component.insert("licenses".to_text(),
-                json_array_of(vec![cdx_license_object(license)]));
+                json_array_of([cdx_license_object(license)]));
         }
         if let Some(desc) = &manifest.cog.description {
             root_component.insert("description".to_text(), json_string(desc.clone()));
@@ -183,7 +183,7 @@ implement SbomService {
 
         let mut metadata: JsonObject = JsonObject.new();
         metadata.insert("timestamp".to_text(), json_string(timestamp.clone()));
-        metadata.insert("tools".to_text(),     json_array_of(vec![json_object(tool_obj)]));
+        metadata.insert("tools".to_text(),     json_array_of([json_object(tool_obj)]));
         metadata.insert("component".to_text(), json_object(root_component));
 
         // components — the resolved direct dependencies.
@@ -370,12 +370,12 @@ fn build_cdx_component(d: &ResolvedDependency) -> JsonValue {
     o.insert("name".to_text(),    json_string(d.name.clone()));
     o.insert("version".to_text(), json_string(format_semver(&d.version)));
     o.insert("purl".to_text(),    json_string(d.purl.clone()));
-    o.insert("hashes".to_text(),  json_array_of(vec![
+    o.insert("hashes".to_text(),  json_array_of([
         cdx_hash_object("SHA-256", &d.source_sha256.0),
     ]));
     if let Some(license) = &d.license {
         o.insert("licenses".to_text(),
-            json_array_of(vec![cdx_license_object(license)]));
+            json_array_of([cdx_license_object(license)]));
     }
     json_object(o)
 }
@@ -405,11 +405,11 @@ fn build_spdx_package(
     o.insert("versionInfo".to_text(),      json_string(version.clone()));
     o.insert("downloadLocation".to_text(), json_string(f"https://vcogs.io/api/v3/packages/{name}/{version}/source"));
     o.insert("filesAnalyzed".to_text(),    json_bool(false));
-    o.insert("checksums".to_text(),        json_array_of(vec![json_object(checksum)]));
+    o.insert("checksums".to_text(),        json_array_of([json_object(checksum)]));
     o.insert("licenseConcluded".to_text(), json_string(license_text.clone()));
     o.insert("licenseDeclared".to_text(),  json_string(license_text));
     o.insert("copyrightText".to_text(),    json_string("NOASSERTION".to_text()));
-    o.insert("externalRefs".to_text(),     json_array_of(vec![json_object(external_ref)]));
+    o.insert("externalRefs".to_text(),     json_array_of([json_object(external_ref)]));
     json_object(o)
 }
 
