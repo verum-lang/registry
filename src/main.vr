@@ -25,6 +25,48 @@
 // that publishes cog_registry`.
 // =============================================================================
 
+// =============================================================================
+// Corpus-level discipline — @arch_corpus
+// =============================================================================
+//
+// Where `@arch_module` (below) describes THIS cog's Shape, the
+// `@arch_corpus` block declares the CROSS-COG invariants that hold
+// over the whole multi-cog binary's composition graph.  The four
+// canonical invariants are mirrored from
+// `core.architecture.corpus.CorpusInvariant` (kernel side at
+// `verum_kernel::arch_corpus::CorpusInvariant`):
+//
+//   1. **NoCircularDependencies** — composition graph acyclic
+//      (transitive across all cogs).  AP-003 covers direct cycles;
+//      this corpus invariant catches multi-hop rings.
+//   2. **FoundationConsistency** — every cog shares a foundation OR
+//      pairs with different foundations have explicit
+//      `@framework(bridge_corpus, ...)` declarations.  Registry runs
+//      uniformly on `Foundation.ZfcTwoInacc` so `foundation_bridges`
+//      is empty.
+//   3. **NoLAbsClaim** — no cog declares `stratum = LAbs` (sanity
+//      net for AFN-T α boundary closure; AP-011 covers per-cog).
+//   4. **CapabilityClosure** — every cog's `requires` entry has a
+//      producer cog OR is registered as `transfers_privilege: true`
+//      in `core.architecture.capability_ontology`.  Registry's own
+//      `requires` is empty (it's the root); downstream registry
+//      cogs `requires` resolve through capability_ontology.
+//
+// Empty `foundation_bridges` is the explicit commitment that the
+// registry corpus runs on a single foundation throughout — every
+// cog speaks ZfcTwoInacc.  Adding a foundation bridge in the
+// future requires explicit declaration here AND a discharge proof
+// in `verification/external/` for the named bridge.
+@arch_corpus(
+    invariants: [
+        CorpusInvariant.NoCircularDependencies,
+        CorpusInvariant.FoundationConsistency,
+        CorpusInvariant.NoLAbsClaim,
+        CorpusInvariant.CapabilityClosure,
+    ],
+    foundation_bridges: [],
+)
+
 @arch_module(
     foundation:    Foundation.ZfcTwoInacc,
     stratum:       MsfsStratum.LCls,
@@ -57,6 +99,9 @@
         "core.architecture.types".to_text(),
         "core.architecture.anti_patterns".to_text(),
         "core.architecture.lifecycle".to_text(),
+        // Corpus-level invariant carrier — referenced by the
+        // `@arch_corpus(...)` block at the top of this file.
+        "core.architecture.corpus".to_text(),
         "core.cog.manifest".to_text(),
         "core.cog.sign".to_text(),
         "core.cog.archive".to_text(),
