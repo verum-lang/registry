@@ -66,6 +66,34 @@ public type SortMode is
     | SortRecent
     | SortScore;
 
+// =============================================================================
+// SearchBackendQuery / SearchIndexedDocument — adapter wire shapes
+// =============================================================================
+//
+// Lightweight projections produced by `render_backend_query` /
+// `render_indexed_document` ahead of the call into the concrete
+// search adapter (Meilisearch + future SQLite-fts shadow).  They
+// exist as a stable boundary between the registry's domain query
+// surface and the backend's native dialect.
+
+@derive(Clone, Debug)
+public type SearchBackendQuery is {
+    text: Text,
+};
+
+@derive(Clone, Debug)
+public type SearchIndexedDocument is {
+    id:                 Text,
+    description:        Text,
+    keywords:           List<Text>,
+    latest_version:     SemVer,
+    downloads:          Int,
+    score:              Float,
+    cve_lifecycle:      Lifecycle,
+    language_profile:   LanguageProfile,
+    verification_level: VerificationLevel,
+};
+
 public fn sort_mode_tag(s: &SortMode) -> Text {
     match s {
         SortRelevance => "relevance".to_text(),

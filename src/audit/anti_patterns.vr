@@ -37,7 +37,8 @@ module verum_registry.audit.anti_patterns;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
 mount collections.{List, Map};
-mount architecture.types.{AntiPatternId as ArchAntiPatternId, Severity};
+mount architecture.types.Severity;
+mount architecture.anti_patterns.AntiPatternCode as ArchAntiPatternId;
 
 // =============================================================================
 // Catalog
