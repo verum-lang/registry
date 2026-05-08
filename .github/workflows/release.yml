@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v3.0.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write       # tag releases
+  packages: write       # GHCR push
+  id-token: write       # Sigstore keyless OIDC
+  attestations: write   # SLSA attestation
+
+env:
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------
+  # Multi-arch image build + push to GHCR with Sigstore signature
+  # ---------------------------------------------------------------
+  image:
+    name: Build + push image (multi-arch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      digest: ${{ steps.docker-build.outputs.digest }}
+      tags:   ${{ steps.docker-meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve metadata
+        id: docker-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+
+      - name: Build & push (linux/amd64 + linux/arm64)
+        id: docker-build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless OIDC → Sigstore Rekor)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for tag in $(echo "${{ steps.docker-meta.outputs.tags }}"); do
+            cosign sign --yes "${tag}@${{ steps.docker-build.outputs.digest }}"
+          done
+
+      - name: Generate SLSA Build L3 attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.docker-build.outputs.digest }}
+          push-to-registry: true
+
+  # ---------------------------------------------------------------
+  # Helm chart package + push to GHCR OCI registry
+  # ---------------------------------------------------------------
+  helm:
+    name: Helm chart package
+    needs: [image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with: { version: '3.14.0' }
+      - name: Login to GHCR (Helm OCI)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Lint chart
+        run: helm lint deploy/helm/registry
+      - name: Package chart
+        run: helm package deploy/helm/registry --version ${{ github.ref_name }}
+      - name: Push chart to GHCR OCI
+        run: helm push verum-registry-*.tgz oci://ghcr.io/${{ github.repository }}/charts
+
+  # ---------------------------------------------------------------
+  # GitHub Release with SBOM + attestation links
+  # ---------------------------------------------------------------
+  github-release:
+    name: GitHub Release
+    needs: [image, helm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate SBOM (SPDX + CycloneDX)
+        run: |
+          curl -fsSL https://verum-lang.org/install.sh | bash -s -- --version stable
+          export PATH="$HOME/.verum/bin:$PATH"
+          verum sbom --format spdx-2.3      --output sbom.spdx.json
+          verum sbom --format cyclonedx-1.5 --output sbom.cyclonedx.json
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ github.ref_name }}
+          name:       ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            sbom.spdx.json
+            sbom.cyclonedx.json
+          body: |
+            ## verum-registry ${{ github.ref_name }}
+
+            **Image**:
+            - `${{ env.REGISTRY_IMAGE }}:${{ github.ref_name }}`
+            - Digest: `${{ needs.image.outputs.digest }}`
+            - Signed via [Sigstore](https://search.sigstore.dev/?logIndex=auto)
+
+            **Helm chart**:
+            - `oci://ghcr.io/${{ github.repository }}/charts/verum-registry:${{ github.ref_name }}`
+
+            **SBOMs attached**: SPDX 2.3 + CycloneDX 1.5
+            **SLSA**: Build L3 attestation registered to Rekor.

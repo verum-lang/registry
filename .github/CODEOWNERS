@@ -1,0 +1,22 @@
+# Default owner — registry-team gets review on every change.
+*                                       @verum-lang/registry-team
+
+# Workflows + deployment manifests need an SRE/release reviewer.
+/.github/workflows/                     @verum-lang/sre-team
+/Dockerfile                             @verum-lang/sre-team
+/docker-compose.yml                     @verum-lang/sre-team
+/deploy/                                @verum-lang/sre-team
+
+# ATS-V annotations (40-AP catalog + corpus invariants) need an
+# architecture reviewer in addition to the registry team.
+/src/audit/                             @verum-lang/registry-team @verum-lang/architecture-team
+/src/main.vr                            @verum-lang/registry-team @verum-lang/architecture-team
+
+# Security-critical paths (Sigstore + TUF + WebAuthn surfaces).
+/src/services/sigstore_service.vr       @verum-lang/registry-team @verum-lang/security-team
+/src/services/tuf_service.vr            @verum-lang/registry-team @verum-lang/security-team
+/src/services/webauthn_service.vr       @verum-lang/registry-team @verum-lang/security-team
+/src/services/auth_service.vr           @verum-lang/registry-team @verum-lang/security-team
+
+# Migrations are append-only — schema reviewer required.
+/migrations/                            @verum-lang/registry-team @verum-lang/db-team
