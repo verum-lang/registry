@@ -390,7 +390,7 @@ fn sign_timestamp(seed: &Ed25519Seed, ts: &TimestampMetadata) -> Result<List<Byt
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
         .map_err(|e| Canonical(f"{e}"))?;
-    Ok(envelope_bytes(&signed_value, &[(key_id, sig.as_slice().to_list())]))
+    Ok(envelope_bytes(&signed_value, &[(key_id, ed25519_sig_to_list(&sig))]))
 }
 
 fn sign_snapshot(seed: &Ed25519Seed, sn: &SnapshotMetadata) -> Result<List<Byte>, TufError> {
@@ -401,7 +401,7 @@ fn sign_snapshot(seed: &Ed25519Seed, sn: &SnapshotMetadata) -> Result<List<Byte>
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
         .map_err(|e| Canonical(f"{e}"))?;
-    Ok(envelope_bytes(&signed_value, &[(key_id, sig.as_slice().to_list())]))
+    Ok(envelope_bytes(&signed_value, &[(key_id, ed25519_sig_to_list(&sig))]))
 }
 
 fn sign_targets(seed: &Ed25519Seed, tg: &TargetsMetadata) -> Result<List<Byte>, TufError> {
@@ -412,7 +412,7 @@ fn sign_targets(seed: &Ed25519Seed, tg: &TargetsMetadata) -> Result<List<Byte>, 
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
         .map_err(|e| Canonical(f"{e}"))?;
-    Ok(envelope_bytes(&signed_value, &[(key_id, sig.as_slice().to_list())]))
+    Ok(envelope_bytes(&signed_value, &[(key_id, ed25519_sig_to_list(&sig))]))
 }
 
 fn sign_root(
@@ -432,7 +432,7 @@ fn sign_root(
         let pub_bytes = pubkey_bytes(seed);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
             .map_err(|e| Canonical(f"{e}"))?;
-        signatures.push((kid, sig.as_slice().to_list()));
+        signatures.push((kid, ed25519_sig_to_list(&sig)));
         i = i + 1;
     }
     let mut j: Int = 0;
@@ -442,7 +442,7 @@ fn sign_root(
         let pub_bytes = pubkey_bytes(seed);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
             .map_err(|e| Canonical(f"{e}"))?;
-        signatures.push((kid, sig.as_slice().to_list()));
+        signatures.push((kid, ed25519_sig_to_list(&sig)));
         j = j + 1;
     }
     Ok(envelope_bytes(&signed_value, signatures.as_slice()))
@@ -453,6 +453,17 @@ fn pubkey_bytes(seed: &Ed25519Seed) -> List<Byte> {
     let mut out: List<Byte> = List.with_capacity(32);
     let mut i: Int = 0;
     while i < 32 { out.push(pk[i]); i = i + 1; }
+    out
+}
+
+// Element-wise materialise a 64-byte Ed25519 signature into List<Byte>.
+// `Ed25519Signature` is `[Byte; 64]`; the typechecker doesn't surface
+// `as_slice` / `to_list` on bare fixed-size arrays at user code, so
+// the conversion is open-coded against the size constant.
+fn ed25519_sig_to_list(sig: &Ed25519Signature) -> List<Byte> {
+    let mut out: List<Byte> = List.with_capacity(64);
+    let mut i: Int = 0;
+    while i < 64 { out.push(sig[i]); i = i + 1; }
     out
 }
 
