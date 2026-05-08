@@ -65,8 +65,11 @@ mount verum_registry.domain.{
     PublishError, ManifestParseFailed, NotAnOwner, VersionExists,
     VersionNotMonotone, TyposquattingSuspected, MalwareDetected,
     ArchiveDecodeFailed, CompileFailed, AntiPatternViolations,
-    StorageFailed, DatabaseFailed, SumdbAppendFailed, InternalError,
+    DatabaseFailed, SumdbAppendFailed, InternalError,
 };
+// `StorageFailed` collides across PublishError / SumdbError; reach
+// the PublishError variant via the qualified path.
+mount verum_registry.domain.errors.StorageFailed;
 mount verum_registry.services.sbom_service.{
     SbomService, SbomArtefacts, ResolvedDependency,
     resolved_dependency_from_spec,

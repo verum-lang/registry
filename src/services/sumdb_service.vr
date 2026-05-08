@@ -46,8 +46,11 @@ mount time.system_time.now_unix_ns;
 mount verum_registry.config.SumdbConfig;
 mount verum_registry.domain.{
     PackageScope, Hex64,
-    SumdbError, VersionNotInLog, TileNotFound, LogIntegrityFailed, StorageFailed,
+    SumdbError, VersionNotInLog, TileNotFound, LogIntegrityFailed,
 };
+// `StorageFailed` collides across PublishError / SumdbError; reach
+// the SumdbError variant directly via the errors module path.
+mount verum_registry.domain.errors.StorageFailed as SumdbStorageFailed;
 
 // =============================================================================
 // SumdbLookupResult — public lookup return shape
@@ -128,16 +131,16 @@ implement SumdbService {
                   FROM sumdb_entries
                   WHERE package_id = $1 AND version = $2""",
             (package, &v_text),
-        ).await.map_err(|e| StorageFailed(f"{e}"))?;
+        ).await.map_err(|e| SumdbStorageFailed(f"{e}"))?;
         let row = row_opt.ok_or(VersionNotInLog {
             package_id: package.clone(),
             version: version.clone(),
         })?;
 
         let sequence = row.get_int64("sequence")
-            .map_err(|e| StorageFailed(f"{e}"))? as Int;
+            .map_err(|e| SumdbStorageFailed(f"{e}"))? as Int;
         let checksum_text = row.get_text("checksum")
-            .map_err(|e| StorageFailed(f"{e}"))?;
+            .map_err(|e| SumdbStorageFailed(f"{e}"))?;
         let checksum = Hex64::try_from(checksum_text)
             .map_err(|e| LogIntegrityFailed(f"{e}"))?;
 

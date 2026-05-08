@@ -28,6 +28,7 @@ mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.async_connection.AsyncPgConnection;
 mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
@@ -102,7 +103,7 @@ public async fn link_oidc_identity(
 }
 
 async fn link_oidc_identity_inner(
-    conn: &mut PgAsyncConnection,
+    conn: &mut AsyncPgConnection,
     user_id: &UserId,
     identity: &OidcIdentity,
 ) -> Result<(), DbError> {
@@ -119,7 +120,7 @@ async fn link_oidc_identity_inner(
 }
 
 async fn decode_user_with_oidc(
-    conn: &mut PgAsyncConnection,
+    conn: &mut AsyncPgConnection,
     row: &Row,
 ) -> Result<User, DbError> {
     let id: UserId = row.get_text("id")?;

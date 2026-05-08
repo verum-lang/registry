@@ -36,8 +36,11 @@ mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
     PackageRecord, PackageScope, SpdxExpression, VerificationLevel,
-    SearchError, InvalidQuery, SearchBackendFailed, RateLimited,
+    SearchError, InvalidQuery, SearchBackendFailed,
 };
+// `RateLimited` collides across PublishError / SearchError; reach
+// the SearchError variant by qualified path at construction sites.
+mount verum_registry.domain.errors.RateLimited as SearchRateLimited;
 
 // =============================================================================
 // SearchQuery — input shape (refinement-typed pagination)

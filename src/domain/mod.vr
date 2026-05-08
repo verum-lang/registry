@@ -52,6 +52,12 @@ public mount verum_registry.domain.package.{
 public mount verum_registry.domain.version.{
     PackageVersion, PublishIdentity, Hex64, VerificationLevel,
 };
+
+// SemVer is the canonical version type; re-exported through `domain`
+// so callers that already mount `verum_registry.domain.{…}` for the
+// rest of the registry vocabulary don't need a parallel
+// `mount core.base.semver.{SemVer}` next to every domain import.
+public mount core.base.semver.{SemVer};
 public mount verum_registry.domain.user.{
     User, UserId, Username, EmailAddress,
     ApiToken, TokenId, TokenScope,
