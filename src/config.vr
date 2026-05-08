@@ -62,6 +62,8 @@ public type Config is {
     spiffe: SpiffeConfig,
     tracing: TracingConfig,
     metrics: MetricsConfig,
+    tuf: TufConfig,
+    webauthn: WebAuthnConfig,
 };
 
 public type PostgresConfig is {
@@ -117,6 +119,39 @@ public type MetricsConfig is {
     bind_address: Text,
     /// mTLS-only restriction.  Spec §8.2 says `/metrics` is mTLS-restricted.
     mtls_only: Bool,
+};
+
+/// TUF subsystem.  Holds (a) registry's own root-keys path on disk
+/// (loaded into `TufKeyMaterial.from_config`) and (b) the upstream
+/// Sigstore TUF anchor used by `fetch_sigstore_trust_root`.
+public type TufConfig is {
+    /// Path to the directory holding the registry's own offline root
+    /// keys (one Ed25519 seed per root key holder, plus single seeds
+    /// for timestamp/snapshot/targets).  Spec §15 ceremony output.
+    keys_dir:                 Text,
+    /// Threshold for the registry's own root role (e.g., 3 of 5).
+    root_threshold:           Int,
+    /// Sigstore TUF metadata base URL (production:
+    /// `https://tuf-repo-cdn.sigstore.dev`).
+    sigstore_metadata_url:    Text,
+    /// Sigstore TUF targets base URL (typically the same as
+    /// `sigstore_metadata_url` plus a `/targets/` segment).
+    sigstore_targets_url:     Text,
+    /// Filesystem path to a pinned Sigstore TUF root.json that
+    /// overrides the in-binary embedded pin (optional — used by
+    /// air-gapped enterprise deployments).
+    sigstore_pinned_root_path: Maybe<Text>,
+};
+
+public type WebAuthnConfig is {
+    /// WebAuthn relying-party identifier (the cookie-domain — must
+    /// match the URL the client visits).  Production: `vcogs.io`.
+    rp_id:    Text,
+    /// Human-readable RP name for UI prompts.
+    rp_name:  Text,
+    /// Allowed origins (CORS / RP origin policy).  Production:
+    /// `["https://vcogs.io"]`.  Dev includes `http://localhost:8080`.
+    origins:  List<Text>,
 };
 
 // =============================================================================
@@ -179,6 +214,8 @@ public fn parse_config(text: &Text) -> Result<Config, ConfigLoadError> {
         spiffe:                  parse_spiffe(&root)?,
         tracing:                 parse_tracing(&root)?,
         metrics:                 parse_metrics(&root)?,
+        tuf:                     parse_tuf(&root)?,
+        webauthn:                parse_webauthn(&root)?,
     })
 }
 
@@ -282,6 +319,44 @@ fn parse_metrics(root: &Map<Text, ConfigValue>) -> Result<MetricsConfig, ConfigL
     Ok(MetricsConfig {
         bind_address: optional_string_in(root, "metrics", "bind_address").unwrap_or_else(|| "127.0.0.1:9090".to_text()),
         mtls_only: optional_bool_in(root, "metrics", "mtls_only").unwrap_or(true),
+    })
+}
+
+fn parse_tuf(root: &Map<Text, ConfigValue>) -> Result<TufConfig, ConfigLoadError> {
+    Ok(TufConfig {
+        keys_dir:                 require_string_in(root, "tuf", "keys_dir")?,
+        root_threshold:           optional_int_in(root, "tuf", "root_threshold").unwrap_or(3),
+        sigstore_metadata_url:    optional_string_in(root, "tuf", "sigstore_metadata_url")
+            .unwrap_or_else(|| "https://tuf-repo-cdn.sigstore.dev".to_text()),
+        sigstore_targets_url:     optional_string_in(root, "tuf", "sigstore_targets_url")
+            .unwrap_or_else(|| "https://tuf-repo-cdn.sigstore.dev/targets".to_text()),
+        sigstore_pinned_root_path: optional_string_in(root, "tuf", "sigstore_pinned_root_path"),
+    })
+}
+
+fn parse_webauthn(root: &Map<Text, ConfigValue>) -> Result<WebAuthnConfig, ConfigLoadError> {
+    let origins = match root.get(&"webauthn".to_text()) {
+        Some(ConfigValue.ConfigTable(t)) => match t.get(&"origins".to_text()) {
+            Some(ConfigValue.ConfigArray(a)) => {
+                let mut out: List<Text> = List.new();
+                let mut i: Int = 0;
+                while i < a.len() {
+                    if let ConfigValue.ConfigString(s) = a.get(i).unwrap() {
+                        out.push(s.clone());
+                    }
+                    i = i + 1;
+                }
+                out
+            }
+            _ => List.new(),
+        },
+        _ => List.new(),
+    };
+    Ok(WebAuthnConfig {
+        rp_id:   require_string_in(root, "webauthn", "rp_id")?,
+        rp_name: optional_string_in(root, "webauthn", "rp_name")
+            .unwrap_or_else(|| "Verum Registry".to_text()),
+        origins,
     })
 }
 

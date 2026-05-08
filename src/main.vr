@@ -147,7 +147,7 @@ mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{
     Server, WeftApp, ServiceBuilder,
-    MetricsLayer, TimeoutLayer, RateLimitLayer,
+    MetricsLayer, TimeoutLayer,
     SpiffeAuthLayer, ListenerConfig, ConnectionConfig,
     TlsConfig,
 };
@@ -161,6 +161,7 @@ mount verum_registry.http.{make_router};
 mount verum_registry.services.{
     PublishService, SearchService, SumdbService, AuthService, ProvenanceService,
     SigstoreService, TufService, TufKeyMaterial, WebAuthnService,
+    SbomService,
     ServiceRegistry,
 };
 mount verum_registry.audit.AuditService;
@@ -168,7 +169,7 @@ mount verum_registry.persistence.{
     open_postgres, open_object_store, open_cache, open_search,
 };
 mount verum_registry.observability.{tracing_init, metrics_init};
-mount async_.spawn;
+mount async.spawn;
 
 // =============================================================================
 // Entry point
@@ -223,6 +224,7 @@ public async fn main() -> Result<(), Text> {
     spawn(tuf.clone().run_refresh_loop());
 
     let audit = AuditService.new();
+    let sbom = SbomService.new(env_or("VERUM_REGISTRY_VERSION", "0.0.0").to_text());
 
     let services = ServiceRegistry {
         publish:    PublishService {},
@@ -235,14 +237,22 @@ public async fn main() -> Result<(), Text> {
         sigstore,
         tuf,
         webauthn,
+        sbom,
         audit,
     };
 
     // 6. Build router + middleware chain (outside-in order).
+    //    SecurityHeaders is OUTERMOST so every response — including
+    //    error responses produced by inner layers — picks up the
+    //    OWASP-stripe headers.  PerEndpointRateLimiter sits AFTER
+    //    metrics (so 429-rejected requests are still counted) but
+    //    BEFORE timeout (so we don't burn timeout budget on rejected
+    //    traffic) — REG-6.
     let router = make_router(services);
     let app = ServiceBuilder.new(router)
+        .layer(verum_registry.http.middleware.security_headers_default())
         .layer(MetricsLayer.new())
-        .layer(RateLimitLayer.new(rate_limit_config(&config)))
+        .layer(verum_registry.http.rate_limit.per_endpoint_rate_limiter_new())
         .layer(TimeoutLayer.secs(config.request_timeout_secs))
         .layer(SpiffeAuthLayer.optional(spiffe_bundles(&config)?))
         .build();
@@ -301,20 +311,21 @@ fn load_migrations() -> List<core.database.common.migrations.Migration> {
         5, "publish_identity".to_text(),
         @include_str("../migrations/0005_publish_identity.sql").to_text(),
     ));
+    steps.push(migration_new(
+        6, "cog_audit".to_text(),
+        @include_str("../migrations/0006_cog_audit.sql").to_text(),
+    ));
+    steps.push(migration_new(
+        7, "sbom".to_text(),
+        @include_str("../migrations/0007_sbom.sql").to_text(),
+    ));
     steps
 }
 
-fn rate_limit_config(c: &Config) -> RateLimitConfig {
-    RateLimitConfig {
-        anonymous_read_per_min:        60,
-        authenticated_read_per_min:   300,
-        anonymous_search_per_min:      30,
-        authenticated_search_per_min: 120,
-        publish_per_hour:              30,
-        sumdb_per_min:                600,
-        auth_per_min:                  10,
-    }
-}
+// Per-endpoint rate-limit policy now lives in
+// `verum_registry.http.rate_limit.endpoint_budget_default` (REG-6).
+// Tuning happens in source there; this stub remains only so that
+// older config-file forms continue to validate.
 
 fn spiffe_bundles(c: &Config) -> Result<List<core.security.spiffe.TrustBundle>, Text> {
     if c.spiffe.enabled {

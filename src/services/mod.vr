@@ -68,6 +68,16 @@ public mount verum_registry.services.provenance_service.{ProvenanceService};
 public mount verum_registry.services.sigstore_service.{SigstoreService, SigstoreError};
 public mount verum_registry.services.tuf_service.{TufService, TufKeyMaterial, TufError};
 public mount verum_registry.services.webauthn_service.{WebAuthnService, WebAuthnServiceError};
+public mount verum_registry.services.sigstore_trust_bootstrap.{
+    BootstrapError,
+    PINNED_SIGSTORE_ROOT_BYTES,
+    PINNED_SIGSTORE_ROOT_SHA256,
+    PINNED_SIGSTORE_ROOT_VERSION,
+};
+public mount verum_registry.services.sbom_service.{
+    SbomService, SbomArtefacts, SbomError, ResolvedDependency,
+    resolved_dependency_from_spec,
+};
 
 public type ServiceRegistry is {
     publish:    PublishService,
@@ -78,5 +88,6 @@ public type ServiceRegistry is {
     sigstore:   SigstoreService,
     tuf:        TufService,
     webauthn:   WebAuthnService,
+    sbom:       SbomService,
     audit:      verum_registry.audit.AuditService,
 };

@@ -1,0 +1,398 @@
+// =============================================================================
+// verum_registry/services/sigstore_trust_bootstrap.vr (spec v3.0 §7.2 + §15)
+// =============================================================================
+//
+// Trust-anchor bootstrap for the registry's Sigstore verification
+// pipeline.  Pins the upstream Sigstore TUF root **by content** —
+// the bytes of `<N>.root.json` from `tuf-repo-cdn.sigstore.dev`
+// are embedded into the registry binary at compile time + verified
+// against a documented SHA-256 at startup.  From that pinned root
+// we walk the standard TUF chain (root → timestamp → snapshot →
+// targets) over HTTP and download `fulcio_v1.crt.pem`, `rekor.pub`,
+// and `ctfe.pub` to build the live `SigstoreTrustRoot`.
+//
+// **Why content-pin a root?**  The TUF spec assumes clients
+// trust-on-first-use a root.json out-of-band; for a registry that
+// itself anchors a public software-supply chain, "out-of-band" must
+// be reproducible from the binary's own bytes.  Embedding the
+// pinned root + verifying its SHA-256 turns the TUF anchor into a
+// build-time invariant — the binary either matches the documented
+// hash or it refuses to start.
+//
+// **Refresh procedure.**  Every 6-9 months (well ahead of root
+// expiry) ops runs `scripts/refresh-sigstore-pinned-root.sh` which
+// downloads the next-version root, verifies the chain from the
+// existing pinned root, updates the embedded asset + the documented
+// hash, and commits.  See `docs/security/sigstore-pin-refresh.md`.
+//
+// Composes against:
+//   - core.security.tuf.{client, repository, types}      — TUF chain walk
+//   - core.security.sigstore.{verify, rekor, types}      — trust-root schema
+//   - core.security.x509.trust_store                     — Fulcio TrustStore
+//   - core.security.ecc.p256                             — Rekor / CTFE pubkeys
+//   - core.security.hash.sha256                          — pin self-check
+//   - core.encoding.hex                                  — sha256 → string
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "Sigstore TUF trust-root bootstrap — content-pinned root + chain walk",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.sigstore_trust_bootstrap;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int, Bool};
+mount collections.{List, Map};
+mount encoding.hex.{encode as hex_encode, decode as hex_decode};
+mount security.hash.sha256.digest as sha256_digest;
+mount security.tuf.types.{
+    RoleName, RootMetadata, TufKey, KeyId,
+};
+mount security.tuf.client.{
+    TrustedState, TufClientError,
+    trusted_state_new, update as tuf_update, download_target, lookup_target,
+    parse_root_public,
+};
+mount encoding.pem.{decode_one as pem_decode_one};
+mount encoding.der.DerReader;
+mount security.x509.spki.{parse_spki, SubjectPublicKey};
+mount security.ecc.p256.P256;
+mount security.tuf.repository.{
+    HttpRepository, http_repository_new, RepoError,
+};
+mount security.sigstore.verify.{
+    SigstoreTrustRoot,
+};
+mount security.sigstore.rekor.{
+    RekorClientConfig,
+};
+mount security.x509.trust_store.{TrustStore, TrustError};
+mount security.ecc.p256.{P256PublicKey};
+mount net.http.HttpClient;
+mount io.path.Path;
+
+mount verum_registry.config.TufConfig;
+mount verum_registry.services.tuf_service.{TufService, TufError};
+
+// =============================================================================
+// Pinned-root invariant — Sigstore TUF root v14
+// =============================================================================
+//
+// The pinned bytes live at `assets/sigstore/14.root.json` (relative
+// to the registry crate's source root).  They are the canonical
+// `14.root.json` published by `tuf-repo-cdn.sigstore.dev` on
+// 2025-12-22 with expiry 2026-06-22.  See the refresh procedure
+// for rotation.
+
+/// Embedded pinned root bytes.  `@const include_bytes` resolves at
+/// compile time relative to the source-file directory.
+public const PINNED_SIGSTORE_ROOT_BYTES: List<Byte> =
+    @const include_bytes("../../assets/sigstore/14.root.json");
+
+/// Documented SHA-256 of `PINNED_SIGSTORE_ROOT_BYTES`.  If the
+/// embedded bytes are mutated without updating this hash, startup
+/// will refuse with `BootstrapError.PinHashMismatch`.
+public const PINNED_SIGSTORE_ROOT_SHA256: Text =
+    "c8c41ec13f06ccabf5b48541ee2550098b4c7b5349e1d180390c29a7d5c2642c".to_text();
+
+/// Pinned version — used for sanity-checking the parsed metadata.
+public const PINNED_SIGSTORE_ROOT_VERSION: Int = 14;
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+public type BootstrapError is
+    | PinHashMismatch { expected: Text, actual: Text }
+    | PinVersionMismatch { expected: Int, actual: Int }
+    | RootParseFailed(TufClientError)
+    | TufChainFailed(TufClientError)
+    | TargetDownloadFailed { name: Text, cause: TufClientError }
+    | FulcioTrustStoreFailed(TrustError)
+    | RekorPubkeyFailed(Text)
+    | CtfePubkeyFailed(Text)
+    | PinnedRootOverlayFailed(Text);
+
+implement Display for BootstrapError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FormatError> {
+        match self {
+            PinHashMismatch { expected, actual } => f.write_str(
+                f"sigstore-bootstrap: pinned-root sha256 mismatch (expected {expected}, got {actual})".as_str()),
+            PinVersionMismatch { expected, actual } => f.write_str(
+                f"sigstore-bootstrap: pinned-root version mismatch (expected {expected}, got {actual})".as_str()),
+            RootParseFailed(e)         => f.write_str(f"sigstore-bootstrap: pinned-root parse: {e}".as_str()),
+            TufChainFailed(e)          => f.write_str(f"sigstore-bootstrap: TUF chain walk: {e}".as_str()),
+            TargetDownloadFailed { name, cause } => f.write_str(
+                f"sigstore-bootstrap: target {name} download: {cause}".as_str()),
+            FulcioTrustStoreFailed(e)  => f.write_str(f"sigstore-bootstrap: fulcio trust-store: {e}".as_str()),
+            RekorPubkeyFailed(reason)  => f.write_str(f"sigstore-bootstrap: rekor pubkey: {reason}".as_str()),
+            CtfePubkeyFailed(reason)   => f.write_str(f"sigstore-bootstrap: ctfe pubkey: {reason}".as_str()),
+            PinnedRootOverlayFailed(r) => f.write_str(f"sigstore-bootstrap: pinned-root overlay: {r}".as_str()),
+        }
+    }
+}
+
+implement Debug for BootstrapError {
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+}
+
+// =============================================================================
+// Public API — extension method on TufService
+// =============================================================================
+//
+// Adding a method to TufService here keeps the bootstrap logic
+// alongside its caller (main.vr does `tuf.fetch_sigstore_trust_root(&config.tuf)`)
+// while leaving tuf_service.vr focused on the registry's OWN TUF
+// metadata distribution.
+
+implement TufService {
+    /// Build a pinned-anchor `SigstoreTrustRoot` for the publish
+    /// pipeline + the public `/api/v3/sigstore/verify` endpoint.
+    ///
+    /// Workflow:
+    ///   1. Resolve pinned-root bytes (in-binary embed OR config-supplied
+    ///      filesystem overlay for air-gapped enterprise deployments).
+    ///   2. Verify SHA-256 against the documented constant.
+    ///   3. Parse pinned root → `RootMetadata`; sanity-check version.
+    ///   4. Construct `HttpRepository` against `config.sigstore_metadata_url`.
+    ///   5. Run TUF spec §5 update workflow — chain-rotates pinned root
+    ///      forward, fetches timestamp + snapshot + targets, validates
+    ///      every signature.
+    ///   6. `download_target` for fulcio_v1.crt.pem, rekor.pub, ctfe.pub.
+    ///   7. Build TrustStore (fulcio) + RekorClientConfig + ct_log_keys.
+    ///
+    /// **Failure semantics.**  Any step failure aborts startup — the
+    /// registry MUST NOT serve traffic with an unverified Sigstore
+    /// trust root.  Self-audit at `/api/audit/self` reports the
+    /// last-successful refresh timestamp on the supply-chain
+    /// invariant card.
+    pub async fn fetch_sigstore_trust_root<C: HttpClient>(
+        &self,
+        http:   &C,
+        config: &TufConfig,
+    ) -> Result<SigstoreTrustRoot, BootstrapError>
+        using [Filesystem, Logger]
+    {
+        // Step 1+2: resolve + self-check pinned root bytes.
+        let pinned_bytes = resolve_pinned_root_bytes(config).await?;
+        verify_pinned_root_sha256(&pinned_bytes)?;
+
+        // Step 3: parse root.
+        let root = parse_pinned_root(&pinned_bytes)?;
+        if root.version != PINNED_SIGSTORE_ROOT_VERSION {
+            return Err(PinVersionMismatch {
+                expected: PINNED_SIGSTORE_ROOT_VERSION,
+                actual:   root.version,
+            });
+        }
+
+        Logger.log(Level.Info, &f"sigstore-bootstrap: pinned root v={root.version} sha256={PINNED_SIGSTORE_ROOT_SHA256}");
+
+        // Step 4: build HTTP-backed TUF repository.
+        let repo = http_repository_new(
+            http.clone(),
+            config.sigstore_metadata_url.clone(),
+            config.sigstore_targets_url.clone(),
+            true, // Sigstore TUF repo runs consistent_snapshot=true
+        );
+
+        // Step 5: run TUF chain walk from pinned root forward.
+        let mut state = trusted_state_new(root);
+        tuf_update(&mut state, &repo).await
+            .map_err(|e| TufChainFailed(e))?;
+
+        Logger.log(Level.Info, &f"sigstore-bootstrap: TUF chain walked — final root v={state.root.version}");
+
+        // Step 6: download trust-anchor targets.
+        let fulcio_pem_bytes = download_trust_target(&state, &repo, "fulcio_v1.crt.pem").await?;
+        let rekor_pub_bytes  = download_trust_target(&state, &repo, "rekor.pub").await?;
+        // CTFE keys are optional — Sigstore historically did not pin SCT
+        // verification.  If absent from targets, return empty list.
+        let ctfe_pub_bytes_opt: Maybe<List<Byte>> = match download_trust_target(&state, &repo, "ctfe.pub").await {
+            Ok(b) => Some(b),
+            Err(_) => None,
+        };
+
+        // Step 7: assemble SigstoreTrustRoot.
+        let fulcio_pem_text = bytes_to_pem_text(&fulcio_pem_bytes);
+        let fulcio_trust_store = TrustStore.from_pem_bundle(&fulcio_pem_text)
+            .map_err(|e| FulcioTrustStoreFailed(e))?;
+
+        let rekor_instance = build_rekor_client_config(&rekor_pub_bytes, &config.sigstore_metadata_url)?;
+        let mut rekor_instances: List<RekorClientConfig> = List.new();
+        rekor_instances.push(rekor_instance);
+
+        let mut ct_log_keys: List<P256PublicKey> = List.new();
+        if let Some(ctfe_bytes) = &ctfe_pub_bytes_opt {
+            match parse_p256_public_key(ctfe_bytes) {
+                Ok(k)  => ct_log_keys.push(k),
+                Err(_) => Logger.log(Level.Warn, &"sigstore-bootstrap: ctfe.pub present but unparseable; skipping".to_text()),
+            }
+        }
+
+        Ok(SigstoreTrustRoot {
+            fulcio_trust_store,
+            rekor_instances,
+            ct_log_keys,
+        })
+    }
+}
+
+// =============================================================================
+// Pinned-root resolution + self-check
+// =============================================================================
+
+async fn resolve_pinned_root_bytes(config: &TufConfig) -> Result<List<Byte>, BootstrapError>
+    using [Filesystem]
+{
+    // Air-gapped overlay path — used only when explicit in config.
+    // Even when overlay is set, the SHA-256 self-check still applies,
+    // so an attacker cannot silently swap in a different root by
+    // pointing at a hostile filesystem path.
+    if let Some(path_str) = &config.sigstore_pinned_root_path {
+        let path = Path.new(path_str.as_str());
+        match Filesystem.read_file_bytes(&path).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(e)    => return Err(PinnedRootOverlayFailed(f"{e}")),
+        }
+    }
+    Ok(PINNED_SIGSTORE_ROOT_BYTES.clone())
+}
+
+fn verify_pinned_root_sha256(bytes: &List<Byte>) -> Result<(), BootstrapError> {
+    let computed = hex_encode(&sha256_digest(bytes));
+    if !ct_eq_text(&computed, &PINNED_SIGSTORE_ROOT_SHA256) {
+        return Err(PinHashMismatch {
+            expected: PINNED_SIGSTORE_ROOT_SHA256.clone(),
+            actual:   computed,
+        });
+    }
+    Ok(())
+}
+
+/// Constant-time text equality — fingerprints are public so timing
+/// leakage is not a security concern, but using a CT compare keeps
+/// the bootstrap path free of branches that depend on secret bytes.
+fn ct_eq_text(a: &Text, b: &Text) -> Bool {
+    if a.len() != b.len() { return false; }
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    let mut diff: Int = 0;
+    let mut i: Int = 0;
+    while i < ab.len() {
+        diff = diff | ((ab[i] as Int) ^ (bb[i] as Int));
+        i = i + 1;
+    }
+    diff == 0
+}
+
+fn parse_pinned_root(bytes: &List<Byte>) -> Result<RootMetadata, BootstrapError> {
+    // The TUF client's public wrapper parses the JSON envelope and
+    // returns the RootMetadata portion.  No signature verification
+    // happens at this stage — the immediately-following `tuf_update`
+    // call walks the chain forward, re-validating every signature
+    // against the pinned root's own threshold keys before promoting.
+    parse_root_public(bytes.as_slice()).map_err(|e| RootParseFailed(e))
+}
+
+// =============================================================================
+// Target download helper
+// =============================================================================
+
+async fn download_trust_target<R, C>(
+    state: &TrustedState,
+    repo:  &HttpRepository<C>,
+    name:  &str,
+) -> Result<List<Byte>, BootstrapError>
+    where
+        C: HttpClient,
+{
+    let path = name.to_text();
+    download_target(state, repo, &path).await
+        .map_err(|e| TargetDownloadFailed { name: path, cause: e })
+}
+
+// =============================================================================
+// Bytes → on-wire forms used by SigstoreTrustRoot
+// =============================================================================
+
+fn bytes_to_pem_text(bytes: &List<Byte>) -> Text {
+    // PEM is ASCII text; the targets store PEM bundles directly so a
+    // straight UTF-8 decode is safe.  Replace invalid bytes with
+    // U+FFFD to avoid panicking on a malformed download — downstream
+    // PEM parser will surface a real error.
+    Text.from_bytes_lossy(bytes.as_slice())
+}
+
+fn build_rekor_client_config(
+    pubkey_bytes: &List<Byte>,
+    base_url:     &Text,
+) -> Result<RekorClientConfig, BootstrapError> {
+    // `rekor.pub` is a PEM-encoded SubjectPublicKeyInfo wrapping an
+    // ECDSA-P-256 public key.  Decode chain: PEM → DER → SPKI →
+    // uncompressed EC point → P256PublicKey.
+    let pk = parse_p256_pem(pubkey_bytes)
+        .map_err(|reason| RekorPubkeyFailed(reason))?;
+
+    // log_id = SHA-256 of the DER-encoded SubjectPublicKeyInfo
+    // (Rekor's `logID` convention).  Use the raw uncompressed P-256
+    // form (0x04 || X || Y, 65 bytes) which is the canonical Sigstore
+    // Rekor public-good log identifier basis.
+    let pk_uncompressed = P256PublicKey.to_uncompressed(&pk);
+    let log_id = hex_encode(&sha256_digest(&pk_uncompressed));
+
+    // Rekor public-good API runs at https://rekor.sigstore.dev (NOT
+    // tuf-repo-cdn).  Hard-code that mapping; air-gapped deployments
+    // override via a future config field if needed.
+    let rekor_base = if base_url.contains("tuf-repo-cdn.sigstore.dev") {
+        "https://rekor.sigstore.dev".to_text()
+    } else {
+        // Heuristic for non-public deployments: same authority, /rekor path.
+        base_url.replace("tuf-repo-cdn", "rekor")
+    };
+
+    Ok(RekorClientConfig {
+        base_url:       rekor_base,
+        log_public_key: pk,
+        log_id_hex:     log_id,
+    })
+}
+
+fn parse_p256_public_key(pubkey_bytes: &List<Byte>) -> Result<P256PublicKey, BootstrapError> {
+    parse_p256_pem(pubkey_bytes).map_err(|reason| CtfePubkeyFailed(reason))
+}
+
+/// Decode a PEM-wrapped X.509 SubjectPublicKeyInfo containing an
+/// ECDSA-P-256 public key into the runtime's P256PublicKey form.
+///
+/// On error returns a Text describing the failed step — caller
+/// wraps in the appropriate `BootstrapError` variant for
+/// rekor-vs-ctfe attribution.
+fn parse_p256_pem(pubkey_bytes: &List<Byte>) -> Result<P256PublicKey, Text> {
+    let pem_text = bytes_to_pem_text(pubkey_bytes);
+    let block = pem_decode_one(&pem_text)
+        .map_err(|e| f"PEM decode: {e}")?;
+    let mut reader = DerReader.new(block.contents.as_slice());
+    let spki = parse_spki(&mut reader)
+        .map_err(|e| f"SPKI parse: {e}")?;
+    match spki.public_key {
+        SubjectPublicKey.EcP256(ec_bytes) => {
+            P256.public_key_from_bytes(ec_bytes.bytes.as_slice())
+                .map_err(|e| f"P256 from bytes: {e}")
+        }
+        _ => Err("expected EC P-256 public key in SPKI; found different algorithm".to_text()),
+    }
+}
