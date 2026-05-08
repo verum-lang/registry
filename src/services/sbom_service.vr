@@ -48,10 +48,24 @@ mount base.semver.{SemVer, format_semver};
 mount collections.{List, Map};
 mount core.cog.manifest.{CogManifest, DependencySpec};
 mount encoding.json.{
-    JsonValue, JsonObject,
+    JsonValue,
     json_object, json_array, json_string, json_number, json_bool,
     encode as json_encode,
 };
+
+// `JsonObject` is the canonical "record-shaped JSON" name at this
+// service's surface.  It would clash with the `JsonObject(Map<…>)`
+// VARIANT name of `JsonValue` if exposed at the `core.encoding.json`
+// module level (the alias would shadow the variant constructor and
+// break `json.parse(...)` decoding into `JsonObject(...)` arms), so
+// it lives as a service-local alias here instead.
+type JsonObject is Map<Text, JsonValue>;
+
+implement JsonObject {
+    public fn new() -> JsonObject {
+        Map.new()
+    }
+}
 mount encoding.hex.{encode as hex_encode};
 mount security.hash.sha256.{digest as sha256_digest};
 mount time.rfc3339.{format_utc, now_utc};
