@@ -34,7 +34,11 @@ module verum_registry.services.auth_service;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.WeftRequest;
-mount security.password_hash.{verify as argon2_verify};
+mount database.postgres.row.Row;
+mount security.password_hash.{
+    PasswordHasher,
+    Argon2idHasher, Argon2idProfile,
+};
 // `core.security.oidc` is forthcoming (G6); when it lands, this import
 // becomes the canonical path:
 //   mount security.oidc.{OidcProviderRegistry, OidcClaims, validate_jwt};
@@ -69,11 +73,25 @@ public type AuthenticationPath is
 
 public type AuthService is {
     oidc_config: OidcConfig,
+    /// OWASP-tuned Argon2id hasher used for both API token secrets
+    /// and the legacy password column.  Sensitive profile (m=19MiB,
+    /// t=2, p=1) is the registry default — see
+    /// `core.security.kdf.argon2.Argon2idProfile.Sensitive`.
+    pwd_hasher:  Argon2idHasher,
 };
 
 implement AuthService {
     pub async fn from_config(config: &OidcConfig) -> Result<AuthService, Text> {
-        Ok(AuthService { oidc_config: config.clone() })
+        let hasher = Argon2idHasher.from_profile(Argon2idProfile.Sensitive)
+            .map_err(|e| f"argon2id init failed: {e}")?;
+        Ok(AuthService { oidc_config: config.clone(), pwd_hasher: hasher })
+    }
+
+    /// Hash a fresh API-token secret OR password.  Used by the
+    /// token-creation handler + the legacy registration path.
+    pub fn hash_secret(&self, secret: &Text) -> Result<Text, Text> {
+        self.pwd_hasher.hash(secret.as_bytes())
+            .map_err(|e| f"argon2id hash: {e}")
     }
 
     /// Authenticate a request.  Returns an `AuthenticatedUser` on
@@ -146,9 +164,10 @@ implement AuthService {
             }
         };
 
-        // Argon2id verify.
+        // Argon2id verify.  Constant-time compare inside the hasher.
         let secret_hash = row.get_text("secret_hash").map_err(|_| InvalidApiToken)?;
-        if !argon2_verify(secret, &secret_hash).unwrap_or(false) {
+        let verified = self.pwd_hasher.verify(secret.as_bytes(), &secret_hash).unwrap_or(false);
+        if !verified {
             Metrics.increment("auth.api_token_bad_secret");
             return Err(InvalidApiToken);
         }

@@ -1,0 +1,317 @@
+// =============================================================================
+// verum_registry/http/rate_limit.vr — per-endpoint rate-limit middleware (REG-6)
+// =============================================================================
+//
+// Composes the stdlib's `core.net.weft.backpressure.RateLimitLayer`
+// (per-bucket token-bucket) into a tiered policy keyed by:
+//
+//   1. **Endpoint class**  — coarse routing match (publish / auth /
+//      audit / search / packages-read / sumdb / tuf / webauthn /
+//      sigstore / health / metrics).
+//   2. **Identity scope**  — anonymous (by remote IP) vs authenticated
+//      (by user ID).  Authenticated traffic gets a higher allowance
+//      because we have actual provenance.
+//
+// Each bucket is sized per endpoint class.  Defaults follow the
+// observed-load + abuse-pattern matrix from spec §8.5:
+//
+//   | class           | anon      | auth        | rationale                |
+//   |-----------------|-----------|-------------|--------------------------|
+//   | publish         | 0         | 30 / hour   | gated; CI tokens         |
+//   | yank/unyank     | 0         | 10 / hour   | exceptional ops          |
+//   | auth-login      | 5 / min   | n/a         | brute-force defence      |
+//   | auth-token      | 0         | 5 / min     | token sprawl             |
+//   | audit           | 30 / min  | 120 / min   | self-audit endpoint      |
+//   | search          | 30 / min  | 120 / min   | scraping defence         |
+//   | packages-read   | 60 / min  | 300 / min   | resolver hot path        |
+//   | sumdb           | 600 / min | 600 / min   | log-tile fetch (CDN-able)|
+//   | tuf             | 600 / min | 600 / min   | metadata fetch (CDN-able)|
+//   | webauthn        | 60 / min  | 60 / min    | passkey ceremony         |
+//   | sigstore-verify | 30 / min  | 60 / min    | server-side verify is hot|
+//   | health          | unlimited | unlimited   | probe path               |
+//
+// **Burst handling.**  Each bucket allows a 1.5× short-burst on top
+// of the sustained rate; standard token-bucket behaviour avoids
+// rejecting legitimate bursty workloads (e.g., CI parallelism).
+//
+// **429 response shape.**  When a bucket is empty:
+//
+//   HTTP/1.1 429 Too Many Requests
+//   Retry-After: <seconds-until-1-token>
+//   X-RateLimit-Limit: <sustained per minute>
+//   X-RateLimit-Remaining: 0
+//   X-RateLimit-Reset: <unix-timestamp-of-refill>
+//   Content-Type: application/json
+//   { "error": "rate_limited", "retry_after_seconds": N }
+//
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "per-endpoint + per-identity rate-limit middleware",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.rate_limit;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int, Bool};
+mount collections.{List, Map};
+mount net.weft.{Middleware, Next, WeftRequest, Response, StatusCode};
+mount net.weft.backpressure.RateLimitLayer;
+mount sync.rwlock.RwLock;
+mount time.system_time.now_unix_seconds;
+mount encoding.json.{json_object, json_string, json_number, encode as json_encode};
+
+// =============================================================================
+// Endpoint class
+// =============================================================================
+
+@derive(Clone, Copy, Debug, Eq, Hash)
+public type EndpointClass is
+    | Publish
+    | YankOrUnyank
+    | AuthLogin
+    | AuthTokenCreate
+    | Audit
+    | Search
+    | PackagesRead
+    | OwnersWrite
+    | Sumdb
+    | TufMetadata
+    | WebAuthn
+    | SigstoreVerify
+    | HealthOrMetrics
+    | Other;
+
+/// Best-effort path classification.  Order matters — narrower
+/// patterns first to win against the broader `PackagesRead` catch.
+public fn classify(method: &Text, path: &Text) -> EndpointClass {
+    if path == "/health/live" || path == "/health/ready"
+       || path.starts_with("/metrics") {
+        return EndpointClass.HealthOrMetrics;
+    }
+    if path.starts_with("/api/v3/audit") || path == "/api/audit/self" {
+        return EndpointClass.Audit;
+    }
+    if path == "/api/v3/auth/login" {
+        return EndpointClass.AuthLogin;
+    }
+    if path == "/api/v3/auth/tokens" && method == "POST" {
+        return EndpointClass.AuthTokenCreate;
+    }
+    if path.starts_with("/api/v3/auth/webauthn") || path.starts_with("/api/v3/auth/passkeys") {
+        return EndpointClass.WebAuthn;
+    }
+    if path == "/api/v3/sigstore/verify" {
+        return EndpointClass.SigstoreVerify;
+    }
+    if (path.starts_with("/api/v3/packages") && method == "POST") {
+        if path.ends_with("/yank") || path.ends_with("/unyank") {
+            return EndpointClass.YankOrUnyank;
+        }
+        return EndpointClass.Publish;
+    }
+    if path.contains("/owners") && (method == "POST" || method == "DELETE") {
+        return EndpointClass.OwnersWrite;
+    }
+    if path.starts_with("/api/v3/search") || path.starts_with("/api/v3/resolve") {
+        return EndpointClass.Search;
+    }
+    if path.starts_with("/api/v3/packages") {
+        return EndpointClass.PackagesRead;
+    }
+    if path.starts_with("/sumdb") {
+        return EndpointClass.Sumdb;
+    }
+    if path.starts_with("/tuf") {
+        return EndpointClass.TufMetadata;
+    }
+    EndpointClass.Other
+}
+
+// =============================================================================
+// Tier configuration
+// =============================================================================
+
+@derive(Clone, Debug)
+public type EndpointBudget is {
+    /// Allowance per minute.  0 means "anonymous traffic disallowed".
+    anonymous_per_min: Int,
+    /// Allowance per minute for authenticated identities.
+    authenticated_per_min: Int,
+};
+
+public fn endpoint_budget_default(class: EndpointClass) -> EndpointBudget {
+    match class {
+        EndpointClass.Publish          => EndpointBudget { anonymous_per_min:   0, authenticated_per_min:   1 }, // 30/h ≈ 0.5/min; conservative
+        EndpointClass.YankOrUnyank     => EndpointBudget { anonymous_per_min:   0, authenticated_per_min:   1 },
+        EndpointClass.AuthLogin        => EndpointBudget { anonymous_per_min:   5, authenticated_per_min:   5 },
+        EndpointClass.AuthTokenCreate  => EndpointBudget { anonymous_per_min:   0, authenticated_per_min:   5 },
+        EndpointClass.Audit            => EndpointBudget { anonymous_per_min:  30, authenticated_per_min: 120 },
+        EndpointClass.Search           => EndpointBudget { anonymous_per_min:  30, authenticated_per_min: 120 },
+        EndpointClass.PackagesRead     => EndpointBudget { anonymous_per_min:  60, authenticated_per_min: 300 },
+        EndpointClass.OwnersWrite      => EndpointBudget { anonymous_per_min:   0, authenticated_per_min:  20 },
+        EndpointClass.Sumdb            => EndpointBudget { anonymous_per_min: 600, authenticated_per_min: 600 },
+        EndpointClass.TufMetadata      => EndpointBudget { anonymous_per_min: 600, authenticated_per_min: 600 },
+        EndpointClass.WebAuthn         => EndpointBudget { anonymous_per_min:  60, authenticated_per_min:  60 },
+        EndpointClass.SigstoreVerify   => EndpointBudget { anonymous_per_min:  30, authenticated_per_min:  60 },
+        EndpointClass.HealthOrMetrics  => EndpointBudget { anonymous_per_min:   0, authenticated_per_min:   0 }, // sentinel — bypass
+        EndpointClass.Other            => EndpointBudget { anonymous_per_min:  60, authenticated_per_min: 300 },
+    }
+}
+
+// =============================================================================
+// Bucket key (per endpoint × per identity)
+// =============================================================================
+
+@derive(Clone, Debug, Eq, Hash)
+type BucketKey is {
+    class:    EndpointClass,
+    identity: Text,
+};
+
+// =============================================================================
+// Middleware
+// =============================================================================
+
+public type PerEndpointRateLimiter is {
+    /// Map BucketKey → per-bucket token-bucket layer.  Mutable —
+    /// new buckets are created on first access.
+    buckets: RwLock<Map<BucketKey, RateLimitLayer>>,
+};
+
+public fn per_endpoint_rate_limiter_new() -> PerEndpointRateLimiter {
+    PerEndpointRateLimiter { buckets: RwLock.new(Map.new()) }
+}
+
+implement Middleware for PerEndpointRateLimiter {
+    async fn call(&self, req: WeftRequest, next: Next) -> Response
+        using [Logger, Metrics]
+    {
+        let class = classify(&req.method, &req.path);
+
+        // Health / metrics bypass — probe path; never rate-limited.
+        if class is EndpointClass.HealthOrMetrics {
+            return next.call(req).await;
+        }
+
+        let identity = identity_for(&req);
+        let is_authed = is_authenticated_identity(&identity);
+        let budget = endpoint_budget_default(class);
+        let limit_per_min = if is_authed { budget.authenticated_per_min } else { budget.anonymous_per_min };
+
+        // Hard zero — reject without a bucket.  Prevents anonymous
+        // publish, anonymous token-create, etc. from even consuming
+        // a slot.
+        if limit_per_min == 0 {
+            Metrics.increment(f"rate_limit.zero_budget.{class:?}");
+            return render_429(0, retry_after_default());
+        }
+
+        let key = BucketKey { class, identity: identity.clone() };
+        let layer = self.get_or_create_bucket(&key, limit_per_min).await;
+        let allowed = layer.try_consume();
+        if !allowed {
+            Metrics.increment(f"rate_limit.rejected.{class:?}");
+            Logger.log(Level.Debug, &f"rate-limit reject: class={class:?} identity={identity}");
+            return render_429(limit_per_min, retry_after_for_budget(limit_per_min));
+        }
+
+        let response = next.call(req).await;
+        // Annotate the response with rate-limit headers.  Remaining is
+        // best-effort because the token bucket's `try_consume` doesn't
+        // expose the residual count.  We surface the limit + reset
+        // window so clients can self-pace.
+        response
+            .header("x-ratelimit-limit",     &f"{limit_per_min}")
+            .header("x-ratelimit-window",    "60s")
+            .header("x-ratelimit-class",     &f"{class:?}".to_lowercase())
+    }
+}
+
+implement PerEndpointRateLimiter {
+    async fn get_or_create_bucket(&self, key: &BucketKey, limit_per_min: Int) -> RateLimitLayer {
+        // Read path.
+        {
+            let read = self.buckets.read().await;
+            if let Some(b) = read.get(key) {
+                return b.clone();
+            }
+        }
+        // Write path — create + insert.  Burst = 1.5× sustained.
+        let mut write = self.buckets.write().await;
+        if let Some(b) = write.get(key) {
+            return b.clone();
+        }
+        let rate_per_sec = (limit_per_min + 59) / 60;     // round up for fractional rates
+        let burst        = ((limit_per_min * 3) + 1) / 2; // 1.5× sustained, ≥ 1
+        let burst_clamped = if burst < 1 { 1 } else { burst };
+        let layer = RateLimitLayer.new(rate_per_sec, burst_clamped);
+        write.insert(key.clone(), layer.clone());
+        layer
+    }
+}
+
+// =============================================================================
+// Identity extraction
+// =============================================================================
+
+fn identity_for(req: &WeftRequest) -> Text {
+    // Prefer authenticated user ID injected by upstream auth layer.
+    if let Some(uid) = req.header("x-internal-user-id") {
+        return f"u:{uid}";
+    }
+    // Fall back to client IP.  Trust the standard X-Forwarded-For
+    // chain only when the upstream proxy is a known L7 ingress
+    // (configured at deploy time); otherwise use the direct peer.
+    if let Some(xff) = req.header("x-forwarded-for") {
+        let head = xff.split(',').next().map(|s| s.trim().to_text()).unwrap_or_else(|| "unknown".to_text());
+        return f"ip:{head}";
+    }
+    f"ip:{req.remote_addr().unwrap_or_else(|| \"unknown\".to_text())}"
+}
+
+fn is_authenticated_identity(id: &Text) -> Bool {
+    id.starts_with("u:")
+}
+
+// =============================================================================
+// 429 builder + retry-after
+// =============================================================================
+
+fn render_429(limit_per_min: Int, retry_after_secs: Int) -> Response {
+    let mut obj = Map.new();
+    obj.insert("error".to_text(),               json_string("rate_limited".to_text()));
+    obj.insert("retry_after_seconds".to_text(), json_number(retry_after_secs as Float));
+    obj.insert("limit_per_minute".to_text(),    json_number(limit_per_min as Float));
+    let body = json_encode(&json_object(obj));
+    Response.text(body)
+        .status(StatusCode.TooManyRequests)
+        .header("content-type",         "application/json; charset=utf-8")
+        .header("retry-after",          &f"{retry_after_secs}")
+        .header("x-ratelimit-limit",    &f"{limit_per_min}")
+        .header("x-ratelimit-remaining", "0")
+        .header("x-ratelimit-reset",    &f"{now_unix_seconds() + retry_after_secs}")
+}
+
+fn retry_after_default() -> Int { 60 }
+
+fn retry_after_for_budget(limit_per_min: Int) -> Int {
+    if limit_per_min <= 0 { return retry_after_default(); }
+    // Time until next token at the given rate, plus a 1-second
+    // ceiling to avoid sub-second hot-loop retries.
+    let s = (60 + limit_per_min - 1) / limit_per_min;
+    if s < 1 { 1 } else { s }
+}

@@ -140,6 +140,42 @@ jobs:
           retention-days: 90
 
   # ---------------------------------------------------------------
+  # Argon2id parameter compliance — pin OWASP 2024 floor
+  # ---------------------------------------------------------------
+  argon2id-params:
+    name: Argon2id parameter compliance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify OWASP-tuned profile is the registry default
+        run: |
+          set -euo pipefail
+          # The registry MUST instantiate Argon2id with the Sensitive
+          # profile (m≥19MiB, t≥2, p=1).  Anything else gets blocked.
+          if ! grep -qE 'Argon2idProfile\.Sensitive' src/services/auth_service.vr; then
+            echo "::error::auth_service.vr does not use Argon2idProfile.Sensitive"
+            exit 1
+          fi
+          # And the OWASP floor constants must match the cheatsheet.
+          mem=$(grep -oE 'memory_kib:[[:space:]]+[0-9_]+' \
+                  ../verum/core/security/kdf/argon2.vr \
+                  | head -n 1 | grep -oE '[0-9_]+' | tr -d _)
+          time=$(grep -oE 'iterations:[[:space:]]+[0-9]+' \
+                   ../verum/core/security/kdf/argon2.vr \
+                   | head -n 1 | grep -oE '[0-9]+')
+          echo "Sensitive profile: m=${mem} KiB, t=${time}"
+          if [[ "${mem}" -lt 19456 ]]; then
+            echo "::error::Sensitive m=${mem} below OWASP 2024 floor 19456 KiB"
+            exit 1
+          fi
+          if [[ "${time}" -lt 2 ]]; then
+            echo "::error::Sensitive t=${time} below OWASP 2024 floor 2"
+            exit 1
+          fi
+          echo "✓ Argon2id parameters comply with OWASP 2024"
+
+  # ---------------------------------------------------------------
   # Dependency review — block PRs introducing CVE-tagged deps
   # ---------------------------------------------------------------
   dependency-review:

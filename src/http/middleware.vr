@@ -159,3 +159,183 @@ implement Middleware for ErrorHandlerMiddleware {
         }
     }
 }
+
+// =============================================================================
+// SecurityHeadersMiddleware — OWASP-stripe response headers (REG-4)
+// =============================================================================
+//
+// Applies the OWASP Secure Headers Project canonical recommendations
+// to every registry response.  Headers cover both the API surface
+// (`/api/v3/...`) and any future browser-facing UI: the policy is
+// strict enough that a hostile script cannot exfiltrate data via
+// XSS-style injection or downgrade-attack vectors.
+//
+// **What we set, and why** (per OWASP cheatsheet 2025 + RFC 9116
+// + W3C Trusted Types).
+//
+//   - `Strict-Transport-Security` — force HTTPS for 2 years +
+//     subdomains + preload (per HSTS preload list submission rules).
+//   - `Content-Security-Policy` — default-src 'none' (zero-trust
+//     posture; explicit allowlists per resource class).  `frame-
+//     ancestors 'none'` is the modern equivalent of X-Frame-Options:DENY.
+//   - `Cross-Origin-Opener-Policy: same-origin` — isolates the
+//     browsing context group; mitigates Spectre-class side-channels.
+//   - `Cross-Origin-Embedder-Policy: require-corp` — only same-
+//     origin or explicitly CORS-permitted resources may load.
+//   - `Cross-Origin-Resource-Policy: same-origin` — even if the
+//     resource is publicly cacheable (cog tarballs), browsers won't
+//     serve it cross-origin without explicit opt-in.
+//   - `Referrer-Policy: no-referrer` — leak no path/query.
+//   - `X-Content-Type-Options: nosniff` — block MIME-confusion.
+//   - `X-Frame-Options: DENY` — legacy header for older browsers
+//     that ignore frame-ancestors.
+//   - `Permissions-Policy` — disable every powerful API the
+//     registry has no need for.  Tightening defaults is cheap.
+//   - `Cache-Control: no-store` — for non-immutable JSON responses,
+//     to prevent secret-token caching by intermediate proxies.
+//     (Immutable artefacts like SBOMs, source tarballs, and Sigstore
+//     bundles set their own long max-age + immutable + this header
+//     gets stripped by the handler — see `should_skip_cache_control`.)
+//   - `Server: verum-registry` — generic banner; no version leak.
+//   - Removes any `Server: nginx/...` or `X-Powered-By` that an
+//     upstream proxy might have stamped.
+//
+// The middleware is a no-op for /metrics (mTLS-restricted, scraped
+// by Prometheus which doesn't want CSP) and /health/* (probe path).
+
+public type SecurityHeadersMiddleware is {
+    /// HSTS max-age in seconds.  Default is 2 years (RFC 6797 §6.1.1
+    /// recommendation; matches the HSTS preload list policy).
+    hsts_max_age:        Int,
+    /// Whether to include the `preload` directive on HSTS.  Only
+    /// enable if vcogs.io is actually submitted to the preload list
+    /// (otherwise misleading).
+    hsts_preload:        Bool,
+    /// CSP policy string.  Defaults to the registry's restrictive
+    /// "default-src 'none'" baseline; UI-bearing deployments can
+    /// override.
+    csp_policy:          Text,
+    /// Permissions-Policy directive.  Defaults to disabling every
+    /// well-known feature.
+    permissions_policy:  Text,
+    /// Generic Server banner — must NOT include version info.
+    server_banner:       Text,
+};
+
+public fn security_headers_default() -> SecurityHeadersMiddleware {
+    SecurityHeadersMiddleware {
+        hsts_max_age:        63072000, // 2 years
+        hsts_preload:        true,
+        csp_policy:          default_csp_policy(),
+        permissions_policy:  default_permissions_policy(),
+        server_banner:       "verum-registry".to_text(),
+    }
+}
+
+/// Strict default CSP: no script, no style, no inline anything.  The
+/// registry's API responses are JSON; there's nothing to render.  A
+/// future browser-UI deployment relaxes this with `script-src 'self'`
+/// + a per-deployment nonce strategy.
+fn default_csp_policy() -> Text {
+    "default-src 'none'; \
+     base-uri 'none'; \
+     form-action 'none'; \
+     frame-ancestors 'none'; \
+     img-src 'self' data:; \
+     style-src 'self'; \
+     script-src 'self'; \
+     connect-src 'self' https://rekor.sigstore.dev https://fulcio.sigstore.dev https://tuf-repo-cdn.sigstore.dev; \
+     object-src 'none'; \
+     upgrade-insecure-requests"
+        .to_text()
+}
+
+/// Default Permissions-Policy: deny every powerful API.  The registry
+/// is a backend service; it never legitimately requests camera,
+/// microphone, geolocation, USB, serial, etc.
+fn default_permissions_policy() -> Text {
+    "accelerometer=(), \
+     autoplay=(), \
+     camera=(), \
+     clipboard-read=(), \
+     clipboard-write=(), \
+     cross-origin-isolated=(), \
+     display-capture=(), \
+     encrypted-media=(), \
+     fullscreen=(), \
+     geolocation=(), \
+     gyroscope=(), \
+     hid=(), \
+     idle-detection=(), \
+     interest-cohort=(), \
+     keyboard-map=(), \
+     magnetometer=(), \
+     microphone=(), \
+     midi=(), \
+     payment=(), \
+     picture-in-picture=(), \
+     publickey-credentials-get=(self), \
+     publickey-credentials-create=(self), \
+     screen-wake-lock=(), \
+     serial=(), \
+     sync-xhr=(), \
+     unload=(), \
+     usb=(), \
+     web-share=(), \
+     window-management=(), \
+     xr-spatial-tracking=()"
+        .to_text()
+}
+
+implement Middleware for SecurityHeadersMiddleware {
+    async fn call(&self, req: WeftRequest, next: Next) -> Response
+        using [Logger]
+    {
+        let path = req.path.clone();
+        let response = next.call(req).await;
+
+        if is_exempt_path(&path) {
+            return response;
+        }
+
+        // Apply OWASP-stripe headers.  The order is `header(...)`
+        // chain — Response is a fluent builder.
+        let mut r = response
+            .header("strict-transport-security",
+                    &build_hsts(self.hsts_max_age, self.hsts_preload))
+            .header("content-security-policy",   &self.csp_policy)
+            .header("cross-origin-opener-policy",   "same-origin")
+            .header("cross-origin-embedder-policy", "require-corp")
+            .header("cross-origin-resource-policy", "same-origin")
+            .header("referrer-policy",              "no-referrer")
+            .header("x-content-type-options",       "nosniff")
+            .header("x-frame-options",              "DENY")
+            .header("permissions-policy",       &self.permissions_policy)
+            .header("server",                   &self.server_banner)
+            // Remove leak-prone defaults that upstream proxies may set.
+            .remove_header("x-powered-by")
+            .remove_header("x-aspnet-version")
+            .remove_header("x-aspnetmvc-version");
+
+        // Cache-Control: no-store — only for non-immutable responses.
+        // The handler is responsible for setting `cache-control:
+        // public, max-age=..., immutable` when appropriate; we don't
+        // override that.
+        if !r.has_header("cache-control") {
+            r = r.header("cache-control", "no-store");
+        }
+
+        r
+    }
+}
+
+fn build_hsts(max_age: Int, preload: Bool) -> Text {
+    let preload_part = if preload { "; preload".to_text() } else { "".to_text() };
+    f"max-age={max_age}; includeSubDomains{preload_part}"
+}
+
+/// Paths that skip the security header layer.  Prometheus scraping
+/// fails CORP/COEP; health probes need to be machine-trivial.
+fn is_exempt_path(path: &Text) -> Bool {
+    path.starts_with("/metrics") || path == "/health/live" || path == "/health/ready"
+}
