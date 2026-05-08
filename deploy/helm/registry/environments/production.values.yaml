@@ -1,0 +1,62 @@
+# Production overrides for verum-registry Helm chart.
+replicaCount: 6
+
+autoscaling:
+  enabled: true
+  minReplicas: 6
+  maxReplicas: 24
+  targetCPUUtilizationPercentage: 65
+  targetMemoryUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 4
+
+resources:
+  requests:
+    cpu: 1000m
+    memory: 1Gi
+  limits:
+    cpu: 4000m
+    memory: 4Gi
+
+config:
+  logLevel: warn
+  rateLimits:
+    publishPerUserPerSecond: 1
+    authPerIpPerSecond: 10
+    searchPerIpPerSecond: 60
+    auditPerIpPerSecond: 30
+    defaultPerIpPerSecond: 120
+  argon2id:
+    # OWASP 2023 sensitive profile — production grade.
+    timeCost: 2
+    memoryCostKib: 19456     # 19 MiB
+    parallelism: 1
+  cveClosure:
+    auditGate: strict
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "256m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
+    nginx.ingress.kubernetes.io/limit-rps: "1000"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: vcogs.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: vcogs-io-tls
+      hosts: [vcogs.io]
+
+otel:
+  enabled: true
+  endpoint: http://otel-collector.observability.svc:4317
+  protocol: grpc
+  resourceAttrs:
+    deployment.environment: production

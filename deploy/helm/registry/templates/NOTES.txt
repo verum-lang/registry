@@ -1,0 +1,38 @@
+verum-registry has been deployed.
+
+Release name: {{ .Release.Name }}
+Namespace:    {{ .Release.Namespace }}
+Image:        {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+{{- if .Values.ingress.enabled }}
+
+Ingress endpoints:
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}/
+{{- end }}
+{{- end }}
+
+Useful commands:
+
+  # Check pod readiness
+  kubectl --namespace {{ .Release.Namespace }} get pods -l "app.kubernetes.io/name={{ include "verum-registry.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+  # Tail registry logs
+  kubectl --namespace {{ .Release.Namespace }} logs -f -l "app.kubernetes.io/name={{ include "verum-registry.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" --max-log-requests 10
+
+  # Port-forward to the registry locally
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "verum-registry.fullname" . }} 8080:{{ .Values.service.port }}
+
+  # Run an audit against the deployed registry
+  curl -fsS https://{{ (index .Values.ingress.hosts 0).host }}/api/audit/lifecycle | jq .
+
+Required external Secret '{{ .Values.externalSecretName }}' (operator-managed):
+  DATABASE_URL, REDIS_URL, SEARCH_URL, SEARCH_KEY,
+  STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY,
+  TUF_ROOT_KEYS_REF, ARGON2_PEPPER
+
+Required ConfigMap '{{ .Values.tuf.rootMetadataConfigMap }}':
+  Contains the canonical Sigstore TUF root metadata, mounted at
+  {{ .Values.tuf.metadataPath }}.
+
+For incident response, see docs/operations/incident-runbook.md

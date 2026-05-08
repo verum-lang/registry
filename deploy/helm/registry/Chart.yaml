@@ -1,0 +1,28 @@
+apiVersion: v2
+name: verum-registry
+description: |
+  Canonical Verum cog registry — Sigstore + TUF + WebAuthn + ATS-V
+  audit. Deploys the registry binary plus operator-owned external
+  dependencies (postgres / redis / meilisearch / s3) referenced by URL.
+type: application
+version: 0.0.0
+appVersion: "0.0.0"
+keywords:
+  - registry
+  - package-manager
+  - verum
+  - sigstore
+  - tuf
+  - webauthn
+home: https://vcogs.io
+sources:
+  - https://github.com/verum-lang/registry
+maintainers:
+  - name: Verum Language Team
+    url: https://verum-lang.org
+icon: https://verum-lang.org/img/logo.png
+
+# External dependencies are operator-owned (managed clusters /
+# AWS RDS / Aiven / etc.) — chart references them by URL via
+# values.yaml.  No `dependencies:` block: chart explicitly does
+# NOT bundle the data plane.

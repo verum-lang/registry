@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "verum-registry.fullname" . }}-config
+  labels:
+    {{- include "verum-registry.labels" . | nindent 4 }}
+data:
+  config.toml: |
+    # =============================================================
+    # verum-registry config (rendered by Helm)
+    # =============================================================
+
+    [registry]
+    host = "{{ .Values.config.registryHost }}"
+    metrics_host = "{{ .Values.config.metricsHost }}"
+    log_level = "{{ .Values.config.logLevel }}"
+
+    [oidc]
+    issuers = [
+      {{- range $i, $issuer := .Values.config.oidcIssuers }}
+      {{- if $i }},{{ end }}
+      "{{ $issuer }}"
+      {{- end }}
+    ]
+
+    [rate_limits]
+    publish_per_user_per_second = {{ .Values.config.rateLimits.publishPerUserPerSecond }}
+    auth_per_ip_per_second      = {{ .Values.config.rateLimits.authPerIpPerSecond }}
+    search_per_ip_per_second    = {{ .Values.config.rateLimits.searchPerIpPerSecond }}
+    audit_per_ip_per_second     = {{ .Values.config.rateLimits.auditPerIpPerSecond }}
+    default_per_ip_per_second   = {{ .Values.config.rateLimits.defaultPerIpPerSecond }}
+
+    [argon2id]
+    time_cost      = {{ .Values.config.argon2id.timeCost }}
+    memory_cost_kib = {{ .Values.config.argon2id.memoryCostKib }}
+    parallelism    = {{ .Values.config.argon2id.parallelism }}
+
+    [cve_closure]
+    audit_gate = "{{ .Values.config.cveClosure.auditGate }}"
+
+    [tuf]
+    metadata_path = "{{ .Values.tuf.metadataPath }}"

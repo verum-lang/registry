@@ -1,0 +1,195 @@
+# =============================================================================
+# verum-registry Helm values (defaults)
+# =============================================================================
+# Override per-environment via:
+#   helm install registry oci://ghcr.io/verum-lang/registry/charts/verum-registry \
+#     -f environments/production.values.yaml
+# =============================================================================
+
+# ----- Image -----
+image:
+  repository: ghcr.io/verum-lang/registry
+  pullPolicy: IfNotPresent
+  # Default to Chart.appVersion; override only when running a non-released
+  # build (e.g. SHA-tagged dev image).
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ----- ServiceAccount -----
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# ----- Pod-level configuration -----
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# ----- Service -----
+service:
+  type: ClusterIP
+  port: 8080
+  metricsPort: 9090
+
+# ----- Ingress (HTTPS termination upstream) -----
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "256m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: vcogs.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: vcogs-io-tls
+      hosts: [vcogs.io]
+
+# ----- Replicas / autoscaling -----
+replicaCount: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# ----- Resources -----
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+# ----- Probes -----
+probes:
+  liveness:
+    httpGet:
+      path: /health/live
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    httpGet:
+      path: /health/ready
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    httpGet:
+      path: /health/live
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 60   # 5 minutes total
+
+# ----- Configuration (mounted as ConfigMap + Secret) -----
+config:
+  registryHost: "0.0.0.0:8080"
+  metricsHost: "0.0.0.0:9090"
+  logLevel: info
+  oidcIssuers:
+    - https://accounts.google.com
+    - https://github.com/login/oauth
+    - https://gitlab.com
+  rateLimits:
+    publishPerUserPerSecond: 1
+    authPerIpPerSecond: 10
+    searchPerIpPerSecond: 60
+    auditPerIpPerSecond: 30
+    defaultPerIpPerSecond: 120
+  argon2id:
+    timeCost: 2
+    memoryCostKib: 19456    # 19 MiB (sensitive profile)
+    parallelism: 1
+  cveClosure:
+    auditGate: strict       # block deploy if `verum audit --self` fails
+
+# Existing Secret with these keys (the chart does NOT create them):
+#   DATABASE_URL                postgres://USER:PASS@HOST:PORT/DB
+#   REDIS_URL                   redis://HOST:PORT/DB
+#   SEARCH_URL                  http://meilisearch:7700
+#   SEARCH_KEY                  <meilisearch master key>
+#   STORAGE_ENDPOINT            https://s3.us-east-1.amazonaws.com
+#   STORAGE_BUCKET              verum-registry-prod
+#   STORAGE_ACCESS_KEY          <iam access key>
+#   STORAGE_SECRET_KEY          <iam secret key>
+#   TUF_ROOT_KEYS_REF           <KMS key ARN or HSM slot>
+#   ARGON2_PEPPER               <32-byte random>
+externalSecretName: verum-registry-secrets
+
+# ----- TUF root metadata (mounted as read-only volume) -----
+tuf:
+  rootMetadataConfigMap: verum-registry-tuf-root
+  metadataPath: /etc/verum-registry/tuf
+
+# ----- OpenTelemetry (OTLP) -----
+otel:
+  enabled: true
+  endpoint: http://otel-collector.observability.svc:4317
+  protocol: grpc
+  serviceName: verum-registry
+  resourceAttrs:
+    deployment.environment: production
+    cog.scope: verum-lang
+
+# ----- Network policy -----
+networkPolicy:
+  enabled: true
+  policyTypes: [Ingress, Egress]
+  egressAllowed:
+    # Public CT logs / OIDC / Sigstore / Fulcio
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - protocol: TCP
+          port: 443
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/name, operator: In, values: [verum-registry] }
+          topologyKey: kubernetes.io/hostname

@@ -1,0 +1,41 @@
+# Staging overrides for verum-registry Helm chart.
+replicaCount: 2
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+config:
+  logLevel: debug
+  cveClosure:
+    auditGate: warn          # surface but don't block on audit failures in staging
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: staging.vcogs.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: staging-vcogs-io-tls
+      hosts: [staging.vcogs.io]
+
+otel:
+  resourceAttrs:
+    deployment.environment: staging

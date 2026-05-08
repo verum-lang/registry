@@ -1,0 +1,22 @@
+{{- if .Values.otel.enabled -}}
+# Prometheus Operator ServiceMonitor — picked up by the cluster's
+# Prometheus instance via label selector `release: prometheus` (or
+# whatever the cluster operator-team uses).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "verum-registry.fullname" . }}
+  labels:
+    {{- include "verum-registry.labels" . | nindent 4 }}
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      {{- include "verum-registry.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      path: /metrics
+{{- end }}
