@@ -119,8 +119,8 @@ public async fn open_object_store(c: &S3Config) -> Result<ObjectStore, Text> {
     object_store.connect(c).await
 }
 
-public async fn open_cache(c: &RedisConfig) -> Result<RedisCache, Text> {
-    core.cache.redis.connect(&c.url)
+public async fn open_cache(c: &RedisConfig) -> Result<core.cache.adapters.redis.RedisCacheAdapter, Text> {
+    core.cache.adapters.redis.connect_url(&c.url)
         .await
         .map_err(|e| f"redis: {e}")
 }
