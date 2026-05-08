@@ -1,0 +1,1045 @@
+openapi: 3.1.0
+info:
+  title: verum-registry HTTP API
+  description: |
+    Public HTTP API for the canonical Verum cog registry. Routes are
+    versioned under `/api/v3/`; legacy v2 paths permanent-redirect.
+
+    Trust anchors:
+      - **Sigstore Bundle** at `/api/v3/packages/{scope}/{name}/{version}/bundle`
+        (cosign-verifiable; this is the canonical attestation in v3.0).
+      - **TUF metadata** at `/tuf/{version}.{role}.json` (root/snapshot/
+        targets; timestamp.json is unversioned per spec).
+      - **WebAuthn (passkey) authentication** under `/api/v3/auth/webauthn/...`.
+
+    All publish/yank/owner-mutation endpoints require an authenticated
+    token (PAT or session) AND, when `auditGate.mode=strict`, a
+    successful self-audit of the candidate cog.
+  version: "3.0.0"
+  contact:
+    name: verum-lang Foundation
+    url: https://verum-lang.org
+    email: ops@verum-lang.org
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: https://vcogs.io
+    description: Canonical hosted production
+  - url: https://staging.vcogs.io
+    description: Staging
+  - url: http://localhost:8080
+    description: Local dev (compose)
+
+tags:
+  - name: packages
+    description: Cog metadata, source, manifest, bundle retrieval
+  - name: publish
+    description: Publishing, yanking, owner mutations
+  - name: search
+    description: Full-text search + dependency resolution
+  - name: auth
+    description: Login, tokens, OIDC, WebAuthn passkeys
+  - name: owners
+    description: Cog ownership management
+  - name: advisories
+    description: Security advisories
+  - name: sigstore
+    description: Sigstore bundle verification
+  - name: tuf
+    description: TUF metadata distribution
+  - name: sumdb
+    description: Transparency log (legacy registry-side)
+  - name: health
+    description: Liveness / readiness probes
+
+security:
+  - bearerToken: []
+  - sessionCookie: []
+
+paths:
+  # =====================================================
+  # Packages
+  # =====================================================
+  /api/v3/packages/{scope}/{name}:
+    get:
+      tags: [packages]
+      summary: Get package metadata
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+      responses:
+        '200': { $ref: '#/components/responses/Package' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v3/packages/{scope}/{name}/versions:
+    get:
+      tags: [packages]
+      summary: List all versions of a package
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+      responses:
+        '200':
+          description: Sorted (newest-first) list of versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items: { $ref: '#/components/schemas/VersionSummary' }
+
+  /api/v3/packages/{scope}/{name}/{version}:
+    get:
+      tags: [packages]
+      summary: Get specific version metadata
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200': { $ref: '#/components/responses/Version' }
+
+  /api/v3/packages/{scope}/{name}/{version}/source:
+    get:
+      tags: [packages]
+      summary: Download source tarball (zstd-compressed tar)
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          description: Source tarball stream
+          content:
+            application/zstd: {}
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v3/packages/{scope}/{name}/{version}/manifest:
+    get:
+      tags: [packages]
+      summary: Get the cog manifest (verum.toml-equivalent)
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/CogManifest' } } }
+
+  /api/v3/packages/{scope}/{name}/{version}/bundle:
+    get:
+      tags: [packages, sigstore]
+      summary: Get the Sigstore bundle (cosign-verifiable, canonical v3.0 attestation)
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          description: Sigstore Bundle protobuf JSON
+          content:
+            application/vnd.dev.sigstore.bundle.v0.3+json:
+              schema: { $ref: '#/components/schemas/SigstoreBundle' }
+
+  /api/v3/packages/{scope}/{name}/{version}/sbom:
+    get:
+      tags: [packages]
+      summary: Get the cog's SBOM (CycloneDX 1.5 by default; ?format=spdx for SPDX 2.3)
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+        - in: query
+          name: format
+          schema: { type: string, enum: [cyclonedx, spdx], default: cyclonedx }
+      responses:
+        '200':
+          description: SBOM JSON document
+          content:
+            'application/vnd.cyclonedx+json; version=1.5':
+              schema: { type: object }
+            'application/spdx+json; version=2.3':
+              schema: { type: object }
+        '404': { description: SBOM not generated (pre-REG-8 publish) }
+        '502': { description: Integrity check failed (reconciliation triggered) }
+
+  /api/v3/packages/{scope}/{name}/{version}/sbom/cyclonedx:
+    get:
+      tags: [packages]
+      summary: Get the cog's CycloneDX 1.5 SBOM
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          content:
+            'application/vnd.cyclonedx+json; version=1.5':
+              schema: { type: object }
+
+  /api/v3/packages/{scope}/{name}/{version}/sbom/spdx:
+    get:
+      tags: [packages]
+      summary: Get the cog's SPDX 2.3 SBOM
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          content:
+            'application/spdx+json; version=2.3':
+              schema: { type: object }
+
+  /api/v3/packages/{scope}/{name}/{version}/provenance:
+    get:
+      tags: [packages]
+      summary: Legacy provenance (retained for non-Sigstore publishes)
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/Provenance' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+      deprecated: true
+
+  /api/v3/packages:
+    post:
+      tags: [publish]
+      summary: Publish a new cog version
+      description: |
+        Multipart upload of source tarball + manifest + Sigstore bundle.
+        Server-side workflow:
+          1. Authenticate token / session.
+          2. Verify Sigstore bundle (Rekor inclusion proof + Fulcio cert chain).
+          3. Run `verum audit` on the source; reject if `auditGate.mode=strict`
+             and ATS-V invariants violated.
+          4. Persist source to S3, manifest+bundle metadata to Postgres,
+             update sumdb, queue search index update, emit metrics.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/PublishRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Version' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Version already published (versions are immutable)
+        '422':
+          description: Audit-gate rejection (ATS-V invariant violation)
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/AuditFailureBody' } }
+
+  /api/v3/packages/{scope}/{name}/{version}/yank:
+    post:
+      tags: [publish]
+      summary: Yank a published version (advisory-only; source still available)
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200': { description: Yanked }
+
+  /api/v3/packages/{scope}/{name}/{version}/unyank:
+    post:
+      tags: [publish]
+      summary: Unyank a previously-yanked version
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200': { description: Unyanked }
+
+  # =====================================================
+  # Owners
+  # =====================================================
+  /api/v3/packages/{scope}/{name}/owners:
+    get:
+      tags: [owners]
+      summary: List package owners
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owners:
+                    type: array
+                    items: { $ref: '#/components/schemas/Owner' }
+    post:
+      tags: [owners]
+      summary: Invite a new owner
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+      responses:
+        '202': { description: Invitation pending owner acceptance }
+
+  /api/v3/packages/{scope}/{name}/owners/{user}:
+    delete:
+      tags: [owners]
+      summary: Remove an owner
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - in: path
+          name: user
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Owner removed }
+        '409': { description: Cannot remove the last owner }
+
+  # =====================================================
+  # Search / resolve
+  # =====================================================
+  /api/v3/search:
+    get:
+      tags: [search]
+      summary: Full-text search across all cogs
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hits:
+                    type: array
+                    items: { $ref: '#/components/schemas/SearchHit' }
+                  total: { type: integer }
+
+  /api/v3/resolve:
+    post:
+      tags: [search]
+      summary: Resolve a dependency graph
+      description: |
+        Given a manifest's `[dependencies]` block, return a fully-pinned
+        version graph satisfying all constraints + lockfile entries.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResolveRequest' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResolvedGraph' }
+        '422':
+          description: Resolution failed (incompatible constraints)
+
+  # =====================================================
+  # Auth
+  # =====================================================
+  /api/v3/auth/login:
+    post:
+      tags: [auth]
+      summary: Username/password login (deprecated; prefer OIDC or WebAuthn)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } }
+      deprecated: true
+
+  /api/v3/auth/oidc/discover/{provider}:
+    post:
+      tags: [auth]
+      summary: Begin OIDC discovery / login flow
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema: { type: string, enum: [github, gitlab, google, custom] }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorize_url: { type: string }
+                  state: { type: string }
+
+  /api/v3/auth/tokens:
+    post:
+      tags: [auth]
+      summary: Create a personal access token
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTokenRequest' }
+      responses:
+        '201':
+          content: { application/json: { schema: { $ref: '#/components/schemas/CreatedToken' } } }
+
+  /api/v3/auth/tokens/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke a personal access token
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Revoked }
+
+  # ----- WebAuthn -----
+  /api/v3/auth/webauthn/register/begin:
+    post:
+      tags: [auth]
+      summary: Begin passkey registration (returns a challenge)
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/WebAuthnChallenge' } } }
+
+  /api/v3/auth/webauthn/register/finish:
+    post:
+      tags: [auth]
+      summary: Finish passkey registration (submit attestation)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebAuthnRegistrationResponse' }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/Passkey' } } } }
+
+  /api/v3/auth/webauthn/authenticate/begin:
+    post:
+      tags: [auth]
+      summary: Begin passkey authentication (returns a challenge)
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/WebAuthnChallenge' } } }
+
+  /api/v3/auth/webauthn/authenticate/finish:
+    post:
+      tags: [auth]
+      summary: Finish passkey authentication (submit assertion)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebAuthnAssertionResponse' }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } }
+
+  /api/v3/auth/passkeys:
+    get:
+      tags: [auth]
+      summary: List the caller's registered passkeys
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  passkeys:
+                    type: array
+                    items: { $ref: '#/components/schemas/Passkey' }
+
+  /api/v3/auth/passkeys/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke a registered passkey
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Revoked }
+
+  # =====================================================
+  # Sigstore
+  # =====================================================
+  /api/v3/sigstore/verify:
+    post:
+      tags: [sigstore]
+      summary: Verify a Sigstore bundle out-of-band (no publish required)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SigstoreVerifyRequest' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  certificate_chain_subjects: { type: array, items: { type: string } }
+                  rekor_log_index: { type: integer, format: int64 }
+
+  # =====================================================
+  # Users
+  # =====================================================
+  /api/v3/users/{username}:
+    get:
+      tags: [auth]
+      summary: Get public user profile
+      parameters:
+        - in: path
+          name: username
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/UserProfile' } } }
+
+  # =====================================================
+  # Advisories
+  # =====================================================
+  /api/v3/advisories:
+    get:
+      tags: [advisories]
+      summary: List published security advisories
+      parameters:
+        - in: query
+          name: scope
+          schema: { type: string }
+        - in: query
+          name: name
+          schema: { type: string }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  advisories:
+                    type: array
+                    items: { $ref: '#/components/schemas/Advisory' }
+
+  /api/v3/advisories/{id}:
+    get:
+      tags: [advisories]
+      summary: Get a specific advisory by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, pattern: '^VRA-\d{4}-\d+$' }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/Advisory' } } }
+
+  # =====================================================
+  # TUF
+  # =====================================================
+  /tuf/{version}.root.json:
+    get:
+      tags: [tuf]
+      summary: Get a versioned TUF root.json
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/TufRoot' } } }
+
+  /tuf/timestamp.json:
+    get:
+      tags: [tuf]
+      summary: Get the current (unversioned) TUF timestamp.json
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/TufTimestamp' } } }
+
+  /tuf/{version}.snapshot.json:
+    get:
+      tags: [tuf]
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/TufSnapshot' } } }
+
+  /tuf/{version}.targets.json:
+    get:
+      tags: [tuf]
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/TufTargets' } } }
+
+  # =====================================================
+  # SumDB (legacy)
+  # =====================================================
+  /sumdb/lookup/{scope}/{name}@{version}:
+    get:
+      tags: [sumdb]
+      summary: Lookup a transparency-log record
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/Name' }
+        - { $ref: '#/components/parameters/Version' }
+      responses:
+        '200':
+          content: { text/plain: { schema: { type: string } } }
+
+  /sumdb/latest:
+    get:
+      tags: [sumdb]
+      summary: Get the latest tree-head signature
+      responses:
+        '200': { content: { text/plain: { schema: { type: string } } } }
+
+  /sumdb/tile/{level}/{index}:
+    get:
+      tags: [sumdb]
+      parameters:
+        - in: path
+          name: level
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - in: path
+          name: index
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200': { content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+
+  # =====================================================
+  # Health
+  # =====================================================
+  /health/live:
+    get:
+      tags: [health]
+      summary: Liveness probe (fast; ignores backends)
+      security: []
+      responses:
+        '200': { description: Process is alive }
+
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Readiness probe (checks postgres/redis/meili/s3)
+      security: []
+      responses:
+        '200': { description: Ready to serve traffic }
+        '503': { description: At least one backend unreachable }
+
+  /health/version:
+    get:
+      tags: [health]
+      summary: Build / version metadata
+      security: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:        { type: string }
+                  git_sha:        { type: string }
+                  build_date:     { type: string, format: date-time }
+                  audit_self:     { type: boolean }
+
+components:
+  parameters:
+    Scope:
+      in: path
+      name: scope
+      required: true
+      schema: { type: string, pattern: '^[a-z][a-z0-9-]{0,38}$' }
+    Name:
+      in: path
+      name: name
+      required: true
+      schema: { type: string, pattern: '^[a-z][a-z0-9_-]{0,63}$' }
+    Version:
+      in: path
+      name: version
+      required: true
+      schema: { type: string, pattern: '^v?\d+\.\d+\.\d+(-[\w.]+)?$' }
+
+  responses:
+    Package:
+      description: Package metadata
+      content: { application/json: { schema: { $ref: '#/components/schemas/Package' } } }
+    Version:
+      description: Version metadata
+      content: { application/json: { schema: { $ref: '#/components/schemas/Version' } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    BadRequest:
+      description: Malformed request
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing or invalid auth
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Authenticated but not authorized
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: PAT
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: vr_session
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:    { type: string }
+        message: { type: string }
+        request_id: { type: string }
+
+    Package:
+      type: object
+      properties:
+        scope:        { type: string }
+        name:         { type: string }
+        description:  { type: string }
+        homepage:     { type: string, format: uri }
+        repository:   { type: string, format: uri }
+        license:      { type: string }
+        latest_version: { type: string }
+        downloads_30d:  { type: integer }
+        owners:
+          type: array
+          items: { $ref: '#/components/schemas/Owner' }
+        keywords:
+          type: array
+          items: { type: string }
+
+    Owner:
+      type: object
+      properties:
+        username: { type: string }
+        role:     { type: string, enum: [admin, maintainer] }
+
+    VersionSummary:
+      type: object
+      properties:
+        version:      { type: string }
+        published_at: { type: string, format: date-time }
+        yanked:       { type: boolean }
+        yanked_reason: { type: string, nullable: true }
+
+    Version:
+      allOf:
+        - $ref: '#/components/schemas/VersionSummary'
+        - type: object
+          properties:
+            manifest_url:  { type: string, format: uri }
+            source_url:    { type: string, format: uri }
+            bundle_url:    { type: string, format: uri }
+            sha256:        { type: string }
+            size_bytes:    { type: integer }
+            dependencies:
+              type: array
+              items: { $ref: '#/components/schemas/DependencySpec' }
+            arch_module:
+              $ref: '#/components/schemas/ArchModuleAttestation'
+
+    DependencySpec:
+      type: object
+      properties:
+        scope:      { type: string }
+        name:       { type: string }
+        constraint: { type: string }   # e.g. "^1.2", ">=0.5,<0.7"
+
+    CogManifest:
+      type: object
+      description: |
+        Verum cog manifest. Mirrors the on-disk verum.toml-equivalent
+        structure post-deserialization.
+      properties:
+        package:
+          type: object
+          properties:
+            scope:       { type: string }
+            name:        { type: string }
+            version:     { type: string }
+            description: { type: string }
+            license:     { type: string }
+        dependencies:
+          type: object
+          additionalProperties: { type: string }
+        features:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+
+    ArchModuleAttestation:
+      type: object
+      description: Architecture-as-types annotation declared by `@arch_module`
+      properties:
+        foundation:    { type: string }
+        stratum:       { type: string }
+        lifecycle:     { type: string }
+        purpose_role:  { type: string }
+        substrate:     { type: string }
+        anchoring:     { type: string }
+
+    SigstoreBundle:
+      type: object
+      description: Sigstore Bundle v0.3 protobuf-JSON (see sigstore.dev spec)
+      additionalProperties: true
+
+    Provenance:
+      type: object
+      description: Legacy in-toto-style provenance (deprecated)
+      additionalProperties: true
+
+    PublishRequest:
+      type: object
+      required: [manifest, source, bundle]
+      properties:
+        manifest: { type: string, format: binary, description: 'verum.toml-equivalent JSON' }
+        source:   { type: string, format: binary, description: 'zstd-compressed tar of source tree' }
+        bundle:   { type: string, format: binary, description: 'Sigstore Bundle JSON' }
+
+    AuditFailureBody:
+      type: object
+      properties:
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              ap:        { type: string, description: 'AP-XXX from anti-pattern catalog' }
+              location:  { type: string }
+              detail:    { type: string }
+
+    SearchHit:
+      type: object
+      properties:
+        scope:        { type: string }
+        name:         { type: string }
+        latest_version: { type: string }
+        description:  { type: string }
+        score:        { type: number }
+
+    ResolveRequest:
+      type: object
+      properties:
+        root_manifest:
+          $ref: '#/components/schemas/CogManifest'
+        prior_lockfile:
+          type: object
+          additionalProperties: { type: string }
+
+    ResolvedGraph:
+      type: object
+      properties:
+        root: { type: string }
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              scope:   { type: string }
+              name:    { type: string }
+              version: { type: string }
+              sha256:  { type: string }
+              edges:
+                type: array
+                items: { type: integer }
+
+    Session:
+      type: object
+      properties:
+        session_id: { type: string }
+        username:   { type: string }
+        expires_at: { type: string, format: date-time }
+
+    CreateTokenRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        scopes:
+          type: array
+          items: { type: string, enum: [publish, yank, owner.write, advisory.write] }
+        expires_at: { type: string, format: date-time, nullable: true }
+
+    CreatedToken:
+      type: object
+      properties:
+        id:    { type: string }
+        token: { type: string, description: "ONLY returned at creation; not retrievable later" }
+        name:  { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+
+    WebAuthnChallenge:
+      type: object
+      properties:
+        challenge:     { type: string, format: byte }
+        rp:
+          type: object
+          properties:
+            id:   { type: string }
+            name: { type: string }
+        user:
+          type: object
+          properties:
+            id:           { type: string, format: byte }
+            name:         { type: string }
+            display_name: { type: string }
+        timeout: { type: integer }
+
+    WebAuthnRegistrationResponse:
+      type: object
+      properties:
+        id:    { type: string }
+        rawId: { type: string, format: byte }
+        type:  { type: string, enum: [public-key] }
+        response:
+          type: object
+          properties:
+            clientDataJSON:    { type: string, format: byte }
+            attestationObject: { type: string, format: byte }
+
+    WebAuthnAssertionResponse:
+      type: object
+      properties:
+        id:    { type: string }
+        rawId: { type: string, format: byte }
+        type:  { type: string, enum: [public-key] }
+        response:
+          type: object
+          properties:
+            clientDataJSON:    { type: string, format: byte }
+            authenticatorData: { type: string, format: byte }
+            signature:         { type: string, format: byte }
+            userHandle:        { type: string, format: byte, nullable: true }
+
+    Passkey:
+      type: object
+      properties:
+        id:           { type: string }
+        label:        { type: string }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        created_at:   { type: string, format: date-time }
+        sign_count:   { type: integer }
+
+    SigstoreVerifyRequest:
+      type: object
+      required: [bundle, expected_subject]
+      properties:
+        bundle:           { $ref: '#/components/schemas/SigstoreBundle' }
+        expected_subject: { type: string, description: 'OIDC identity expected in the cert chain' }
+        expected_issuer:  { type: string, description: 'OIDC issuer URL' }
+
+    UserProfile:
+      type: object
+      properties:
+        username:    { type: string }
+        display_name: { type: string }
+        joined_at:   { type: string, format: date-time }
+        cogs:
+          type: array
+          items:
+            type: object
+            properties:
+              scope: { type: string }
+              name:  { type: string }
+
+    Advisory:
+      type: object
+      properties:
+        id:           { type: string }
+        title:        { type: string }
+        severity:     { type: string, enum: [low, medium, high, critical] }
+        affected_scope: { type: string }
+        affected_name:  { type: string }
+        affected_versions: { type: array, items: { type: string } }
+        patched_versions:  { type: array, items: { type: string } }
+        cve_refs:     { type: array, items: { type: string } }
+        published_at: { type: string, format: date-time }
+
+    TufRoot:
+      type: object
+      additionalProperties: true
+      description: TUF root.json (signed root metadata)
+
+    TufTimestamp:
+      type: object
+      additionalProperties: true
+
+    TufSnapshot:
+      type: object
+      additionalProperties: true
+
+    TufTargets:
+      type: object
+      additionalProperties: true
