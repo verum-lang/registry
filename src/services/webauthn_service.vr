@@ -46,7 +46,7 @@ mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
 mount collections.{List, Set};
 mount base.ulid.Ulid;
 mount time.rfc3339.{Rfc3339Time, now_utc};
-mount security.random.{secure_random_bytes};
+mount security.util.rng.{secure_random_bytes};
 mount encoding.base64.{encode_url_no_pad as b64url_encode};
 mount encoding.json.{JsonValue, encode as json_encode, decode as json_decode};
 mount cache.adapters.redis.RedisCacheAdapter as RedisCache;

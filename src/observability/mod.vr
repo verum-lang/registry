@@ -29,8 +29,12 @@ module verum_registry.observability;
 
 mount core.*;
 mount base.{Result, Ok, Err, Text};
-mount tracing as core_tracing;
-mount metrics as core_metrics;
+mount tracing.{init_otlp as core_tracing_init_otlp, OtlpConfig};
+mount metrics.{
+    init_registry as core_metrics_init_registry,
+    register_counter as core_metrics_register_counter,
+    RegistryConfig as MetricsRegistryConfig,
+};
 
 mount verum_registry.config.{TracingConfig, MetricsConfig};
 
@@ -40,7 +44,7 @@ public async fn tracing_init(config: &TracingConfig) -> Result<(), Text> {
     if config.otlp_endpoint.is_empty() {
         return Ok(());
     }
-    core_tracing.init_otlp(core_tracing.OtlpConfig {
+    core_tracing_init_otlp(OtlpConfig {
         endpoint:    config.otlp_endpoint.clone(),
         sample_rate: config.sample_rate,
         service_name: "verum-registry".to_text(),
@@ -51,7 +55,7 @@ public async fn tracing_init(config: &TracingConfig) -> Result<(), Text> {
 /// Initialise the metrics subsystem and pre-register canonical
 /// counter / histogram families so the first emission is fast.
 public async fn metrics_init(config: &MetricsConfig) -> Result<(), Text> {
-    core_metrics.init_registry(core_metrics.RegistryConfig {
+    core_metrics_init_registry(MetricsRegistryConfig {
         bind_address: config.bind_address.clone(),
         mtls_only:    config.mtls_only,
     }).await.map_err(|e| f"metrics init: {e}")?;
@@ -81,7 +85,7 @@ public async fn metrics_init(config: &MetricsConfig) -> Result<(), Text> {
     ];
     let mut i: Int = 0;
     while i < counters.len() {
-        core_metrics.register_counter(counters[i]);
+        core_metrics_register_counter(counters[i]);
         i = i + 1;
     }
 

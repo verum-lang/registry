@@ -733,8 +733,8 @@ fn language_profile_to_text(p: &LanguageProfile) -> Text {
     }
 }
 
-fn render_verification_level(l: &core.verify.level.VerificationLevel) -> VerificationLevel {
-    let text = core.verify.level.to_annotation(l);
+fn render_verification_level(l: &verify.level.VerificationLevel) -> VerificationLevel {
+    let text = verify.level.to_annotation(*l);
     VerificationLevel::try_from(text).unwrap_or_else(|_| {
         VerificationLevel::try_from("runtime".to_text()).unwrap()
     })

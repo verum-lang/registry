@@ -32,7 +32,7 @@ mount database.postgres.PgError;
 mount security.tuf.types.RoleName;
 
 mount verum_registry.domain.tuf_state.{
-    TufRootSnapshot, TufSignedMetadata, role_to_db_text,
+    TufRootSnapshot, TufSignedMetadata, Hex64, role_to_db_text,
 };
 
 public type TufMetadataRepository is {};
@@ -161,7 +161,7 @@ fn row_to_root(row: TufRootRow) -> TufRootSnapshot {
     TufRootSnapshot {
         version:        row.version,
         content_bytes:  row.content_bytes,
-        content_sha256: domain.tuf_state.Hex64(row.content_sha256),
+        content_sha256: Hex64(row.content_sha256),
         expires_at:     row.expires_at,
         created_at:     row.created_at,
     }
@@ -172,7 +172,7 @@ fn row_to_signed(row: TufSignedRow) -> TufSignedMetadata {
         role:           row.role,
         version:        row.version,
         content_bytes:  row.content_bytes,
-        content_sha256: domain.tuf_state.Hex64(row.content_sha256),
+        content_sha256: Hex64(row.content_sha256),
         expires_at:     row.expires_at,
         created_at:     row.created_at,
     }

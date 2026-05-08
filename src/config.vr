@@ -31,7 +31,7 @@ mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount configuration.{ConfigValue, ConfigError, format_id_toml};
-mount configuration.toml as toml;
+mount configuration.toml.{parse as toml_parse};
 mount runtime.env.{var as env_var};
 mount io.fs.read_to_string;
 
@@ -193,7 +193,7 @@ public fn load_config() -> Result<Config, ConfigLoadError> {
 
 /// Parse a configuration text already loaded into memory.
 public fn parse_config(text: &Text) -> Result<Config, ConfigLoadError> {
-    let cv = toml.parse(text).map_err(ParseFailed)?;
+    let cv = toml_parse(text).map_err(ParseFailed)?;
     let root = require_table(&cv, &"<root>".to_text())?;
 
     Ok(Config {

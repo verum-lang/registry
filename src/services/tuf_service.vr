@@ -45,7 +45,7 @@ mount collections.{List, Map};
 mount sync.rwlock.RwLock;
 mount async.{spawn, sleep_seconds};
 mount time.rfc3339.{Rfc3339Time, now_utc, add_seconds};
-mount encoding.json.{encode as json_encode};
+mount encoding.json.{JsonValue, encode as json_encode};
 mount encoding.hex.encode as hex_encode;
 mount security.hash.sha256.digest as sha256_digest;
 mount security.ecc.ed25519.{Ed25519Seed, sign as ed25519_sign, public_key};
@@ -390,7 +390,7 @@ fn sign_timestamp(seed: &Ed25519Seed, ts: &TimestampMetadata) -> Result<List<Byt
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
         .map_err(|e| Canonical(f"{e}"))?;
-    Ok(envelope_bytes(&signed_value, &[(key_id, sig.to_list())]))
+    Ok(envelope_bytes(&signed_value, &[(key_id, sig.as_slice().to_list())]))
 }
 
 fn sign_snapshot(seed: &Ed25519Seed, sn: &SnapshotMetadata) -> Result<List<Byte>, TufError> {
@@ -401,7 +401,7 @@ fn sign_snapshot(seed: &Ed25519Seed, sn: &SnapshotMetadata) -> Result<List<Byte>
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
         .map_err(|e| Canonical(f"{e}"))?;
-    Ok(envelope_bytes(&signed_value, &[(key_id, sig.to_list())]))
+    Ok(envelope_bytes(&signed_value, &[(key_id, sig.as_slice().to_list())]))
 }
 
 fn sign_targets(seed: &Ed25519Seed, tg: &TargetsMetadata) -> Result<List<Byte>, TufError> {
@@ -412,7 +412,7 @@ fn sign_targets(seed: &Ed25519Seed, tg: &TargetsMetadata) -> Result<List<Byte>, 
     let pub_bytes = pubkey_bytes(seed);
     let key_id = compute_keyid_for_ed25519(&pub_bytes)
         .map_err(|e| Canonical(f"{e}"))?;
-    Ok(envelope_bytes(&signed_value, &[(key_id, sig.to_list())]))
+    Ok(envelope_bytes(&signed_value, &[(key_id, sig.as_slice().to_list())]))
 }
 
 fn sign_root(
@@ -432,7 +432,7 @@ fn sign_root(
         let pub_bytes = pubkey_bytes(seed);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
             .map_err(|e| Canonical(f"{e}"))?;
-        signatures.push((kid, sig.to_list()));
+        signatures.push((kid, sig.as_slice().to_list()));
         i = i + 1;
     }
     let mut j: Int = 0;
@@ -442,7 +442,7 @@ fn sign_root(
         let pub_bytes = pubkey_bytes(seed);
         let kid = compute_keyid_for_ed25519(&pub_bytes)
             .map_err(|e| Canonical(f"{e}"))?;
-        signatures.push((kid, sig.to_list()));
+        signatures.push((kid, sig.as_slice().to_list()));
         j = j + 1;
     }
     Ok(envelope_bytes(&signed_value, signatures.as_slice()))

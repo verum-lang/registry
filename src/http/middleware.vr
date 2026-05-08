@@ -40,6 +40,8 @@ mount base.{Result, Ok, Err, Text};
 mount net.weft.{Middleware, Next, WeftRequest, Response, StatusCode};
 mount time.system_time.now_unix_ns;
 mount base.ulid.generate as gen_ulid;
+mount context.standard.{Logger, Metrics, Cache, Database};
+mount context.standard.ContextLogLevel as Level;
 
 mount verum_registry.http.error_response.{ErrorEnvelope, render_error};
 
