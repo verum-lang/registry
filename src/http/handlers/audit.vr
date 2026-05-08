@@ -69,36 +69,34 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
     let violations = detect_poset_violations(POSET_MAX_DEPTH).await
         .unwrap_or_else(|_| List.new());
 
+    let mut d = encoding.json.JsonObject.new();
+    d.insert("theorem".to_text(),       json_number(dist.theorem        as Float));
+    d.insert("definition".to_text(),    json_number(dist.definition     as Float));
+    d.insert("conditional".to_text(),   json_number(dist.conditional    as Float));
+    d.insert("postulate".to_text(),     json_number(dist.postulate      as Float));
+    d.insert("hypothesis".to_text(),    json_number(dist.hypothesis     as Float));
+    d.insert("interpretation".to_text(),json_number(dist.interpretation as Float));
+    d.insert("retracted".to_text(),     json_number(dist.retracted      as Float));
+    d.insert("total".to_text(),         json_number(dist.total          as Float));
+
+    let mut arr: List<JsonValue> = List.with_capacity(violations.len());
+    let mut i: Int = 0;
+    while i < violations.len() {
+        let v = &violations[i];
+        let mut e = encoding.json.JsonObject.new();
+        e.insert("highRankCog".to_text(),       json_string(v.high_rank_cog.clone()));
+        e.insert("highRankLifecycle".to_text(), json_string(v.high_rank.clone()));
+        e.insert("lowRankCog".to_text(),        json_string(v.low_rank_cog.clone()));
+        e.insert("lowRankLifecycle".to_text(),  json_string(v.low_rank.clone()));
+        e.insert("depth".to_text(),             json_number(v.depth as Float));
+        arr.push(json_object(e));
+        i = i + 1;
+    }
+
     let mut obj = encoding.json.JsonObject.new();
     obj.insert("schemaVersion".to_text(), json_string("1.0".to_text()));
-    obj.insert("distribution".to_text(), {
-        let mut d = encoding.json.JsonObject.new();
-        d.insert("theorem".to_text(),       json_number(dist.theorem        as Float));
-        d.insert("definition".to_text(),    json_number(dist.definition     as Float));
-        d.insert("conditional".to_text(),   json_number(dist.conditional    as Float));
-        d.insert("postulate".to_text(),     json_number(dist.postulate      as Float));
-        d.insert("hypothesis".to_text(),    json_number(dist.hypothesis     as Float));
-        d.insert("interpretation".to_text(),json_number(dist.interpretation as Float));
-        d.insert("retracted".to_text(),     json_number(dist.retracted      as Float));
-        d.insert("total".to_text(),         json_number(dist.total          as Float));
-        json_object(d)
-    });
-    obj.insert("posetViolations".to_text(), {
-        let mut arr: List<JsonValue> = List.with_capacity(violations.len());
-        let mut i: Int = 0;
-        while i < violations.len() {
-            let v = &violations[i];
-            let mut e = encoding.json.JsonObject.new();
-            e.insert("highRankCog".to_text(),       json_string(v.high_rank_cog.clone()));
-            e.insert("highRankLifecycle".to_text(), json_string(v.high_rank.clone()));
-            e.insert("lowRankCog".to_text(),        json_string(v.low_rank_cog.clone()));
-            e.insert("lowRankLifecycle".to_text(),  json_string(v.low_rank.clone()));
-            e.insert("depth".to_text(),             json_number(v.depth as Float));
-            arr.push(json_object(e));
-            i = i + 1;
-        }
-        json_array(arr)
-    });
+    obj.insert("distribution".to_text(), json_object(d));
+    obj.insert("posetViolations".to_text(), json_array(arr));
     Response.json(&json_object(obj))
 }
 

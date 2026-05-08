@@ -145,9 +145,9 @@ implement SearchService {
         id: &PackageScope,
     ) -> Result<PackageRecord, SearchError> using [Database] {
         let row_opt = Database.query_one_opt(
-            sql#"SELECT id, description, homepage, repository, license, keywords,
+            sql#"""SELECT id, description, homepage, repository, license, keywords,
                         latest_version, downloads, score, created_at, updated_at
-                  FROM packages WHERE id = $1"#,
+                  FROM packages WHERE id = $1""",
             (id,),
         ).await.map_err(|e| SearchBackendFailed(f"{e}"))?;
         match row_opt {

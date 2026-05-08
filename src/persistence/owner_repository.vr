@@ -46,8 +46,8 @@ public async fn list_owners(
 ) -> Result<List<PackageOwner>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let rows = conn.query(
-        sql#"SELECT package_id, user_id, role, granted_at, granted_by
-              FROM package_owners WHERE package_id = $1"#,
+        sql#"""SELECT package_id, user_id, role, granted_at, granted_by
+              FROM package_owners WHERE package_id = $1""",
         (package_id,),
     ).await?;
     let mut out: List<PackageOwner> = List.new();
@@ -69,13 +69,13 @@ public async fn add_owner(
         RoleMaintainer  => "maintainer".to_text(),
     };
     conn.execute(
-        sql#"INSERT INTO package_owners
+        sql#"""INSERT INTO package_owners
               (package_id, user_id, role, granted_at, granted_by)
               VALUES ($1, $2, $3, $4, $5)
               ON CONFLICT (package_id, user_id) DO UPDATE SET
                   role = EXCLUDED.role,
                   granted_by = EXCLUDED.granted_by,
-                  granted_at = EXCLUDED.granted_at"#,
+                  granted_at = EXCLUDED.granted_at""",
         (&owner.package_id, &owner.user_id, &role_text, &owner.granted_at, &owner.granted_by),
     ).await?;
     Ok(())
@@ -88,7 +88,7 @@ public async fn remove_owner(
 ) -> Result<(), DbError> {
     let mut conn = repo.pool.acquire().await?;
     let n = conn.execute(
-        sql#"DELETE FROM package_owners WHERE package_id = $1 AND user_id = $2"#,
+        sql#"""DELETE FROM package_owners WHERE package_id = $1 AND user_id = $2""",
         (package_id, user_id),
     ).await?;
     if n == 0 {
@@ -109,10 +109,10 @@ public async fn is_owner(
 ) -> Result<Bool, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row = conn.query_one(
-        sql#"SELECT EXISTS (
+        sql#"""SELECT EXISTS (
                 SELECT 1 FROM package_owners
                 WHERE package_id = $1 AND user_id = $2 AND role = 'owner'
-             ) AS x"#,
+             ) AS x""",
         (package_id, user_id),
     ).await?;
     Ok(row.get_bool("x").unwrap_or(false))
@@ -126,10 +126,10 @@ public async fn is_maintainer_or_owner(
 ) -> Result<Bool, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row = conn.query_one(
-        sql#"SELECT EXISTS (
+        sql#"""SELECT EXISTS (
                 SELECT 1 FROM package_owners
                 WHERE package_id = $1 AND user_id = $2
-             ) AS x"#,
+             ) AS x""",
         (package_id, user_id),
     ).await?;
     Ok(row.get_bool("x").unwrap_or(false))

@@ -129,12 +129,12 @@ implement AuthService {
         using [Database, Metrics]
     {
         let row_opt = Database.query_one_opt(
-            sql#"SELECT t.id, t.user_id, t.secret_hash, t.scopes,
+            sql#"""SELECT t.id, t.user_id, t.secret_hash, t.scopes,
                         t.expires_at, t.revoked_at,
                         u.id AS uid, u.username, u.email, u.password_hash, u.created_at
                  FROM api_tokens t
                  INNER JOIN users u ON u.id = t.user_id
-                 WHERE t.id = $1"#,
+                 WHERE t.id = $1""",
             (token_id,),
         ).await.map_err(|_| InvalidApiToken)?;
 
@@ -168,7 +168,7 @@ implement AuthService {
 
         // Update last_used_at (best-effort; failures here don't block auth).
         let _ = Database.execute(
-            sql#"UPDATE api_tokens SET last_used_at = now() WHERE id = $1"#,
+            sql#"""UPDATE api_tokens SET last_used_at = now() WHERE id = $1""",
             (token_id,),
         ).await;
 

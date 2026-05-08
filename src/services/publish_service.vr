@@ -238,7 +238,7 @@ implement PublishService {
         let mut blocking: List<AntiPatternViolation> = List.new();
         let mut i: Int = 0;
         while i < ap_violations.len() {
-            if matches!(ap_violations[i].severity, Severity.Error) {
+            if (ap_violations[i].severity is Severity.Error) {
                 blocking.push(ap_violations[i].clone());
             }
             i = i + 1;
@@ -379,7 +379,7 @@ implement PublishService {
         &self,
         name: &CogName,
     ) -> Result<Bool, PublishError> using [Database] {
-        let row = Database.query_one(sql#"SELECT EXISTS (SELECT 1 FROM packages WHERE id = $1) AS x"#, (name,))
+        let row = Database.query_one(sql#"""SELECT EXISTS (SELECT 1 FROM packages WHERE id = $1) AS x""", (name,))
             .await
             .map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
@@ -392,7 +392,7 @@ implement PublishService {
     ) -> Result<Bool, PublishError> using [Database] {
         let v_text = base.semver.format_semver(version);
         let row = Database.query_one(
-            sql#"SELECT EXISTS (SELECT 1 FROM versions WHERE package_id = $1 AND version = $2) AS x"#,
+            sql#"""SELECT EXISTS (SELECT 1 FROM versions WHERE package_id = $1 AND version = $2) AS x""",
             (name, &v_text),
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
@@ -403,7 +403,7 @@ implement PublishService {
         name: &CogName,
     ) -> Result<Maybe<SemVer>, PublishError> using [Database] {
         let row_opt = Database.query_one_opt(
-            sql#"SELECT latest_version FROM packages WHERE id = $1"#,
+            sql#"""SELECT latest_version FROM packages WHERE id = $1""",
             (name,),
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         match row_opt {
@@ -422,8 +422,8 @@ implement PublishService {
         name: &CogName,
     ) -> Result<List<PackageOwner>, PublishError> using [Database] {
         let rows = Database.query(
-            sql#"SELECT package_id, user_id, role, granted_at, granted_by
-                  FROM package_owners WHERE package_id = $1"#,
+            sql#"""SELECT package_id, user_id, role, granted_at, granted_by
+                  FROM package_owners WHERE package_id = $1""",
             (name,),
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<PackageOwner> = List.new();
@@ -441,7 +441,7 @@ implement PublishService {
     ) -> Result<List<CogName>, PublishError> using [Database] {
         // Top 1000 packages by download count — typosquatting candidates.
         let rows = Database.query(
-            sql#"SELECT id FROM packages WHERE id <> $1 ORDER BY downloads DESC LIMIT 1000"#,
+            sql#"""SELECT id FROM packages WHERE id <> $1 ORDER BY downloads DESC LIMIT 1000""",
             (proposed,),
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<CogName> = List.new();
@@ -481,7 +481,7 @@ implement PublishService {
     ) -> Result<(), PublishError> {
         let v_text = base.semver.format_semver(&manifest.cog.version);
         let kw_array = manifest.cog.keywords.iter().map(|k| k.clone()).collect<Vec<_>>();
-        tx.execute(sql#"
+        tx.execute(sql#"""
             INSERT INTO packages (
                 id, description, homepage, repository, license, keywords,
                 latest_version, downloads, score, created_at, updated_at
@@ -499,7 +499,7 @@ implement PublishService {
                     ELSE packages.latest_version
                 END,
                 updated_at = now()
-        "#, (
+        """, (
             &manifest.cog.name,
             &manifest.cog.description.clone().unwrap_or_else(|| "".to_text()),
             &manifest.cog.homepage,
@@ -520,7 +520,7 @@ implement PublishService {
     ) -> Result<PackageVersion, PublishError> {
         let v_text = base.semver.format_semver(&manifest.cog.version);
         let lifecycle_text = lifecycle_to_glyph(&analyzed.cve_lifecycle);
-        tx.execute(sql#"
+        tx.execute(sql#"""
             INSERT INTO versions (
                 package_id, version, edition, language_profile,
                 dependencies, dev_dependencies, build_dependencies,
@@ -532,7 +532,7 @@ implement PublishService {
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                 now(), $14, false, NULL
             )
-        "#, (
+        """, (
             &manifest.cog.name, &v_text,
             &manifest.cog.edition,
             &language_profile_to_text(&manifest.language.profile),
@@ -577,10 +577,10 @@ implement PublishService {
         user_id: &UserId,
     ) -> Result<Bool, PublishError> {
         let row = tx.query_one(
-            sql#"SELECT EXISTS (
+            sql#"""SELECT EXISTS (
                     SELECT 1 FROM package_owners
                     WHERE package_id = $1 AND user_id = $2
-                 ) AS x"#,
+                 ) AS x""",
             (name, user_id),
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
@@ -593,10 +593,10 @@ implement PublishService {
         user_id: &UserId,
         granted_by: &UserId,
     ) -> Result<(), PublishError> {
-        tx.execute(sql#"
+        tx.execute(sql#"""
             INSERT INTO package_owners (package_id, user_id, role, granted_at, granted_by)
             VALUES ($1, $2, 'owner', now(), $3)
-        "#, (name, user_id, granted_by))
+        """, (name, user_id, granted_by))
             .await
             .map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(())

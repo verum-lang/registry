@@ -59,9 +59,9 @@ public async fn lookup_package(
 ) -> Result<Maybe<PackageRecord>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"SELECT id, description, homepage, repository, license, keywords,
+        sql#"""SELECT id, description, homepage, repository, license, keywords,
                     latest_version, downloads, score, created_at, updated_at
-              FROM packages WHERE id = $1"#,
+              FROM packages WHERE id = $1""",
         (id,),
     ).await?;
     match row_opt {
@@ -79,7 +79,7 @@ public async fn upsert_package(
     let mut conn = repo.pool.acquire().await?;
     let v_text = format_semver(&pkg.latest_version);
     let kw_array = pkg.keywords.iter().map(|k| k.clone()).collect<List<Text>>();
-    conn.execute(sql#"
+    conn.execute(sql#"""
         INSERT INTO packages (
             id, description, homepage, repository, license, keywords,
             latest_version, downloads, score, created_at, updated_at
@@ -97,7 +97,7 @@ public async fn upsert_package(
                 ELSE packages.latest_version
             END,
             updated_at = now()
-    "#, (
+    """, (
         &pkg.id, &pkg.description, &pkg.homepage, &pkg.repository,
         &pkg.license, &kw_array, &v_text,
         &pkg.downloads, &pkg.score, &pkg.created_at, &pkg.updated_at,
@@ -112,7 +112,7 @@ public async fn increment_downloads(
 ) -> Result<(), DbError> {
     let mut conn = repo.pool.acquire().await?;
     conn.execute(
-        sql#"UPDATE packages SET downloads = downloads + 1 WHERE id = $1"#,
+        sql#"""UPDATE packages SET downloads = downloads + 1 WHERE id = $1""",
         (id,),
     ).await?;
     Ok(())
@@ -127,7 +127,7 @@ public async fn set_score(
 ) -> Result<(), DbError> {
     let mut conn = repo.pool.acquire().await?;
     conn.execute(
-        sql#"UPDATE packages SET score = $2, updated_at = now() WHERE id = $1"#,
+        sql#"""UPDATE packages SET score = $2, updated_at = now() WHERE id = $1""",
         (id, &score),
     ).await?;
     Ok(())
@@ -140,11 +140,11 @@ public async fn lookup_recent_packages(
 ) -> Result<List<PackageRecord>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let rows = conn.query(
-        sql#"SELECT id, description, homepage, repository, license, keywords,
+        sql#"""SELECT id, description, homepage, repository, license, keywords,
                     latest_version, downloads, score, created_at, updated_at
               FROM packages
               ORDER BY updated_at DESC
-              LIMIT $1"#,
+              LIMIT $1""",
         (&limit,),
     ).await?;
     let mut out: List<PackageRecord> = List.new();

@@ -47,8 +47,8 @@ public async fn lookup_user_by_id(
 ) -> Result<Maybe<User>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"SELECT id, username, email, password_hash, created_at
-              FROM users WHERE id = $1"#,
+        sql#"""SELECT id, username, email, password_hash, created_at
+              FROM users WHERE id = $1""",
         (id,),
     ).await?;
     match row_opt {
@@ -63,8 +63,8 @@ public async fn lookup_user_by_username(
 ) -> Result<Maybe<User>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"SELECT id, username, email, password_hash, created_at
-              FROM users WHERE username = $1"#,
+        sql#"""SELECT id, username, email, password_hash, created_at
+              FROM users WHERE username = $1""",
         (username,),
     ).await?;
     match row_opt {
@@ -79,8 +79,8 @@ public async fn create_user(
 ) -> Result<(), DbError> {
     let mut conn = repo.pool.acquire().await?;
     conn.execute(
-        sql#"INSERT INTO users (id, username, email, password_hash, created_at)
-              VALUES ($1, $2, $3, $4, $5)"#,
+        sql#"""INSERT INTO users (id, username, email, password_hash, created_at)
+              VALUES ($1, $2, $3, $4, $5)""",
         (&user.id, &user.username, &user.email, &user.password_hash, &user.created_at),
     ).await?;
     let mut i: Int = 0;
@@ -107,11 +107,11 @@ async fn link_oidc_identity_inner(
 ) -> Result<(), DbError> {
     let metadata_json = encoding.json.stringify(&identity.metadata);
     conn.execute(
-        sql#"INSERT INTO oidc_identities (user_id, issuer, subject, metadata)
+        sql#"""INSERT INTO oidc_identities (user_id, issuer, subject, metadata)
               VALUES ($1, $2, $3, $4::jsonb)
               ON CONFLICT (issuer, subject) DO UPDATE SET
                   user_id = EXCLUDED.user_id,
-                  metadata = EXCLUDED.metadata"#,
+                  metadata = EXCLUDED.metadata""",
         (user_id, &identity.issuer, &identity.subject, &metadata_json),
     ).await?;
     Ok(())
@@ -123,8 +123,8 @@ async fn decode_user_with_oidc(
 ) -> Result<User, DbError> {
     let id: UserId = row.get_text("id")?;
     let oidc_rows = conn.query(
-        sql#"SELECT issuer, subject, metadata
-              FROM oidc_identities WHERE user_id = $1"#,
+        sql#"""SELECT issuer, subject, metadata
+              FROM oidc_identities WHERE user_id = $1""",
         (&id,),
     ).await?;
     let mut oidc_identities: List<OidcIdentity> = List.new();

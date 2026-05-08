@@ -48,14 +48,14 @@ implement TufMetadataRepository {
     ) -> Result<(), PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             INSERT INTO tuf_root_history (
                 version, content_bytes, content_sha256, expires_at, created_at
             ) VALUES (
                 ${snap.version}, ${&snap.content_bytes}, ${&snap.content_sha256.0},
                 ${&snap.expires_at}, ${&snap.created_at}
             )
-        "#.execute().await.map(|_| ())
+        """.execute().await.map(|_| ())
     }
 
     public async fn get_root(
@@ -64,23 +64,23 @@ implement TufMetadataRepository {
     ) -> Result<Maybe<TufRootSnapshot>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT version, content_bytes, content_sha256, expires_at, created_at
             FROM tuf_root_history
             WHERE version = ${version}
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_root))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_root))
     }
 
     public async fn latest_root(&self) -> Result<Maybe<TufRootSnapshot>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT version, content_bytes, content_sha256, expires_at, created_at
             FROM tuf_root_history
             ORDER BY version DESC
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_root))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_root))
     }
 
     // =========================================================================
@@ -93,14 +93,14 @@ implement TufMetadataRepository {
     ) -> Result<(), PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             INSERT INTO tuf_signed_metadata (
                 role, version, content_bytes, content_sha256, expires_at, created_at
             ) VALUES (
                 ${&meta.role}, ${meta.version}, ${&meta.content_bytes},
                 ${&meta.content_sha256.0}, ${&meta.expires_at}, ${&meta.created_at}
             )
-        "#.execute().await.map(|_| ())
+        """.execute().await.map(|_| ())
     }
 
     public async fn get_signed(
@@ -111,12 +111,12 @@ implement TufMetadataRepository {
         using [Database]
     {
         let role_text = role_to_db_text(role);
-        sql#"
+        sql#"""
             SELECT role, version, content_bytes, content_sha256, expires_at, created_at
             FROM tuf_signed_metadata
             WHERE role = ${&role_text} AND version = ${version}
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_signed))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_signed))
     }
 
     public async fn latest_signed(
@@ -126,13 +126,13 @@ implement TufMetadataRepository {
         using [Database]
     {
         let role_text = role_to_db_text(role);
-        sql#"
+        sql#"""
             SELECT role, version, content_bytes, content_sha256, expires_at, created_at
             FROM tuf_signed_metadata
             WHERE role = ${&role_text}
             ORDER BY version DESC
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_signed))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_signed))
     }
 
     /// Atomically increment-and-fetch the next version for a role.
@@ -145,11 +145,11 @@ implement TufMetadataRepository {
         using [Database]
     {
         let role_text = role_to_db_text(role);
-        sql#"
+        sql#"""
             SELECT COALESCE(MAX(version), 0) + 1
             FROM tuf_signed_metadata
             WHERE role = ${&role_text}
-        "#.fetch_one_scalar().await
+        """.fetch_one_scalar().await
     }
 }
 

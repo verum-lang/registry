@@ -415,12 +415,12 @@ pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary
     using [Database]
 {
     // Read the per-cog AP findings from cog_audit_records and aggregate.
-    let rows = sql#"
+    let rows = sql#"""
         SELECT ap_id, COUNT(*) as n
         FROM cog_audit_findings
         WHERE verdict <> 'ok'
         GROUP BY ap_id
-    "#.fetch_all().await
+    """.fetch_all().await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut counts: Map<Text, Int> = Map.new();
@@ -440,14 +440,14 @@ pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary
         j = j + 1;
     }
 
-    let totals: TotalsRow = sql#"
+    let totals: TotalsRow = sql#"""
         SELECT
             COUNT(*) AS total,
             SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END)   AS with_errors,
             SUM(CASE WHEN error_count = 0 AND warning_count > 0 THEN 1 ELSE 0 END) AS warning_only,
             SUM(CASE WHEN error_count = 0 AND warning_count = 0 THEN 1 ELSE 0 END) AS clean
         FROM cog_audit_records
-    "#.fetch_one().await
+    """.fetch_one().await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     Ok(CorpusAntiPatternSummary {

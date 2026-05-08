@@ -52,7 +52,7 @@ implement PasskeyRepository {
         using [Database]
     {
         let attestation_text = attestation_format_to_text(&p.attestation_format);
-        sql#"
+        sql#"""
             INSERT INTO passkeys (
                 id, user_id, credential_id, public_key_cose, cose_alg,
                 aaguid, sign_count, backup_eligible, backup_state,
@@ -67,7 +67,7 @@ implement PasskeyRepository {
                 ${&p.transports},
                 ${&p.created_at}, ${&p.last_used_at}
             )
-        "#.execute().await.map(|_| ())
+        """.execute().await.map(|_| ())
     }
 
     /// Find by the authenticator-chosen credential id (used during
@@ -78,7 +78,7 @@ implement PasskeyRepository {
     ) -> Result<Maybe<Passkey>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT id, user_id, credential_id, public_key_cose, cose_alg,
                    aaguid, sign_count, backup_eligible, backup_state,
                    attestation_format, nickname, transports,
@@ -86,7 +86,7 @@ implement PasskeyRepository {
             FROM passkeys
             WHERE credential_id = ${credential_id}
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_passkey))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_passkey))
     }
 
     /// All passkeys for a user (settings UI).
@@ -96,7 +96,7 @@ implement PasskeyRepository {
     ) -> Result<List<Passkey>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT id, user_id, credential_id, public_key_cose, cose_alg,
                    aaguid, sign_count, backup_eligible, backup_state,
                    attestation_format, nickname, transports,
@@ -104,7 +104,7 @@ implement PasskeyRepository {
             FROM passkeys
             WHERE user_id = ${user_id.0}
             ORDER BY last_used_at DESC NULLS LAST, created_at DESC
-        "#.fetch_all().await.map(|rows| rows.into_iter().map(row_to_passkey).collect())
+        """.fetch_all().await.map(|rows| rows.into_iter().map(row_to_passkey).collect())
     }
 
     /// Update sign_count + backup_state + last_used_at after a
@@ -119,13 +119,13 @@ implement PasskeyRepository {
     ) -> Result<(), PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             UPDATE passkeys
                SET sign_count   = ${new_sign_count},
                    backup_state = ${new_backup_state},
                    last_used_at = ${used_at}
              WHERE id = ${id.0}
-        "#.execute().await.map(|_| ())
+        """.execute().await.map(|_| ())
     }
 
     /// Revoke (hard-delete) a passkey.
@@ -136,11 +136,11 @@ implement PasskeyRepository {
     ) -> Result<Int, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             DELETE FROM passkeys
              WHERE id = ${passkey_id.0}
                AND user_id = ${user_id.0}
-        "#.execute().await
+        """.execute().await
     }
 
     /// How many passkeys a user has — UX hint for "your last passkey
@@ -151,11 +151,11 @@ implement PasskeyRepository {
     ) -> Result<Int, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT COUNT(*)::BIGINT
             FROM passkeys
             WHERE user_id = ${user_id.0}
-        "#.fetch_one_scalar().await
+        """.fetch_one_scalar().await
     }
 }
 

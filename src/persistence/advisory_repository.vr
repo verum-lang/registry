@@ -49,11 +49,11 @@ public async fn list_advisories_for_package(
 ) -> Result<List<SecurityAdvisory>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let rows = conn.query(
-        sql#"SELECT id, package_id, affected_versions, fixed_versions,
+        sql#"""SELECT id, package_id, affected_versions, fixed_versions,
                     severity, cve_ids, summary, details, disclosed_at
               FROM security_advisories
               WHERE package_id = $1
-              ORDER BY disclosed_at DESC"#,
+              ORDER BY disclosed_at DESC""",
         (package_id,),
     ).await?;
     let mut out: List<SecurityAdvisory> = List.new();
@@ -71,9 +71,9 @@ public async fn lookup_advisory(
 ) -> Result<Maybe<SecurityAdvisory>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"SELECT id, package_id, affected_versions, fixed_versions,
+        sql#"""SELECT id, package_id, affected_versions, fixed_versions,
                     severity, cve_ids, summary, details, disclosed_at
-              FROM security_advisories WHERE id = $1"#,
+              FROM security_advisories WHERE id = $1""",
         (id,),
     ).await?;
     match row_opt {
@@ -99,10 +99,10 @@ public async fn insert_advisory(
         None    => None,
     };
     conn.execute(
-        sql#"INSERT INTO security_advisories
+        sql#"""INSERT INTO security_advisories
               (id, package_id, affected_versions, fixed_versions,
                severity, cve_ids, summary, details, disclosed_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
         (&advisory.id, &advisory.package_id, &affected_text, &fixed_text,
          &severity_text, &advisory.cve_ids, &advisory.summary,
          &advisory.details, &advisory.disclosed_at),

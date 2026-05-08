@@ -42,7 +42,7 @@ implement SigstoreBundleRepository {
     ) -> Result<(), PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             INSERT INTO sigstore_bundles (
                 id, version_id, bundle_json,
                 envelope_sha256, cert_chain_leaf_sha256,
@@ -55,7 +55,7 @@ implement SigstoreBundleRepository {
                 ${&rec.oidc_issuer}, ${&rec.oidc_subject},
                 ${&rec.created_at}
             )
-        "#.execute().await.map(|_| ())
+        """.execute().await.map(|_| ())
     }
 
     public async fn fetch_by_version_id(
@@ -64,7 +64,7 @@ implement SigstoreBundleRepository {
     ) -> Result<Maybe<SigstoreBundleRecord>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT id, version_id, bundle_json,
                    envelope_sha256, cert_chain_leaf_sha256,
                    rekor_log_index, integrated_time,
@@ -72,7 +72,7 @@ implement SigstoreBundleRepository {
             FROM sigstore_bundles
             WHERE version_id = ${version_id}
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_record))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_record))
     }
 
     /// Lookup by SHA-256 of the canonical envelope — used by the
@@ -83,7 +83,7 @@ implement SigstoreBundleRepository {
     ) -> Result<Maybe<SigstoreBundleRecord>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT id, version_id, bundle_json,
                    envelope_sha256, cert_chain_leaf_sha256,
                    rekor_log_index, integrated_time,
@@ -91,7 +91,7 @@ implement SigstoreBundleRepository {
             FROM sigstore_bundles
             WHERE envelope_sha256 = ${&envelope_sha256.0}
             LIMIT 1
-        "#.fetch_optional().await.map(|opt| opt.map(row_to_record))
+        """.fetch_optional().await.map(|opt| opt.map(row_to_record))
     }
 
     /// Audit query: list all bundles published under a given OIDC
@@ -104,7 +104,7 @@ implement SigstoreBundleRepository {
     ) -> Result<List<SigstoreBundleRecord>, PgError>
         using [Database]
     {
-        sql#"
+        sql#"""
             SELECT id, version_id, bundle_json,
                    envelope_sha256, cert_chain_leaf_sha256,
                    rekor_log_index, integrated_time,
@@ -114,7 +114,7 @@ implement SigstoreBundleRepository {
               AND oidc_subject = ${subject}
             ORDER BY rekor_log_index DESC
             LIMIT ${limit}
-        "#.fetch_all().await.map(|rows| rows.into_iter().map(row_to_record).collect())
+        """.fetch_all().await.map(|rows| rows.into_iter().map(row_to_record).collect())
     }
 }
 

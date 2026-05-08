@@ -83,9 +83,9 @@ implement SumdbService {
         // Replay all sumdb_entries to rebuild the in-memory log.
         let mut conn = pool.acquire().await.map_err(|e| f"{e}")?;
         let rows = conn.query(
-            sql#"SELECT package_id, version, checksum, timestamp
+            sql#"""SELECT package_id, version, checksum, timestamp
                   FROM sumdb_entries
-                  ORDER BY sequence"#,
+                  ORDER BY sequence""",
             (),
         ).await.map_err(|e| f"{e}")?;
 
@@ -123,9 +123,9 @@ implement SumdbService {
             return Ok(cached);
         }
         let row_opt = Database.query_one_opt(
-            sql#"SELECT sequence, package_id, version, checksum
+            sql#"""SELECT sequence, package_id, version, checksum
                   FROM sumdb_entries
-                  WHERE package_id = $1 AND version = $2"#,
+                  WHERE package_id = $1 AND version = $2""",
             (package, &v_text),
         ).await.map_err(|e| StorageFailed(f"{e}"))?;
         let row = row_opt.ok_or(VersionNotInLog {
@@ -212,6 +212,6 @@ fn encode_leaf_text(row: &Row) -> Result<Text, Text> {
     let ver = row.get_text("version").map_err(|e| f"{e}")?;
     let chk = row.get_text("checksum").map_err(|e| f"{e}")?;
     let ts = row.get_timestamp("timestamp").map_err(|e| f"{e}")?;
-    Ok(format_unsupported(r#"{{"package":"{}","version":"{}","checksum":"{}","timestamp":"{}"}}"#,
+    Ok(format_unsupported("""{{"package":"{}","version":"{}","checksum":"{}","timestamp":"{}"}}""",
                 pkg, ver, chk, time.rfc3339.format(&ts)))
 }

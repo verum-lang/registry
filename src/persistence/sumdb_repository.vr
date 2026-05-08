@@ -51,9 +51,9 @@ public async fn append_entry(
     let mut conn = repo.pool.acquire().await?;
     let v_text = format_semver(version);
     let row = conn.query_one(
-        sql#"INSERT INTO sumdb_entries (package_id, version, checksum, leaf_hash)
+        sql#"""INSERT INTO sumdb_entries (package_id, version, checksum, leaf_hash)
               VALUES ($1, $2, $3, $4)
-              RETURNING sequence"#,
+              RETURNING sequence""",
         (package_id, &v_text, checksum, leaf_hash),
     ).await?;
     Ok(row.get_int64("sequence")? as Int)
@@ -67,9 +67,9 @@ public async fn lookup_entry(
     let mut conn = repo.pool.acquire().await?;
     let v_text = format_semver(version);
     let row_opt = conn.query_one_opt(
-        sql#"SELECT sequence, package_id, version, checksum, timestamp
+        sql#"""SELECT sequence, package_id, version, checksum, timestamp
               FROM sumdb_entries
-              WHERE package_id = $1 AND version = $2"#,
+              WHERE package_id = $1 AND version = $2""",
         (package_id, &v_text),
     ).await?;
     match row_opt {
@@ -91,13 +91,13 @@ public async fn save_tree_head(
 ) -> Result<(), DbError> {
     let mut conn = repo.pool.acquire().await?;
     conn.execute(
-        sql#"INSERT INTO sumdb_tree_heads
+        sql#"""INSERT INTO sumdb_tree_heads
               (tree_size, root_hash, timestamp, signature)
               VALUES ($1, $2, $3, $4)
               ON CONFLICT (tree_size) DO UPDATE SET
                   root_hash = EXCLUDED.root_hash,
                   timestamp = EXCLUDED.timestamp,
-                  signature = EXCLUDED.signature"#,
+                  signature = EXCLUDED.signature""",
         (&sth.tree_size, &sth.root_hash, &sth.timestamp_ms, &sth.signature.to_list()),
     ).await?;
     Ok(())
@@ -108,10 +108,10 @@ public async fn latest_tree_head(
 ) -> Result<Maybe<SignedTreeHead>, DbError> {
     let mut conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"SELECT tree_size, root_hash, timestamp, signature
+        sql#"""SELECT tree_size, root_hash, timestamp, signature
               FROM sumdb_tree_heads
               ORDER BY tree_size DESC
-              LIMIT 1"#,
+              LIMIT 1""",
         (),
     ).await?;
     match row_opt {

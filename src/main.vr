@@ -123,7 +123,7 @@ mount verum_registry.persistence.{
     open_postgres, open_object_store, open_cache, open_search,
 };
 mount verum_registry.observability.{tracing_init, metrics_init};
-mount async_::spawn;
+mount async_.spawn;
 
 // =============================================================================
 // Entry point

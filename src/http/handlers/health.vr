@@ -48,21 +48,27 @@ public async fn handle_readiness(req: WeftRequest) -> Response
     if failures.is_empty() {
         Response.text("READY")
     } else {
-        Response.json(&json! {{
-            "ready": false,
-            "failures": failures,
-        }}).status(StatusCode.ServiceUnavailable)
+        let mut not_ready: JsonObject = JsonObject.new();
+        not_ready.insert("ready".to_text(), json_bool(false));
+        let mut fail_arr: List<JsonValue> = List.new();
+        let mut i: Int = 0;
+        while i < failures.len() {
+            fail_arr.push(json_string(failures[i].clone()));
+            i = i + 1;
+        }
+        not_ready.insert("failures".to_text(), json_array(fail_arr));
+        Response.json(&json_object(not_ready)).status(StatusCode.ServiceUnavailable)
     }
 }
 
 // GET /health/version — registry build info.
 public async fn handle_version(req: WeftRequest) -> Response {
     let _ = req;
-    Response.json(&json! {{
-        "registry":     "verum-registry",
-        "spec":         "v2.0",
-        "verum_stdlib": @env("VERUM_STDLIB_VERSION", "unknown"),
-        "build":        @env("CARGO_PKG_VERSION", "unknown"),
-        "git_sha":      @env("GIT_SHA", "unknown"),
-    }})
+    let mut version_obj: JsonObject = JsonObject.new();
+    version_obj.insert("registry".to_text(), json_string("verum-registry".to_text()));
+    version_obj.insert("spec".to_text(), json_string("v2.0".to_text()));
+    version_obj.insert("verum_stdlib".to_text(), json_string(@env("VERUM_STDLIB_VERSION", "unknown").to_text()));
+    version_obj.insert("build".to_text(), json_string(@env("CARGO_PKG_VERSION", "unknown").to_text()));
+    version_obj.insert("git_sha".to_text(), json_string(@env("GIT_SHA", "unknown").to_text()));
+    Response.json(&json_object(version_obj))
 }

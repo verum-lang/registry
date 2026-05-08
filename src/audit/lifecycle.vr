@@ -73,12 +73,12 @@ public type LifecycleDistribution is {
 pub async fn lifecycle_distribution_for_corpus() -> Result<LifecycleDistribution, AuditError>
     using [Database]
 {
-    let rows = sql#"
+    let rows = sql#"""
         SELECT cve_lifecycle, COUNT(*) AS n
         FROM versions
         WHERE NOT yanked
         GROUP BY cve_lifecycle
-    "#.fetch_all().await
+    """.fetch_all().await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut dist = LifecycleDistribution {
@@ -139,7 +139,7 @@ public type PosetViolation is {
 pub async fn detect_poset_violations(max_depth: Int) -> Result<List<PosetViolation>, AuditError>
     using [Database]
 {
-    let rows = sql#"
+    let rows = sql#"""
         WITH RECURSIVE dep_walk AS (
             SELECT
                 p.id || '@' || v.version AS source_cog,
@@ -179,7 +179,7 @@ pub async fn detect_poset_violations(max_depth: Int) -> Result<List<PosetViolati
         WHERE NOT v3.yanked
           AND lifecycle_rank(dw.source_lifecycle) > lifecycle_rank(v3.cve_lifecycle)
         ORDER BY dw.depth, dw.source_cog
-    "#.fetch_all().await
+    """.fetch_all().await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut out: List<PosetViolation> = List.with_capacity(rows.len());
