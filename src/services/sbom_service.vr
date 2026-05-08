@@ -1,0 +1,447 @@
+// =============================================================================
+// verum_registry/services/sbom_service.vr — SBOM generation at publish (REG-8)
+// =============================================================================
+//
+// Generates CycloneDX 1.5 + SPDX 2.3 software bills of materials at
+// publish time.  Both formats are emitted side-by-side to satisfy
+// downstream consumer preferences (NTIA US executive-order 14028 +
+// EU CRA accept either; the registry hosts both for every cog).
+//
+// Composes against:
+//   - core.cog.manifest                     — CogManifest model
+//   - core.cog.resolve                      — dependency resolution (direct deps)
+//   - core.security.hash.sha256             — content hashes
+//   - core.encoding.{json, jcs, hex}        — SBOM serialisation
+//   - core.base.uuid                        — CycloneDX serialNumber
+//   - core.time.rfc3339                     — ISO timestamps
+//
+// **Where it plugs in.** PublishService.phase6_generate_artefacts now
+// also invokes `SbomService.generate(...)`, passing the manifest +
+// `source_sha256` + the resolved dependency list.  The resulting
+// `SbomArtefacts` are persisted to S3 alongside the source tarball,
+// at hash-prefixed keys + a "current" pointer per cog version.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LCls,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "SBOM generation — CycloneDX 1.5 + SPDX 2.3 emitters at publish",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.services.sbom_service;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int, Bool};
+mount base.uuid.Uuid;
+mount base.semver.{SemVer, format_semver};
+mount collections.{List, Map};
+mount core.cog.manifest.{CogManifest, DependencySpec};
+mount encoding.json.{
+    JsonValue, JsonObject,
+    json_object, json_array, json_string, json_number, json_bool,
+    encode as json_encode,
+};
+mount encoding.hex.encode as hex_encode;
+mount security.hash.sha256.digest as sha256_digest;
+mount time.rfc3339.{format_utc, now_utc};
+mount time.system_time.now_unix_seconds;
+
+mount verum_registry.domain.{Hex64, PackageVersion};
+
+// =============================================================================
+// Public types
+// =============================================================================
+
+@derive(Clone, Debug)
+public type SbomArtefacts is {
+    /// CycloneDX 1.5 JSON bytes (UTF-8 encoded).
+    cyclonedx_bytes: List<Byte>,
+    /// SHA-256 of the CycloneDX bytes (hex).  Persisted alongside
+    /// for tamper-detection at fetch time.
+    cyclonedx_sha256: Hex64,
+    /// SPDX 2.3 JSON bytes (UTF-8 encoded).
+    spdx_bytes:      List<Byte>,
+    /// SHA-256 of the SPDX bytes (hex).
+    spdx_sha256:     Hex64,
+};
+
+@derive(Clone, Debug)
+public type SbomError is
+    | InvalidDependency { name: Text, reason: Text }
+    | EncodingFailed(Text);
+
+implement Display for SbomError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FormatError> {
+        match self {
+            InvalidDependency { name, reason } => f.write_str(
+                f"sbom: invalid dependency {name}: {reason}".as_str()),
+            EncodingFailed(reason) => f.write_str(f"sbom: encoding failed: {reason}".as_str()),
+        }
+    }
+}
+
+implement Debug for SbomError {
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+}
+
+// =============================================================================
+// Service
+// =============================================================================
+
+@derive(Debug)
+public type SbomService is {
+    /// Tool identifier embedded in SBOM "metadata.tools" sections.
+    /// Set at boot from the running registry's version.
+    generator_version: Text,
+};
+
+implement SbomService {
+    public fn new(generator_version: Text) -> SbomService {
+        SbomService { generator_version }
+    }
+
+    /// Generate both SBOM forms for a cog version being published.
+    ///
+    /// `direct_dependencies` is the resolved direct-dep list (each
+    /// pinned to a concrete `SemVer` + content `sha256`).  Transitive
+    /// closure is left to consumers — recording the direct-deps with
+    /// pinned versions is sufficient for reproducible re-resolution
+    /// and is the contract spec'd in NTIA's "minimum elements" guide.
+    public fn generate(
+        &self,
+        manifest:            &CogManifest,
+        source_sha256:       &Hex64,
+        direct_dependencies: &List<ResolvedDependency>,
+    ) -> Result<SbomArtefacts, SbomError> {
+        let timestamp = format_utc(now_unix_seconds(), 0);
+
+        let cyclonedx_value = self.build_cyclonedx(manifest, source_sha256, direct_dependencies, &timestamp)?;
+        let cyclonedx_text  = json_encode(&cyclonedx_value);
+        let cyclonedx_bytes = cyclonedx_text.as_bytes().to_list();
+        let cyclonedx_sha256 = sha256_to_hex64(&cyclonedx_bytes)?;
+
+        let spdx_value = self.build_spdx(manifest, source_sha256, direct_dependencies, &timestamp)?;
+        let spdx_text  = json_encode(&spdx_value);
+        let spdx_bytes = spdx_text.as_bytes().to_list();
+        let spdx_sha256 = sha256_to_hex64(&spdx_bytes)?;
+
+        Ok(SbomArtefacts {
+            cyclonedx_bytes, cyclonedx_sha256,
+            spdx_bytes,      spdx_sha256,
+        })
+    }
+
+    // -------------------------------------------------------------------------
+    // CycloneDX 1.5 builder
+    // -------------------------------------------------------------------------
+
+    fn build_cyclonedx(
+        &self,
+        manifest:     &CogManifest,
+        source_sha256: &Hex64,
+        deps:         &List<ResolvedDependency>,
+        timestamp:    &Text,
+    ) -> Result<JsonValue, SbomError> {
+        let serial = f"urn:uuid:{Uuid.new_v4().to_text()}";
+        let root_purl = build_purl(&manifest.cog.name, &manifest.cog.version);
+        let root_bom_ref = root_purl.clone();
+
+        // metadata.component — the cog being published.
+        let mut root_component: JsonObject = JsonObject.new();
+        root_component.insert("type".to_text(),    json_string("library".to_text()));
+        root_component.insert("bom-ref".to_text(), json_string(root_bom_ref.clone()));
+        root_component.insert("name".to_text(),    json_string(manifest.cog.name.clone()));
+        root_component.insert("version".to_text(), json_string(format_semver(&manifest.cog.version)));
+        root_component.insert("purl".to_text(),    json_string(root_purl.clone()));
+        root_component.insert("hashes".to_text(),  json_array_of(vec![
+            cdx_hash_object("SHA-256", &source_sha256.0),
+        ]));
+        if let Some(license) = &manifest.cog.license {
+            root_component.insert("licenses".to_text(),
+                json_array_of(vec![cdx_license_object(license)]));
+        }
+        if let Some(desc) = &manifest.cog.description {
+            root_component.insert("description".to_text(), json_string(desc.clone()));
+        }
+
+        // metadata.tools — the SBOM generator.
+        let mut tool_obj: JsonObject = JsonObject.new();
+        tool_obj.insert("vendor".to_text(),  json_string("verum-lang".to_text()));
+        tool_obj.insert("name".to_text(),    json_string("verum-registry-sbom".to_text()));
+        tool_obj.insert("version".to_text(), json_string(self.generator_version.clone()));
+
+        let mut metadata: JsonObject = JsonObject.new();
+        metadata.insert("timestamp".to_text(), json_string(timestamp.clone()));
+        metadata.insert("tools".to_text(),     json_array_of(vec![json_object(tool_obj)]));
+        metadata.insert("component".to_text(), json_object(root_component));
+
+        // components — the resolved direct dependencies.
+        let mut components: List<JsonValue> = List.new();
+        let mut i: Int = 0;
+        while i < deps.len() {
+            let d = &deps[i];
+            components.push(build_cdx_component(d));
+            i = i + 1;
+        }
+
+        // dependencies — root → [direct deps].
+        let mut root_dep_obj: JsonObject = JsonObject.new();
+        root_dep_obj.insert("ref".to_text(), json_string(root_bom_ref.clone()));
+        let mut dep_refs: List<JsonValue> = List.new();
+        let mut j: Int = 0;
+        while j < deps.len() {
+            dep_refs.push(json_string(deps[j].purl.clone()));
+            j = j + 1;
+        }
+        root_dep_obj.insert("dependsOn".to_text(), json_array(dep_refs));
+        let mut dependencies: List<JsonValue> = List.new();
+        dependencies.push(json_object(root_dep_obj));
+
+        // Top-level CycloneDX document.
+        let mut root: JsonObject = JsonObject.new();
+        root.insert("$schema".to_text(),       json_string("http://cyclonedx.org/schema/bom-1.5.schema.json".to_text()));
+        root.insert("bomFormat".to_text(),     json_string("CycloneDX".to_text()));
+        root.insert("specVersion".to_text(),   json_string("1.5".to_text()));
+        root.insert("serialNumber".to_text(),  json_string(serial));
+        root.insert("version".to_text(),       json_number(1.0));
+        root.insert("metadata".to_text(),      json_object(metadata));
+        root.insert("components".to_text(),    json_array(components));
+        root.insert("dependencies".to_text(),  json_array(dependencies));
+        Ok(json_object(root))
+    }
+
+    // -------------------------------------------------------------------------
+    // SPDX 2.3 builder
+    // -------------------------------------------------------------------------
+
+    fn build_spdx(
+        &self,
+        manifest:     &CogManifest,
+        source_sha256: &Hex64,
+        deps:         &List<ResolvedDependency>,
+        timestamp:    &Text,
+    ) -> Result<JsonValue, SbomError> {
+        let root_spdxid = "SPDXRef-Package-Root".to_text();
+        let root_purl = build_purl(&manifest.cog.name, &manifest.cog.version);
+
+        // creationInfo — required by SPDX spec.
+        let mut creators: List<JsonValue> = List.new();
+        creators.push(json_string(f"Tool: verum-registry-sbom-{self.generator_version}"));
+
+        let mut creation_info: JsonObject = JsonObject.new();
+        creation_info.insert("created".to_text(),  json_string(timestamp.clone()));
+        creation_info.insert("creators".to_text(), json_array(creators));
+        creation_info.insert("licenseListVersion".to_text(), json_string("3.23".to_text()));
+
+        // Root package entry.
+        let root_pkg = build_spdx_package(
+            &root_spdxid,
+            &manifest.cog.name,
+            &format_semver(&manifest.cog.version),
+            &source_sha256.0,
+            &manifest.cog.license,
+            &root_purl,
+        );
+
+        // Dependency package entries.
+        let mut packages: List<JsonValue> = List.new();
+        packages.push(root_pkg);
+        let mut dep_spdxids: List<Text> = List.new();
+        let mut i: Int = 0;
+        while i < deps.len() {
+            let d = &deps[i];
+            let dep_spdxid = f"SPDXRef-Package-{spdx_sanitize_id(&d.name)}-{i}";
+            packages.push(build_spdx_package(
+                &dep_spdxid,
+                &d.name,
+                &format_semver(&d.version),
+                &d.source_sha256.0,
+                &d.license,
+                &d.purl,
+            ));
+            dep_spdxids.push(dep_spdxid);
+            i = i + 1;
+        }
+
+        // Relationships — root → DESCRIBES, root → DEPENDS_ON each dep.
+        let mut relationships: List<JsonValue> = List.new();
+        let mut describes: JsonObject = JsonObject.new();
+        describes.insert("spdxElementId".to_text(),      json_string("SPDXRef-DOCUMENT".to_text()));
+        describes.insert("relatedSpdxElement".to_text(), json_string(root_spdxid.clone()));
+        describes.insert("relationshipType".to_text(),   json_string("DESCRIBES".to_text()));
+        relationships.push(json_object(describes));
+        let mut k: Int = 0;
+        while k < dep_spdxids.len() {
+            let mut r: JsonObject = JsonObject.new();
+            r.insert("spdxElementId".to_text(),      json_string(root_spdxid.clone()));
+            r.insert("relatedSpdxElement".to_text(), json_string(dep_spdxids[k].clone()));
+            r.insert("relationshipType".to_text(),   json_string("DEPENDS_ON".to_text()));
+            relationships.push(json_object(r));
+            k = k + 1;
+        }
+
+        // Top-level SPDX document.
+        let document_namespace = f"https://vcogs.io/api/v3/packages/{manifest.cog.name}/{format_semver(&manifest.cog.version)}/sbom/spdx";
+        let mut root: JsonObject = JsonObject.new();
+        root.insert("spdxVersion".to_text(),       json_string("SPDX-2.3".to_text()));
+        root.insert("dataLicense".to_text(),       json_string("CC0-1.0".to_text()));
+        root.insert("SPDXID".to_text(),            json_string("SPDXRef-DOCUMENT".to_text()));
+        root.insert("name".to_text(),              json_string(f"{manifest.cog.name}-{format_semver(&manifest.cog.version)}"));
+        root.insert("documentNamespace".to_text(), json_string(document_namespace));
+        root.insert("creationInfo".to_text(),      json_object(creation_info));
+        root.insert("packages".to_text(),          json_array(packages));
+        root.insert("relationships".to_text(),     json_array(relationships));
+        Ok(json_object(root))
+    }
+}
+
+// =============================================================================
+// Public types — direct-dependency entry
+// =============================================================================
+
+@derive(Clone, Debug)
+public type ResolvedDependency is {
+    name:           Text,
+    version:        SemVer,
+    source_sha256:  Hex64,
+    license:        Maybe<Text>,
+    purl:           Text,
+};
+
+public fn resolved_dependency_from_spec(
+    name: &Text,
+    version: &SemVer,
+    source_sha256: &Hex64,
+    license: &Maybe<Text>,
+) -> ResolvedDependency {
+    ResolvedDependency {
+        name:    name.clone(),
+        version: version.clone(),
+        source_sha256: source_sha256.clone(),
+        license: license.clone(),
+        purl:    build_purl(name, version),
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/// Build a Package URL (purl) per the spec at
+/// https://github.com/package-url/purl-spec.  The Verum scheme is
+/// `pkg:verum/<name>@<version>` (no scope segment because Verum cog
+/// names are globally namespaced via the `<scope>/<name>` form which
+/// renders directly as the purl path).
+fn build_purl(name: &Text, version: &SemVer) -> Text {
+    f"pkg:verum/{name}@{format_semver(version)}"
+}
+
+fn cdx_hash_object(alg: &str, hex_value: &Text) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("alg".to_text(),     json_string(alg.to_text()));
+    o.insert("content".to_text(), json_string(hex_value.clone()));
+    json_object(o)
+}
+
+fn cdx_license_object(license_id: &Text) -> JsonValue {
+    let mut inner: JsonObject = JsonObject.new();
+    // SPDX license ID → "license.id" form (CycloneDX 1.5 §3.21.7).
+    inner.insert("id".to_text(), json_string(license_id.clone()));
+    let mut wrap: JsonObject = JsonObject.new();
+    wrap.insert("license".to_text(), json_object(inner));
+    json_object(wrap)
+}
+
+fn build_cdx_component(d: &ResolvedDependency) -> JsonValue {
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("type".to_text(),    json_string("library".to_text()));
+    o.insert("bom-ref".to_text(), json_string(d.purl.clone()));
+    o.insert("name".to_text(),    json_string(d.name.clone()));
+    o.insert("version".to_text(), json_string(format_semver(&d.version)));
+    o.insert("purl".to_text(),    json_string(d.purl.clone()));
+    o.insert("hashes".to_text(),  json_array_of(vec![
+        cdx_hash_object("SHA-256", &d.source_sha256.0),
+    ]));
+    if let Some(license) = &d.license {
+        o.insert("licenses".to_text(),
+            json_array_of(vec![cdx_license_object(license)]));
+    }
+    json_object(o)
+}
+
+fn build_spdx_package(
+    spdxid:       &Text,
+    name:         &Text,
+    version:      &Text,
+    sha256_hex:   &Text,
+    license:      &Maybe<Text>,
+    purl:         &Text,
+) -> JsonValue {
+    let mut checksum: JsonObject = JsonObject.new();
+    checksum.insert("algorithm".to_text(),    json_string("SHA256".to_text()));
+    checksum.insert("checksumValue".to_text(), json_string(sha256_hex.clone()));
+
+    let mut external_ref: JsonObject = JsonObject.new();
+    external_ref.insert("referenceCategory".to_text(), json_string("PACKAGE-MANAGER".to_text()));
+    external_ref.insert("referenceType".to_text(),     json_string("purl".to_text()));
+    external_ref.insert("referenceLocator".to_text(),  json_string(purl.clone()));
+
+    let license_text = license.clone().unwrap_or_else(|| "NOASSERTION".to_text());
+
+    let mut o: JsonObject = JsonObject.new();
+    o.insert("SPDXID".to_text(),           json_string(spdxid.clone()));
+    o.insert("name".to_text(),             json_string(name.clone()));
+    o.insert("versionInfo".to_text(),      json_string(version.clone()));
+    o.insert("downloadLocation".to_text(), json_string(f"https://vcogs.io/api/v3/packages/{name}/{version}/source"));
+    o.insert("filesAnalyzed".to_text(),    json_bool(false));
+    o.insert("checksums".to_text(),        json_array_of(vec![json_object(checksum)]));
+    o.insert("licenseConcluded".to_text(), json_string(license_text.clone()));
+    o.insert("licenseDeclared".to_text(),  json_string(license_text));
+    o.insert("copyrightText".to_text(),    json_string("NOASSERTION".to_text()));
+    o.insert("externalRefs".to_text(),     json_array_of(vec![json_object(external_ref)]));
+    json_object(o)
+}
+
+/// SPDX SPDXID values must match `SPDXRef-[a-zA-Z0-9.-]+`.  Replace
+/// any other byte with `-` to satisfy the regex.
+fn spdx_sanitize_id(name: &Text) -> Text {
+    let bytes = name.as_bytes();
+    let mut out: List<Byte> = List.new();
+    let mut i: Int = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let ok = (b >= b'a' && b <= b'z')
+              || (b >= b'A' && b <= b'Z')
+              || (b >= b'0' && b <= b'9')
+              || b == b'.' || b == b'-';
+        out.push(if ok { b } else { b'-' });
+        i = i + 1;
+    }
+    Text.from_bytes_lossy(out.as_slice())
+}
+
+fn json_array_of(values: List<JsonValue>) -> JsonValue {
+    let mut arr: List<JsonValue> = List.new();
+    let mut i: Int = 0;
+    while i < values.len() {
+        arr.push(values[i].clone());
+        i = i + 1;
+    }
+    json_array(arr)
+}
+
+fn sha256_to_hex64(bytes: &List<Byte>) -> Result<Hex64, SbomError> {
+    let hex = hex_encode(&sha256_digest(bytes));
+    Hex64::try_from(hex).map_err(|e| EncodingFailed(f"hex: {e}"))
+}

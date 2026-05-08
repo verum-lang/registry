@@ -1,0 +1,199 @@
+// =============================================================================
+// verum_registry/http/handlers/sbom.vr — SBOM fetch endpoints (REG-8)
+// =============================================================================
+//
+// Routes:
+//   GET /api/v3/packages/:scope/:name/:version/sbom?format=cyclonedx | spdx
+//   GET /api/v3/packages/:scope/:name/:version/sbom/cyclonedx
+//   GET /api/v3/packages/:scope/:name/:version/sbom/spdx
+//
+// Both formats are persisted at publish time (see
+// services/sbom_service.vr + publish_service.vr Phase 6+7).  The
+// handler streams from S3 with strong tamper-detection: the persisted
+// SHA-256 in `versions.sbom_<format>_sha256` is recomputed on the
+// fetched bytes and a 502 is returned on mismatch (sweeper tasks
+// re-generate when this fires).
+//
+// Caching: SBOMs are immutable per published version, so the cache
+// header is `public, max-age=31536000, immutable` — same as for
+// the source tarball + Sigstore Bundle.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v3.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "HTTP handlers for SBOM fetch (CycloneDX 1.5 + SPDX 2.3)",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.http.handlers.sbom;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount net.weft.{WeftRequest, Response, StatusCode};
+mount security.hash.sha256.digest as sha256_digest;
+mount encoding.hex.encode as hex_encode;
+
+mount verum_registry.persistence.version_repository.{VersionRepository, lookup_version};
+mount verum_registry.domain.package.PackageScope;
+mount verum_registry.http.error_response.render_error;
+
+// Media types per the format specs.
+const MEDIA_CYCLONEDX_15: Text = "application/vnd.cyclonedx+json; version=1.5".to_text();
+const MEDIA_SPDX_23:      Text = "application/spdx+json; version=2.3".to_text();
+const CACHE_IMMUTABLE:    Text = "public, max-age=31536000, immutable".to_text();
+
+#[derive(Clone, Copy, Debug)]
+enum SbomFormat { CycloneDx, Spdx }
+
+/// Combined entry — `?format=` query selects which form to return.
+/// Default: CycloneDX (the more widely-tooled format).
+pub async fn handle_sbom(req: WeftRequest) -> Response
+    using [Storage, Database, Cache, Logger]
+{
+    let fmt = parse_format_query(&req).unwrap_or(SbomFormat.CycloneDx);
+    serve_sbom(req, fmt).await
+}
+
+pub async fn handle_sbom_cyclonedx(req: WeftRequest) -> Response
+    using [Storage, Database, Cache, Logger]
+{
+    serve_sbom(req, SbomFormat.CycloneDx).await
+}
+
+pub async fn handle_sbom_spdx(req: WeftRequest) -> Response
+    using [Storage, Database, Cache, Logger]
+{
+    serve_sbom(req, SbomFormat.Spdx).await
+}
+
+async fn serve_sbom(req: WeftRequest, fmt: SbomFormat) -> Response
+    using [Storage, Database, Cache, Logger]
+{
+    let scope_text   = req.path_param("scope").unwrap_or_else(|| "".to_text());
+    let name_text    = req.path_param("name").unwrap_or_else(|| "".to_text());
+    let version_text = req.path_param("version").unwrap_or_else(|| "".to_text());
+
+    let pkg_id_text = if scope_text.is_empty() { name_text.clone() }
+                      else { f"{scope_text}/{name_text}" };
+    let pkg_id: PackageScope = match pkg_id_text.try_into() {
+        Ok(s)  => s,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid package scope".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+    let semver = match base.semver.parse_semver(&version_text) {
+        Ok(v)  => v,
+        Err(_) => return render_error("validation_failed".to_text(),
+            "invalid SemVer".to_text(), None, None,
+        ).status(StatusCode.BadRequest),
+    };
+
+    let version_row = match lookup_version(&VersionRepository, &pkg_id, &semver).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return render_error("not_found".to_text(),
+            f"version {pkg_id}@{version_text}", None, None,
+        ).status(StatusCode.NotFound),
+        Err(e) => {
+            Logger.log(Level.Warn, &f"sbom lookup_version: {e}");
+            return render_error("internal_error".to_text(),
+                "version lookup failed".to_text(), None, None,
+            ).status(StatusCode.InternalServerError);
+        }
+    };
+
+    let (s3_key, expected_sha, media_type, filename_hint) = match fmt {
+        SbomFormat.CycloneDx => (
+            f"packages/{pkg_id}/{version_text}/sbom.cyclonedx.json",
+            version_row.sbom_cyclonedx_sha256.clone(),
+            MEDIA_CYCLONEDX_15.clone(),
+            f"{pkg_id_filename(&pkg_id)}-{version_text}.cyclonedx.json",
+        ),
+        SbomFormat.Spdx => (
+            f"packages/{pkg_id}/{version_text}/sbom.spdx.json",
+            version_row.sbom_spdx_sha256.clone(),
+            MEDIA_SPDX_23.clone(),
+            f"{pkg_id_filename(&pkg_id)}-{version_text}.spdx.json",
+        ),
+    };
+
+    let expected = match expected_sha {
+        Some(s) => s,
+        None    => return render_error("not_found".to_text(),
+            "SBOM not generated for this version (pre-REG-8 publish)".to_text(),
+            None, None,
+        ).status(StatusCode.NotFound),
+    };
+
+    let bytes = match Storage.get(&s3_key).await {
+        Ok(b)  => b,
+        Err(e) => {
+            Logger.log(Level.Warn, &f"sbom storage get: {e}");
+            return render_error("not_found".to_text(),
+                "SBOM blob missing from object store".to_text(), None, None,
+            ).status(StatusCode.NotFound);
+        }
+    };
+
+    // Tamper-detection: recompute SHA-256 + compare.  The persisted
+    // value is the one signed at publish-time — any divergence means
+    // the object store has been tampered with or is corrupt.  Don't
+    // serve the bytes; trip the reconciliation alarm instead.
+    let computed = hex_encode(&sha256_digest(&bytes));
+    if !ct_eq_text(&computed, &expected.0) {
+        Logger.log(Level.Error, &f"sbom hash mismatch for {pkg_id}@{version_text} ({fmt:?}); expected={expected.0} computed={computed}");
+        return render_error("integrity_failed".to_text(),
+            "SBOM bytes failed integrity check; reconciliation triggered".to_text(),
+            None, None,
+        ).status(StatusCode.BadGateway);
+    }
+
+    Response.bytes(bytes)
+        .header("content-type",        &media_type)
+        .header("cache-control",       &CACHE_IMMUTABLE)
+        .header("x-sbom-sha256",       &expected.0)
+        .header("content-disposition", &f"inline; filename=\"{filename_hint}\"")
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+fn parse_format_query(req: &WeftRequest) -> Maybe<SbomFormat> {
+    match req.query_param("format") {
+        Some(v) => match v.to_lowercase().as_str() {
+            "cyclonedx" | "cdx"   => Some(SbomFormat.CycloneDx),
+            "spdx"      | "spdx2" => Some(SbomFormat.Spdx),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+fn pkg_id_filename(pkg: &PackageScope) -> Text {
+    // `scope/name` → `scope-name` for the Content-Disposition filename.
+    pkg.as_str().replace("/", "-")
+}
+
+fn ct_eq_text(a: &Text, b: &Text) -> Bool {
+    if a.len() != b.len() { return false; }
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    let mut diff: Int = 0;
+    let mut i: Int = 0;
+    while i < ab.len() {
+        diff = diff | ((ab[i] as Int) ^ (bb[i] as Int));
+        i = i + 1;
+    }
+    diff == 0
+}

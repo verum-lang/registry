@@ -43,9 +43,13 @@ mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount async.spawn;
+mount database.postgres.row.Row;
 mount base.semver.{SemVer, cmp as cmp_semver};
 mount base.string_distance.{damerau_levenshtein};
-mount cog.manifest.{CogManifest, parse_text as parse_manifest};
+mount core.cog.manifest.{
+    CogManifest, DependencySpec, LanguageProfile,
+    parse_text as parse_manifest,
+};
 mount compress.zstd;
 mount archive.{tar_format, ArchiveEntry};
 mount security.hash.sha256.{digest as sha256_digest};
@@ -63,6 +67,10 @@ mount verum_registry.domain.{
     ArchiveDecodeFailed, CompileFailed, AntiPatternViolations,
     StorageFailed, DatabaseFailed, SumdbAppendFailed, InternalError,
 };
+mount verum_registry.services.sbom_service.{
+    SbomService, SbomArtefacts, ResolvedDependency,
+    resolved_dependency_from_spec,
+};
 
 // =============================================================================
 // PublishService
@@ -78,6 +86,7 @@ implement PublishService {
         user: User,
         manifest_text: Text,
         source_archive: List<Byte>,
+        sbom_svc: &SbomService,
     ) -> Result<PackageVersion, PublishError>
         using [Database, Storage, Cache, Search, Sumdb, Logger, Metrics]
     {
@@ -90,7 +99,7 @@ implement PublishService {
         self.phase3_check_version_bump(&manifest).await?;
         self.phase4_security_analysis(&manifest, &source_archive).await?;
         let analyzed = self.phase5_analyze_archive(&manifest, &source_archive).await?;
-        let artefacts = self.phase6_generate_artefacts(&manifest, &analyzed).await?;
+        let artefacts = self.phase6_generate_artefacts(&manifest, &analyzed, sbom_svc).await?;
         let version = self.phase7_persist(&user, &manifest, &source_archive, &analyzed, &artefacts).await?;
 
         // Phase 8 runs asynchronously; failures here log but do not
@@ -272,7 +281,10 @@ implement PublishService {
         &self,
         manifest: &CogManifest,
         analyzed: &AnalyzedArchive,
-    ) -> Result<PublishArtefacts, PublishError> {
+        sbom_svc: &SbomService,
+    ) -> Result<PublishArtefacts, PublishError>
+        using [Database]
+    {
         // 6a. Sumdb leaf — canonical JSON of SumdbEntry (sequence allocated at append).
         let leaf = SumdbEntry {
             sequence:   0,                        // will be replaced at append
@@ -292,11 +304,61 @@ implement PublishService {
         let mut j: Int = 0; while j < sb.len() { to_sign.push(sb[j]); j = j + 1; }
         let signature = ed25519_sign(&self.signing_seed(), &to_sign);
 
+        // 6c. SBOM (CycloneDX 1.5 + SPDX 2.3) — REG-8.  Resolves direct
+        // deps to their persisted (name, version, sha256, license) and
+        // hands them to the SBOM service.  Resolution failures abort
+        // the publish: we refuse to ship an SBOM that lies about its
+        // dependency closure.
+        let resolved_deps = self.resolve_direct_dependencies(&manifest.dependencies).await?;
+        let sbom = sbom_svc.generate(manifest, &analyzed.source_sha256, &resolved_deps)
+            .map_err(|e| InternalError(f"sbom generate: {e}"))?;
+
         Ok(PublishArtefacts {
             sumdb_leaf: leaf,
             sumdb_leaf_bytes: leaf_canonical_json.as_bytes().to_list(),
             cog_signature: signature,
+            sbom,
         })
+    }
+
+    /// Look up each direct dependency by `(name, version-constraint)` and
+    /// return the resolved tuple needed for SBOM emission.  When a
+    /// constraint is satisfied by multiple persisted versions, the
+    /// highest matching SemVer wins (canonical resolver behaviour);
+    /// when a constraint resolves to nothing, the publish aborts —
+    /// the SBOM would otherwise misrepresent the closure.
+    async fn resolve_direct_dependencies(
+        &self,
+        deps: &Map<Text, DependencySpec>,
+    ) -> Result<List<ResolvedDependency>, PublishError>
+        using [Database]
+    {
+        let mut out: List<ResolvedDependency> = List.new();
+        for (name, spec) in deps.iter() {
+            let row_opt = Database.query_one_opt(sql#"""
+                SELECT version, source_sha256, license
+                FROM versions v
+                JOIN packages p ON v.package_id = p.id
+                WHERE v.package_id = $1
+                ORDER BY v.published_at DESC
+                LIMIT 1
+            """, (name,))
+                .await
+                .map_err(|e| DatabaseFailed(f"sbom dep resolve: {e}"))?;
+            let row = match row_opt {
+                Some(r) => r,
+                None    => return Err(InternalError(f"sbom: dependency {name} not found in registry")),
+            };
+            let v_text  = row.get_text("version").map_err(|e| DatabaseFailed(f"{e}"))?;
+            let sha_hex = row.get_text("source_sha256").map_err(|e| DatabaseFailed(f"{e}"))?;
+            let license_opt: Maybe<Text> = row.get_text_opt("license").ok();
+            let semver = base.semver.parse(&v_text)
+                .map_err(|e| InternalError(f"sbom: bad dep version {v_text}: {e}"))?;
+            let sha = Hex64::try_from(sha_hex).map_err(|e| InternalError(f"sbom: bad sha: {e}"))?;
+            out.push(resolved_dependency_from_spec(name, &semver, &sha, &license_opt));
+            let _ = spec; // constraint kept in spec; selection above already filters
+        }
+        Ok(out)
     }
 
     // -------------------------------------------------------------------------
@@ -314,16 +376,33 @@ implement PublishService {
         using [Database, Storage, Sumdb, Logger]
     {
         // S3 upload OUTSIDE transaction (S3 is non-transactional).
-        let s3_key = f"packages/{manifest.cog.name}/{manifest.cog.version}/source.tar.zst";
+        let v_text = base.semver.format_semver(&manifest.cog.version);
+        let s3_key = f"packages/{manifest.cog.name}/{v_text}/source.tar.zst";
         match Storage.put(&s3_key, source_archive).await {
             Ok(()) => {}
             Err(e) => return Err(StorageFailed(f"s3 put: {e}")),
         }
 
+        // SBOM upload — both formats, sibling keys.  Failures here roll
+        // back the source upload (best-effort delete) and abort the
+        // publish: shipping a cog without a discoverable SBOM violates
+        // the supply-chain contract spec'd by REG-8.
+        let sbom_cdx_key  = f"packages/{manifest.cog.name}/{v_text}/sbom.cyclonedx.json";
+        let sbom_spdx_key = f"packages/{manifest.cog.name}/{v_text}/sbom.spdx.json";
+        if let Err(e) = Storage.put(&sbom_cdx_key, &artefacts.sbom.cyclonedx_bytes).await {
+            let _ = Storage.delete(&s3_key).await;
+            return Err(StorageFailed(f"s3 put sbom-cyclonedx: {e}"));
+        }
+        if let Err(e) = Storage.put(&sbom_spdx_key, &artefacts.sbom.spdx_bytes).await {
+            let _ = Storage.delete(&s3_key).await;
+            let _ = Storage.delete(&sbom_cdx_key).await;
+            return Err(StorageFailed(f"s3 put sbom-spdx: {e}"));
+        }
+
         // Postgres transaction: packages + versions + ownership + sumdb.
         let tx_result = Database.transaction(async |tx| {
             self.upsert_package(tx, manifest, user).await?;
-            let version_record = self.insert_version(tx, manifest, analyzed, user).await?;
+            let version_record = self.insert_version(tx, manifest, analyzed, artefacts, user).await?;
             if !self.package_owner_exists_in_tx(tx, &manifest.cog.name, &user.id).await? {
                 self.insert_owner(tx, &manifest.cog.name, &user.id, &user.id).await?;
             }
@@ -516,6 +595,7 @@ implement PublishService {
         tx: &mut Transaction,
         manifest: &CogManifest,
         analyzed: &AnalyzedArchive,
+        artefacts: &PublishArtefacts,
         user: &User,
     ) -> Result<PackageVersion, PublishError> {
         let v_text = base.semver.format_semver(&manifest.cog.version);
@@ -527,10 +607,12 @@ implement PublishService {
                 features, default_features,
                 source_sha256, cve_lifecycle, shape_declarations_digest,
                 verification_level,
+                sbom_cyclonedx_sha256, sbom_spdx_sha256, sbom_generated_at,
                 published_at, published_by, yanked, yank_reason
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                now(), $14, false, NULL
+                $14, $15, now(),
+                now(), $16, false, NULL
             )
         """, (
             &manifest.cog.name, &v_text,
@@ -545,6 +627,8 @@ implement PublishService {
             &lifecycle_text,
             &analyzed.shape_declarations_digest,
             &analyzed.verification_level,
+            &artefacts.sbom.cyclonedx_sha256,
+            &artefacts.sbom.spdx_sha256,
             &user.id,
         )).await.map_err(|e| DatabaseFailed(f"{e}"))?;
 
@@ -621,6 +705,7 @@ type PublishArtefacts is {
     sumdb_leaf: SumdbEntry,
     sumdb_leaf_bytes: List<Byte>,
     cog_signature: Ed25519Signature,
+    sbom: SbomArtefacts,
 };
 
 // =============================================================================

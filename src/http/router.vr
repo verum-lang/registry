@@ -34,6 +34,7 @@ mount verum_registry.http.handlers.{
     webauthn as webauthn_h,
     tuf as tuf_h,
     sigstore as sigstore_h,
+    sbom as sbom_h,
 };
 
 /// Build the full registry router for v3.0.
@@ -50,6 +51,12 @@ public fn make_router(services: ServiceRegistry) -> Router {
         .get("/api/v3/packages/:scope/:name/:version/manifest", packages.get_manifest)
         // Sigstore Bundle (NEW v3.0)
         .get("/api/v3/packages/:scope/:name/:version/bundle", sigstore_h.get_bundle)
+        // SBOM artefacts (NEW v3.0; REG-8) — both formats persisted at publish.
+        // `/sbom?format=cyclonedx|spdx` selects via query; the explicit
+        // `/sbom/cyclonedx` and `/sbom/spdx` routes give cache-friendly URLs.
+        .get("/api/v3/packages/:scope/:name/:version/sbom",            sbom_h.handle_sbom)
+        .get("/api/v3/packages/:scope/:name/:version/sbom/cyclonedx",  sbom_h.handle_sbom_cyclonedx)
+        .get("/api/v3/packages/:scope/:name/:version/sbom/spdx",       sbom_h.handle_sbom_spdx)
         // Legacy provenance retained for non-Sigstore publishes
         .get("/api/v3/packages/:scope/:name/:version/provenance", packages.get_provenance)
         .post("/api/v3/packages", publish.handle_publish)

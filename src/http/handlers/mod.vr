@@ -34,3 +34,4 @@ public mount verum_registry.http.handlers.health;
 public mount verum_registry.http.handlers.webauthn;
 public mount verum_registry.http.handlers.tuf;
 public mount verum_registry.http.handlers.sigstore;
+public mount verum_registry.http.handlers.sbom;
