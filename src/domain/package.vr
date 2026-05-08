@@ -33,7 +33,7 @@ mount collections.List;
 mount base.semver.SemVer;
 mount time.rfc3339.Rfc3339Time;
 mount text.url.Url;
-mount cog.manifest.{CogName};
+mount core.cog.manifest.{CogName};
 
 mount verum_registry.domain.user.UserId;
 

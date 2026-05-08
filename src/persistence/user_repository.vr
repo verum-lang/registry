@@ -28,6 +28,7 @@ mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
     User, UserId, Username, EmailAddress, OidcIdentity,

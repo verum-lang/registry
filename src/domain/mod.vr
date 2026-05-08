@@ -59,14 +59,34 @@ public mount verum_registry.domain.user.{
 };
 public mount verum_registry.domain.owner.{
     PackageOwner, OwnerRole,
+    RoleOwner, RoleMaintainer,
+    owner_role_tag,
 };
 public mount verum_registry.domain.sumdb.{SumdbEntry};
 public mount verum_registry.domain.advisory.{
     SecurityAdvisory, Severity, AdvisoryId,
+    SevLow, SevMedium, SevHigh, SevCritical,
 };
 public mount verum_registry.domain.errors.{
     PublishError, SearchError, SumdbError, AuthError,
     ProvenanceError, ResolveError,
+    // Unique-named variant constructors surfaced at the domain
+    // re-export level — registers explicitly because re-exporting
+    // the sum type itself doesn't yet propagate constructor names.
+    // RateLimited / StorageFailed / InternalError are intentionally
+    // omitted: those names appear in multiple sum types and would
+    // collide; callers reach them via the qualified variant form.
+    ManifestParseFailed, NotAnOwner, VersionExists,
+    VersionNotMonotone, TyposquattingSuspected, MalwareDetected,
+    ArchiveDecodeFailed, CompileFailed, AntiPatternViolations,
+    DatabaseFailed, SumdbAppendFailed,
+    InvalidQuery, SearchBackendFailed,
+    InvalidEnvelope, SignatureFailed, UnsupportedStatement,
+    VersionNotInLog, TileNotFound, LogIntegrityFailed,
+    DependencyNotFound, NoVersionMatching, ConflictingConstraints,
+    DependencyCycle,
+    MissingCredentials, InvalidApiToken, RevokedApiToken,
+    ExpiredApiToken, InvalidOidcToken, OidcIssuerNotTrusted,
 };
 public mount verum_registry.domain.passkey.{
     Passkey, passkey_from_verified_credential, passkey_to_verified_credential,

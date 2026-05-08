@@ -30,8 +30,9 @@ module verum_registry.services.search_service;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
-mount cog.manifest.LanguageProfile;
+mount core.cog.manifest.LanguageProfile;
 mount architecture.types.Lifecycle;
+mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
     PackageRecord, PackageScope, SpdxExpression, VerificationLevel,

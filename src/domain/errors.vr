@@ -27,7 +27,7 @@ mount core.*;
 mount base.{Text, Maybe};
 mount collections.List;
 mount base.semver.SemVer;
-mount cog.manifest.{ManifestError};
+mount core.cog.manifest.{ManifestError};
 mount architecture.types.AntiPatternViolation;
 
 mount verum_registry.domain.package.PackageScope;

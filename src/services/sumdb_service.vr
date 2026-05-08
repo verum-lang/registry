@@ -40,6 +40,7 @@ mount security.transparency_log.{
 };
 mount security.ecc.ed25519.{generate_seed, public_key};
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 mount time.system_time.now_unix_ns;
 
 mount verum_registry.config.SumdbConfig;

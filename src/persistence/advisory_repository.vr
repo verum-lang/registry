@@ -29,6 +29,7 @@ mount base.semver_constraint.{
 };
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
     SecurityAdvisory, AdvisoryId, PackageScope, Severity,

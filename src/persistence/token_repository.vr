@@ -26,6 +26,7 @@ mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 mount time.rfc3339.{Rfc3339Time, now_utc};
 mount encoding.json.{stringify as json_stringify, parse as json_parse};
 

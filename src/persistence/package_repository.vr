@@ -31,6 +31,7 @@ mount collections.List;
 mount base.semver.{SemVer, format_semver};
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 
 mount verum_registry.domain.{
     PackageRecord, PackageScope, Keyword, SpdxExpression, UserId,

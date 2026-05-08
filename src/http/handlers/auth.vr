@@ -24,6 +24,7 @@ module verum_registry.http.handlers.auth;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
+mount encoding.json.{JsonValue, JsonObject, json_object, json_string, json_bool, json_array};
 
 mount verum_registry.services.AuthService;
 mount verum_registry.persistence.{

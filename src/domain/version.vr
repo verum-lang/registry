@@ -33,7 +33,7 @@ mount collections.{List, Map};
 mount base.semver.SemVer;
 mount base.ulid.Ulid;
 mount time.rfc3339.Rfc3339Time;
-mount cog.manifest.{DependencySpec, LanguageProfile};
+mount core.cog.manifest.{DependencySpec, LanguageProfile};
 mount architecture.types.Lifecycle;
 
 mount verum_registry.domain.package.PackageScope;

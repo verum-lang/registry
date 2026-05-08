@@ -27,10 +27,11 @@ mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount base.semver.{SemVer, parse as parse_semver, format_semver};
-mount cog.manifest.{DependencySpec, LanguageProfile};
+mount core.cog.manifest.{DependencySpec, LanguageProfile};
 mount architecture.types.Lifecycle;
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 mount encoding.json.parse as json_parse;
 
 mount verum_registry.domain.{
