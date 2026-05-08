@@ -191,7 +191,7 @@ implement SigstoreService {
 // shape depends on which provenance fields are present.
 
 fn sigstore_bundle_to_json(b: &SigstoreBundle) -> encoding.json.JsonValue {
-    let mut obj: encoding.json.JsonObject = encoding.json.JsonObject.new();
+    let mut obj: Map<Text, JsonValue> = Map.new();
     obj.insert("mediaType".to_text(),
         encoding.json.json_string(SIGSTORE_BUNDLE_MEDIA_TYPE.to_text()));
     let mut chain_arr: List<encoding.json.JsonValue> = List.new();

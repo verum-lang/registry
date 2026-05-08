@@ -69,7 +69,7 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
     let violations = detect_poset_violations(POSET_MAX_DEPTH).await
         .unwrap_or_else(|_| List.new());
 
-    let mut d = encoding.json.JsonObject.new();
+    let mut d = Map.new();
     d.insert("theorem".to_text(),       json_number(dist.theorem        as Float));
     d.insert("definition".to_text(),    json_number(dist.definition     as Float));
     d.insert("conditional".to_text(),   json_number(dist.conditional    as Float));
@@ -83,7 +83,7 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
     let mut i: Int = 0;
     while i < violations.len() {
         let v = &violations[i];
-        let mut e = encoding.json.JsonObject.new();
+        let mut e = Map.new();
         e.insert("highRankCog".to_text(),       json_string(v.high_rank_cog.clone()));
         e.insert("highRankLifecycle".to_text(), json_string(v.high_rank.clone()));
         e.insert("lowRankCog".to_text(),        json_string(v.low_rank_cog.clone()));
@@ -93,7 +93,7 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
         i = i + 1;
     }
 
-    let mut obj = encoding.json.JsonObject.new();
+    let mut obj = Map.new();
     obj.insert("schemaVersion".to_text(), json_string("1.0".to_text()));
     obj.insert("distribution".to_text(), json_object(d));
     obj.insert("posetViolations".to_text(), json_array(arr));
@@ -114,7 +114,7 @@ pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
             f"{e}", None, None,
         ).status(StatusCode.InternalServerError),
     };
-    let mut obj = encoding.json.JsonObject.new();
+    let mut obj = Map.new();
     obj.insert("schemaVersion".to_text(), json_string("1.0".to_text()));
     obj.insert("cogsTotal".to_text(),       json_number(summary.cogs_total        as Float));
     obj.insert("cogsWithErrors".to_text(),  json_number(summary.cogs_with_errors  as Float));
@@ -124,7 +124,7 @@ pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
     let mut i: Int = 0;
     while i < summary.counts_by_id.len() {
         let (id, n) = &summary.counts_by_id[i];
-        let mut e = encoding.json.JsonObject.new();
+        let mut e = Map.new();
         e.insert("id".to_text(),    json_string(ap_id_text(id)));
         e.insert("name".to_text(),  json_string(ap_name(id)));
         e.insert("count".to_text(), json_number(*n as Float));
@@ -156,7 +156,7 @@ pub async fn cog_anti_patterns(req: WeftRequest) -> Response
 }
 
 fn roster_to_json(r: &AntiPatternRoster) -> JsonValue {
-    let mut obj = encoding.json.JsonObject.new();
+    let mut obj = Map.new();
     obj.insert("cog".to_text(),          json_string(r.cog.clone()));
     obj.insert("errorCount".to_text(),   json_number(r.error_count   as Float));
     obj.insert("warningCount".to_text(), json_number(r.warning_count as Float));
@@ -171,7 +171,7 @@ fn roster_to_json(r: &AntiPatternRoster) -> JsonValue {
 }
 
 fn finding_to_json(f: &AntiPatternFinding) -> JsonValue {
-    let mut o = encoding.json.JsonObject.new();
+    let mut o = Map.new();
     o.insert("id".to_text(),    json_string(ap_id_text(&f.id)));
     o.insert("name".to_text(),  json_string(ap_name(&f.id)));
     let (verdict, msg) = match &f.verdict {

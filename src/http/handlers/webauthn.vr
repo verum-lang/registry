@@ -65,7 +65,7 @@ pub async fn register_begin(req: WeftRequest) -> Response
     };
     match WebAuthnService.begin_registration(&user.user).await {
         Ok((challenge_id, options)) => {
-            let mut obj = encoding.json.JsonObject.new();
+            let mut obj = Map.new();
             obj.insert("challengeId".to_text(), json_string(challenge_id));
             obj.insert("publicKey".to_text(), registration_options_to_json(&options));
             Response.json(&json_object(obj))
@@ -105,7 +105,7 @@ pub async fn register_finish(req: WeftRequest) -> Response
         &user.user.id, &body.challenge_id, &resp, body.nickname,
     ).await {
         Ok(passkey) => {
-            let mut obj = encoding.json.JsonObject.new();
+            let mut obj = Map.new();
             obj.insert("passkeyId".to_text(), json_string(passkey.id.0.clone()));
             obj.insert("aaguid".to_text(),
                 json_string(encoding.hex.encode(&passkey.aaguid)));
@@ -142,7 +142,7 @@ pub async fn authenticate_begin(req: WeftRequest) -> Response
     let user_handle_ref = user_handle.as_ref();
     match WebAuthnService.begin_authentication(user_handle_ref).await {
         Ok((challenge_id, options)) => {
-            let mut obj = encoding.json.JsonObject.new();
+            let mut obj = Map.new();
             obj.insert("challengeId".to_text(), json_string(challenge_id));
             obj.insert("publicKey".to_text(), authentication_options_to_json(&options));
             Response.json(&json_object(obj))
@@ -185,7 +185,7 @@ pub async fn authenticate_finish(req: WeftRequest) -> Response
         Ok((user_id, _result)) => {
             let session_token = AuthService.issue_session_token(&user_id).await
                 .unwrap_or_else(|_| "".to_text());
-            let mut obj = encoding.json.JsonObject.new();
+            let mut obj = Map.new();
             obj.insert("userId".to_text(), json_string(user_id.0.clone()));
             obj.insert("sessionToken".to_text(), json_string(session_token));
             Response.json(&json_object(obj))
@@ -333,11 +333,11 @@ fn decode_assertion_response(body: &AuthFinishBody) -> Result<AuthenticatorAsser
 }
 
 fn registration_options_to_json(o: &security.webauthn.register.RegistrationOptions) -> JsonValue {
-    let mut obj = encoding.json.JsonObject.new();
+    let mut obj = Map.new();
     obj.insert("challenge".to_text(), json_string(b64url_encode(&o.challenge)));
     obj.insert("rpId".to_text(),      json_string(o.rp.id.clone()));
     obj.insert("rpName".to_text(),    json_string(o.rp.name.clone()));
-    let mut user_obj = encoding.json.JsonObject.new();
+    let mut user_obj = Map.new();
     user_obj.insert("id".to_text(),          json_string(b64url_encode(&o.user.id)));
     user_obj.insert("name".to_text(),        json_string(o.user.name.clone()));
     user_obj.insert("displayName".to_text(), json_string(o.user.display_name.clone()));
@@ -345,7 +345,7 @@ fn registration_options_to_json(o: &security.webauthn.register.RegistrationOptio
     let mut params: List<JsonValue> = List.new();
     let mut i: Int = 0;
     while i < o.pub_key_cred_params.len() {
-        let mut p = encoding.json.JsonObject.new();
+        let mut p = Map.new();
         p.insert("type".to_text(), json_string("public-key".to_text()));
         p.insert("alg".to_text(),  encoding.json.json_number(o.pub_key_cred_params[i].cose_alg as Float));
         params.push(json_object(p));
@@ -356,13 +356,13 @@ fn registration_options_to_json(o: &security.webauthn.register.RegistrationOptio
 }
 
 fn authentication_options_to_json(o: &security.webauthn.authenticate.AuthenticationOptions) -> JsonValue {
-    let mut obj = encoding.json.JsonObject.new();
+    let mut obj = Map.new();
     obj.insert("challenge".to_text(), json_string(b64url_encode(&o.challenge)));
     obj.insert("rpId".to_text(),      json_string(o.rp_id.clone()));
     let mut allow: List<JsonValue> = List.new();
     let mut i: Int = 0;
     while i < o.allow_credentials.len() {
-        let mut e = encoding.json.JsonObject.new();
+        let mut e = Map.new();
         e.insert("type".to_text(), json_string("public-key".to_text()));
         e.insert("id".to_text(), json_string(b64url_encode(&o.allow_credentials[i].credential_id)));
         allow.push(json_object(e));
@@ -373,7 +373,7 @@ fn authentication_options_to_json(o: &security.webauthn.authenticate.Authenticat
 }
 
 fn passkey_summary_to_json(p: &Passkey) -> JsonValue {
-    let mut obj = encoding.json.JsonObject.new();
+    let mut obj = Map.new();
     obj.insert("id".to_text(), json_string(p.id.0.clone()));
     obj.insert("aaguid".to_text(), json_string(encoding.hex.encode(&p.aaguid)));
     obj.insert("nickname".to_text(),

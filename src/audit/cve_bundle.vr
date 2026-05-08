@@ -242,7 +242,7 @@ public type AuditorJson is {
 const SCHEMA_VERSION: Text = "1.0";
 
 pub fn render_auditor_json(b: &CveBundle) -> AuditorJson {
-    let mut obj: JsonObject = JsonObject.new();
+    let mut obj: Map<Text, JsonValue> = Map.new();
     obj.insert("schemaVersion".to_text(), json_string(SCHEMA_VERSION.to_text()));
     obj.insert("cog".to_text(),           json_string(b.cog.clone()));
     obj.insert("lifecycle".to_text(),     lifecycle_to_json(&b.lifecycle));
@@ -255,7 +255,7 @@ pub fn render_auditor_json(b: &CveBundle) -> AuditorJson {
 }
 
 fn lifecycle_to_json(l: &Lifecycle) -> JsonValue {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("glyph".to_text(), json_string(lifecycle_glyph(l)));
     o.insert("name".to_text(),  json_string(lifecycle_label(l)));
     if let Lifecycle.Theorem(v) = l {
@@ -265,7 +265,7 @@ fn lifecycle_to_json(l: &Lifecycle) -> JsonValue {
 }
 
 fn cve_closure_to_json(b: &CveBundle) -> JsonValue {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("constructive".to_text(), axis_to_json(&b.cve_constructive));
     o.insert("verifiable".to_text(),   axis_to_json(&b.cve_verifiable));
     o.insert("executable".to_text(),   axis_to_json(&b.cve_executable));
@@ -273,7 +273,7 @@ fn cve_closure_to_json(b: &CveBundle) -> JsonValue {
 }
 
 fn axis_to_json(a: &AxisVerdict) -> JsonValue {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("verdict".to_text(), json_string(axis_verdict_text(a)));
     match a {
         AxisVerdict.Closed         => {}
@@ -284,7 +284,7 @@ fn axis_to_json(a: &AxisVerdict) -> JsonValue {
 }
 
 fn layers_to_json(l: &SevenLayers) -> JsonValue {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("L0".to_text(), layer_to_json(&l.l0_object));
     o.insert("L1".to_text(), layer_to_json(&l.l1_proof_term));
     o.insert("L2".to_text(), layer_to_json(&l.l2_proof_method));
@@ -296,7 +296,7 @@ fn layers_to_json(l: &SevenLayers) -> JsonValue {
 }
 
 fn layer_to_json(l: &LayerVerdict) -> JsonValue {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("verdict".to_text(), json_string(layer_verdict_text(l)));
     match l {
         LayerVerdict.Pass             => {}
@@ -313,7 +313,7 @@ fn ap_roster_to_json(r: &AntiPatternRoster) -> JsonValue {
         arr.push(ap_finding_to_json(&r.findings[i]));
         i = i + 1;
     }
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("errorCount".to_text(),   json_number(r.error_count as Float));
     o.insert("warningCount".to_text(), json_number(r.warning_count as Float));
     o.insert("findings".to_text(),     json_array(arr));
@@ -321,7 +321,7 @@ fn ap_roster_to_json(r: &AntiPatternRoster) -> JsonValue {
 }
 
 fn ap_finding_to_json(f: &AntiPatternFinding) -> JsonValue {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     o.insert("id".to_text(),   json_string(ap_id_text(&f.id)));
     o.insert("name".to_text(), json_string(ap_name(&f.id)));
     let (verdict_text, payload) = match &f.verdict {

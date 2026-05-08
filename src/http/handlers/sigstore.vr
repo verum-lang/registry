@@ -135,7 +135,7 @@ pub async fn verify_bundle(req: WeftRequest) -> Response
     };
     match SigstoreService.verify_publish_bundle(&HttpClient, &bundle, &expected).await {
         Ok(result) => {
-            let mut obj = encoding.json.JsonObject.new();
+            let mut obj = Map.new();
             obj.insert("verified".to_text(), json_bool(true));
             obj.insert("oidcIssuer".to_text(), json_string(result.oidc_issuer));
             obj.insert("oidcSubject".to_text(), json_string(result.oidc_subject));
@@ -144,7 +144,7 @@ pub async fn verify_bundle(req: WeftRequest) -> Response
             Response.json(&json_object(obj))
         }
         Err(e) => {
-            let mut obj = encoding.json.JsonObject.new();
+            let mut obj = Map.new();
             obj.insert("verified".to_text(), json_bool(false));
             obj.insert("reason".to_text(), json_string(f"{e}"));
             Response.json(&json_object(obj)).status(StatusCode.BadRequest)

@@ -412,7 +412,7 @@ fn registration_options_for_verify(
 }
 
 fn json_object_from_pairs(pairs: &[(Text, JsonValue)]) -> JsonObject {
-    let mut o: JsonObject = JsonObject.new();
+    let mut o: Map<Text, JsonValue> = Map.new();
     let mut i: Int = 0;
     while i < pairs.len() { o.insert(pairs[i].0.clone(), pairs[i].1.clone()); i = i + 1; }
     o

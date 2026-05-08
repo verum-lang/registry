@@ -48,7 +48,7 @@ public async fn handle_readiness(req: WeftRequest) -> Response
     if failures.is_empty() {
         Response.text("READY")
     } else {
-        let mut not_ready: JsonObject = JsonObject.new();
+        let mut not_ready: Map<Text, JsonValue> = Map.new();
         not_ready.insert("ready".to_text(), json_bool(false));
         let mut fail_arr: List<JsonValue> = List.new();
         let mut i: Int = 0;
@@ -64,7 +64,7 @@ public async fn handle_readiness(req: WeftRequest) -> Response
 // GET /health/version — registry build info.
 public async fn handle_version(req: WeftRequest) -> Response {
     let _ = req;
-    let mut version_obj: JsonObject = JsonObject.new();
+    let mut version_obj: Map<Text, JsonValue> = Map.new();
     version_obj.insert("registry".to_text(), json_string("verum-registry".to_text()));
     version_obj.insert("spec".to_text(), json_string("v2.0".to_text()));
     version_obj.insert("verum_stdlib".to_text(), json_string(@env("VERUM_STDLIB_VERSION", "unknown").to_text()));

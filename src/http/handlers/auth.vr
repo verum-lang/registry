@@ -111,7 +111,7 @@ public async fn handle_get_user_profile(req: WeftRequest) -> Response
     match lookup_user_by_username(&UserRepository, &username).await {
         Ok(Some(user)) => {
             // Public profile — strip private fields.
-            let mut profile_obj: JsonObject = JsonObject.new();
+            let mut profile_obj: Map<Text, JsonValue> = Map.new();
             profile_obj.insert("id".to_text(), json_string(user.id.to_text()));
             profile_obj.insert("username".to_text(), json_string(user.username.clone()));
             profile_obj.insert("created_at".to_text(), json_string(user.created_at.to_text()));
