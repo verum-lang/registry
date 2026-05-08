@@ -1,0 +1,105 @@
+# =============================================================================
+# OpenTelemetry Collector — sidecar/standalone config for verum-registry
+# =============================================================================
+# Receives:
+#   - registry's OTLP gRPC traces (port 4317) + metrics
+#   - prometheus scrape (registry's own /metrics endpoint)
+# Exports:
+#   - traces  → Tempo (or Jaeger) via OTLP
+#   - metrics → Prometheus (remote_write) + Grafana
+#   - logs    → Loki (when log pipeline is enabled)
+# =============================================================================
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  prometheus/registry:
+    config:
+      scrape_configs:
+        - job_name: verum-registry
+          scrape_interval: 30s
+          static_configs:
+            - targets: ['verum-registry:9090']
+              labels:
+                cog: verum-registry
+                deployment_environment: ${env:DEPLOYMENT_ENVIRONMENT}
+
+processors:
+  batch:
+    send_batch_size: 8192
+    timeout: 5s
+
+  resource:
+    attributes:
+      - key: service.namespace
+        value: verum-registry
+        action: upsert
+      - key: deployment.environment
+        from_attribute: deployment.environment
+        action: upsert
+
+  # Tail-based sampling — keep all errors, sample success at 5%
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 100000
+    expected_new_traces_per_sec: 1000
+    policies:
+      - name: errors-policy
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: slow-policy
+        type: latency
+        latency: { threshold_ms: 1000 }
+      - name: probabilistic-policy
+        type: probabilistic
+        probabilistic: { sampling_percentage: 5 }
+
+  # Strip secrets / authz tokens from spans
+  attributes/redact:
+    actions:
+      - { key: http.request.header.authorization, action: delete }
+      - { key: http.request.header.cookie, action: delete }
+      - { key: oidc.id_token, action: delete }
+      - { key: webauthn.attestation_object, action: hash }
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo.observability.svc:4317
+    tls:
+      insecure: true
+
+  prometheusremotewrite:
+    endpoint: http://prometheus.observability.svc:9090/api/v1/write
+    tls:
+      insecure: true
+    external_labels:
+      cog: verum-registry
+
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers:  [otlp]
+      processors: [attributes/redact, batch, tail_sampling, resource]
+      exporters:  [otlp/tempo]
+
+    metrics:
+      receivers:  [otlp, prometheus/registry]
+      processors: [batch, resource]
+      exporters:  [prometheusremotewrite]
+
+    logs:
+      receivers:  [otlp]
+      processors: [attributes/redact, batch, resource]
+      exporters:  [debug]   # swap for `loki` exporter once Loki is wired
+
+  telemetry:
+    logs:
+      level: info

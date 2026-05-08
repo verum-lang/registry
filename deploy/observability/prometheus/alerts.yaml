@@ -1,0 +1,147 @@
+groups:
+  # ---------------------------------------------------------------
+  # SLO burn-rate alerts (Google SRE multi-window multi-burn-rate)
+  # ---------------------------------------------------------------
+  - name: verum-registry.slo-burn
+    rules:
+      # ----- Availability 99.9% -----
+      - alert: AvailabilityFastBurn
+        expr: |
+          vr:slo_availability:burn_rate_1h > 14
+          and
+          vr:slo_availability:burn_rate_6h > 14
+        for: 2m
+        labels: { severity: critical, slo: availability }
+        annotations:
+          summary: "verum-registry availability burning 14× — page now"
+          description: |
+            Availability error-budget burn rate is 14× expected over both
+            1-hour and 6-hour windows.  At this rate, the entire 30-day
+            budget will be exhausted in <2 days. Page the on-call.
+
+            Investigate:
+              - kubectl --namespace=verum-registry-prod logs -l app.kubernetes.io/name=verum-registry --tail=200
+              - https://vcogs.io/api/audit/self
+              - https://grafana.internal/d/verum-registry-overview
+
+      - alert: AvailabilitySlowBurn
+        expr: |
+          vr:slo_availability:burn_rate_1h > 6
+          and
+          vr:slo_availability:burn_rate_6h > 6
+        for: 15m
+        labels: { severity: warning, slo: availability }
+        annotations:
+          summary: "verum-registry availability burning 6× — investigate within 1h"
+          description: |
+            Slow-burn warning: error-budget burn is 6× over 1h+6h
+            windows. At this rate the budget is exhausted in ~5 days.
+            Investigate during business hours.
+
+      # ----- Publish latency p99 < 5s -----
+      - alert: PublishLatencyP99Breaching
+        expr: vr:publish_latency_p99:5m > 5
+        for: 10m
+        labels: { severity: warning, slo: publish_latency }
+        annotations:
+          summary: "publish p99 > 5s for 10m"
+          description: "Investigate the publish handler chain (validate → sign → sumdb → persist)."
+
+      # ----- Search latency p99 < 200ms -----
+      - alert: SearchLatencyP99Breaching
+        expr: vr:search_latency_p99:5m > 0.2
+        for: 10m
+        labels: { severity: warning, slo: search_latency }
+        annotations:
+          summary: "search p99 > 200ms for 10m"
+          description: "MeiliSearch slowness — check connection pool + index health."
+
+      # ----- Audit endpoint latency p99 < 2s -----
+      - alert: AuditLatencyP99Breaching
+        expr: vr:audit_latency_p99:5m > 2
+        for: 10m
+        labels: { severity: warning, slo: audit_latency }
+        annotations:
+          summary: "audit p99 > 2s for 10m"
+
+  # ---------------------------------------------------------------
+  # Component-level liveness alerts
+  # ---------------------------------------------------------------
+  - name: verum-registry.liveness
+    rules:
+      - alert: RegistryDown
+        expr: up{job="verum-registry"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "verum-registry instance has been down for 5m"
+          description: "Pod {{ $labels.pod }} (instance {{ $labels.instance }}) is unreachable."
+
+      - alert: RegistryNotReady
+        expr: |
+          kube_deployment_status_replicas_unavailable{deployment="verum-registry"} > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Some replicas not Ready"
+
+      - alert: DBPoolExhausted
+        expr: |
+          verum_registry_db_pool_inflight / verum_registry_db_pool_capacity > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "DB pool saturated >90% for 5m"
+
+      - alert: CacheMissRateHigh
+        expr: 1 - vr:cache_hit_ratio:5m > 0.5
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis cache hit ratio < 50% for 15m"
+          description: "Possible cache stampede; check key TTL distribution."
+
+  # ---------------------------------------------------------------
+  # Supply-chain integrity alerts (Sigstore / TUF / SBOM)
+  # ---------------------------------------------------------------
+  - name: verum-registry.supply-chain
+    rules:
+      - alert: SigstorePublishFailureRateHigh
+        expr: |
+          sum(rate(verum_registry_sigstore_publish_failures_total[15m]))
+          /
+          clamp_min(sum(rate(verum_registry_sigstore_publish_attempts_total[15m])), 1)
+          > 0.05
+        for: 10m
+        labels: { severity: warning, slo: supply_chain }
+        annotations:
+          summary: "Sigstore publish failure rate > 5% for 10m"
+          description: "Either Rekor/Fulcio is degraded or local cert handling is broken."
+
+      - alert: TUFRootExpiringSoon
+        expr: |
+          (verum_registry_tuf_root_expires_at - time()) < 86400 * 30
+        for: 1h
+        labels: { severity: warning, slo: supply_chain }
+        annotations:
+          summary: "TUF root metadata expires in < 30 days"
+          description: "Schedule the root key rotation ceremony within the next 14 days."
+
+      - alert: TUFRootExpired
+        expr: verum_registry_tuf_root_expires_at < time()
+        for: 1m
+        labels: { severity: critical, slo: supply_chain }
+        annotations:
+          summary: "TUF root metadata has EXPIRED"
+          description: "All cogs are now untrusted. Page on-call immediately."
+
+      - alert: AuditSelfFailing
+        expr: verum_registry_audit_self_failures_total > 0
+        for: 30m
+        labels: { severity: critical, slo: ats_v }
+        annotations:
+          summary: "Registry self-audit failing for 30m"
+          description: |
+            `verum audit --self` returns non-zero. The registry's own
+            ATS-V invariants are violated — investigate before next
+            release.

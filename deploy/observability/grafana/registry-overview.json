@@ -1,0 +1,138 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "verum-registry overview — request rate / error rate / latency p99 / SLO budget burn / DB & cache health",
+  "editable": false,
+  "panels": [
+    {
+      "title": "Request rate (req/s)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"verum-registry\"}[1m])) by (handler)", "legendFormat": "{{handler}}" }
+      ]
+    },
+    {
+      "title": "Error rate (5xx/s)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"verum-registry\",status=~\"5..\"}[1m])) by (handler)", "legendFormat": "{{handler}}" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "title": "Latency p99 — top handlers",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "topk(8, vr:request_latency_p99:5m)", "legendFormat": "{{handler}}-{{method}}" }
+      ]
+    },
+    {
+      "title": "Publish flow p99",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "vr:publish_latency_p99:5m", "legendFormat": "publish p99" },
+        { "expr": "histogram_quantile(0.99, sum(rate(verum_registry_publish_phase_duration_seconds_bucket[5m])) by (phase, le))", "legendFormat": "{{phase}}" }
+      ]
+    },
+    {
+      "title": "Search p99 / Audit p99",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "vr:search_latency_p99:5m", "legendFormat": "search p99" },
+        { "expr": "vr:audit_latency_p99:5m", "legendFormat": "audit p99" }
+      ]
+    },
+    {
+      "title": "DB query latency p99 by op",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "vr:db_query_latency_p99:5m", "legendFormat": "{{operation}}" }
+      ]
+    },
+    {
+      "title": "Redis cache hit ratio",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "targets": [{ "expr": "vr:cache_hit_ratio:5m" }]
+    },
+    {
+      "title": "Availability burn rate (1h, 6h)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 6 }, { "color": "red", "value": 14 }] } } },
+      "targets": [
+        { "expr": "vr:slo_availability:burn_rate_1h", "legendFormat": "1h burn" },
+        { "expr": "vr:slo_availability:burn_rate_6h", "legendFormat": "6h burn" }
+      ]
+    },
+    {
+      "title": "Self-audit status (1=ok, 0=failing)",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "FAILING", "color": "red" }, "1": { "text": "OK", "color": "green" } } }
+          ]
+        }
+      },
+      "targets": [{ "expr": "1 - clamp_max(verum_registry_audit_self_failures_total, 1)" }]
+    },
+    {
+      "title": "TUF root expires in (days)",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "d", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 14 }, { "color": "green", "value": 30 }] } } },
+      "targets": [{ "expr": "(verum_registry_tuf_root_expires_at - time()) / 86400" }]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["verum-registry", "slo"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Verum Registry — Overview",
+  "uid": "verum-registry-overview",
+  "version": 1,
+  "weekStart": ""
+}
