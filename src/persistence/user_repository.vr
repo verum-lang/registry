@@ -24,6 +24,7 @@
 module verum_registry.persistence.user_repository;
 
 mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount database.common.error.DbError;
 mount database.postgres.async_pool.{AsyncPgPool, AsyncPgPoolGuard};
@@ -63,8 +64,8 @@ public async fn lookup_user_by_username(
     repo: &UserRepository,
     username: &Username,
 ) -> Result<Maybe<User>, DbError> {
-    let conn2 = repo.pool.acquire().await?;
-    let row_opt2 = conn.query_one_opt(
+    let conn = repo.pool.acquire().await?;
+    let row_opt = conn.query_one_opt(
         """SELECT id, username, email, password_hash, created_at
               FROM users WHERE username = $1""",
         [tv_ref(username)],
@@ -79,7 +80,7 @@ public async fn create_user(
     repo: &UserRepository,
     user: &User,
 ) -> Result<(), DbError> {
-    let conn2 = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     conn.execute_with_params(
         """INSERT INTO users (id, username, email, password_hash, created_at)
               VALUES ($1, $2, $3, $4, $5)""",
@@ -104,7 +105,7 @@ public async fn link_oidc_identity(
     user_id: &UserId,
     identity: &OidcIdentity,
 ) -> Result<(), DbError> {
-    let conn2 = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     link_oidc_identity_inner(&conn, user_id, identity).await
 }
 
@@ -141,7 +142,7 @@ async fn decode_user_with_oidc(
         [tv_ref(&id)],
     ).await?;
     let mut oidc_identities: List<OidcIdentity> = List.new();
-    let mut i2: Int = 0;
+    let mut i: Int = 0;
     while i < oidc_rows.len() {
         let metadata_text = oidc_rows[i].get_text("metadata").unwrap_or_else(|_| "{}".to_text());
         let metadata: Map<Text, Text> = parse(&metadata_text)

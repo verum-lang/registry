@@ -24,6 +24,7 @@
 module verum_registry.persistence.sigstore_bundle_repository;
 
 mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
 mount base.ulid.*;
 mount time.rfc3339.*;
@@ -77,7 +78,7 @@ implement SigstoreBundleRepository {
         version_id: Int,
     ) -> Result<Maybe<SigstoreBundleRecord>, DbError>
     {
-        let conn2 = self.pool.acquire().await?;
+        let conn = self.pool.acquire().await?;
         let row_opt = conn.query_one_opt(
             """SELECT id, version_id, bundle_json,
                       envelope_sha256, cert_chain_leaf_sha256,
@@ -99,8 +100,8 @@ implement SigstoreBundleRepository {
         envelope_sha256: &Hex64,
     ) -> Result<Maybe<SigstoreBundleRecord>, DbError>
     {
-        let conn2 = self.pool.acquire().await?;
-        let row_opt2 = conn.query_one_opt(
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
             """SELECT id, version_id, bundle_json,
                       envelope_sha256, cert_chain_leaf_sha256,
                       rekor_log_index, integrated_time,
@@ -123,7 +124,7 @@ implement SigstoreBundleRepository {
         limit: Int,
     ) -> Result<List<SigstoreBundleRecord>, DbError>
     {
-        let conn2 = self.pool.acquire().await?;
+        let conn = self.pool.acquire().await?;
         let rows = conn.query(
             """SELECT id, version_id, bundle_json,
                       envelope_sha256, cert_chain_leaf_sha256,

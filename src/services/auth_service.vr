@@ -33,6 +33,7 @@ module verum_registry.services.auth_service;
 
 mount core.*;
 mount context.standard.{Logger, Metrics, Cache};
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool};
 mount collections.List;
 mount net.weft.WeftRequest;
 mount database.postgres.async_pool.AsyncPgPool;
@@ -220,7 +221,7 @@ fn bearer_token(req: &WeftRequest) -> Maybe<Text> {
 }
 
 fn api_token_header(req: &WeftRequest) -> Maybe<(Text, Text)> {
-    let auth2 = req.header("Authorization")?;
+    let auth = req.header("Authorization")?;
     if !auth.starts_with("Token ") { return None; }
     let rest = &auth[6..];
     let colon_idx = rest.find(':')?;

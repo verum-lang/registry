@@ -30,6 +30,9 @@ module verum_registry.config;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
+mount configuration.{ConfigValue, ConfigError, format_id_toml};
+mount configuration.toml.{parse as toml_parse};
+mount runtime.env.{var as env_var};
 mount io.fs.read_to_string;
 
 // =============================================================================
@@ -289,7 +292,7 @@ fn parse_spiffe(root: &Map<Text, ConfigValue>) -> Result<SpiffeConfig, ConfigLoa
         Some(ConfigValue.ConfigTable(t)) => match t.get(&"bundle_paths".to_text()) {
             Some(ConfigValue.ConfigArray(a)) => {
                 let mut out: List<Text> = List.new();
-                let mut i2: Int = 0;
+                let mut i: Int = 0;
                 while i < a.len() {
                     if let ConfigValue.ConfigString(s) = a.get(i).unwrap() {
                         out.push(s.clone());
@@ -335,8 +338,8 @@ fn parse_webauthn(root: &Map<Text, ConfigValue>) -> Result<WebAuthnConfig, Confi
     let origins = match root.get(&"webauthn".to_text()) {
         Some(ConfigValue.ConfigTable(t)) => match t.get(&"origins".to_text()) {
             Some(ConfigValue.ConfigArray(a)) => {
-                let mut out2: List<Text> = List.new();
-                let mut i2: Int = 0;
+                let mut out: List<Text> = List.new();
+                let mut i: Int = 0;
                 while i < a.len() {
                     if let ConfigValue.ConfigString(s) = a.get(i).unwrap() {
                         out.push(s.clone());

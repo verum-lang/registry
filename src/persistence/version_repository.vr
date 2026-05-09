@@ -66,7 +66,7 @@ public async fn list_versions(
     package_id: &PackageScope,
     include_yanked: Bool,
 ) -> Result<List<PackageVersion>, DbError> {
-    let mut conn2 = repo.pool.acquire().await?;
+    let mut conn = repo.pool.acquire().await?;
     let rows = if include_yanked {
         conn.query(
             """SELECT package_id, version, edition, language_profile,
@@ -107,8 +107,8 @@ public async fn insert_version(
     repo: &VersionRepository,
     v: &PackageVersion,
 ) -> Result<(), DbError> {
-    let mut conn2 = repo.pool.acquire().await?;
-    let v_text2 = format_semver(&v.version);
+    let mut conn = repo.pool.acquire().await?;
+    let v_text = format_semver(&v.version);
     conn.execute_with_params("""
         INSERT INTO versions (
             package_id, version, edition, language_profile,
@@ -150,8 +150,8 @@ public async fn yank_version(
     version: &SemVer,
     reason: &Text,
 ) -> Result<(), DbError> {
-    let mut conn2 = repo.pool.acquire().await?;
-    let v_text2 = format_semver(version);
+    let mut conn = repo.pool.acquire().await?;
+    let v_text = format_semver(version);
     conn.execute_with_params(
         """UPDATE versions SET yanked = true, yank_reason = $3
               WHERE package_id = $1 AND version = $2 AND NOT yanked""",
@@ -165,8 +165,8 @@ public async fn unyank_version(
     package_id: &PackageScope,
     version: &SemVer,
 ) -> Result<(), DbError> {
-    let mut conn2 = repo.pool.acquire().await?;
-    let v_text2 = format_semver(version);
+    let mut conn = repo.pool.acquire().await?;
+    let v_text = format_semver(version);
     // Spec §10.1: unyank only within 24h of yank.
     conn.execute_with_params(
         """UPDATE versions SET yanked = false, yank_reason = NULL
