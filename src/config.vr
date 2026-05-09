@@ -170,7 +170,7 @@ implement Display for ConfigLoadError {
         match self {
             EnvNotSet(name)        => f.write_str(f"VERUM_REGISTRY_CONFIG not set; set to path of registry.toml ({name})".as_str()),
             FileReadFailed(reason) => f.write_str(f"failed to read config file: {reason}".as_str()),
-            ParseFailed(e)         => Display.fmt(e, f),
+            ParseFailed(e)         => e.fmt(f),
             MissingField(field)    => f.write_str(f"config missing required field [{field}]".as_str()),
             InvalidValue { path, reason } => f.write_str(f"config invalid at [{path}]: {reason}".as_str()),
         }
@@ -178,7 +178,7 @@ implement Display for ConfigLoadError {
 }
 
 implement Debug for ConfigLoadError {
-    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { Display.fmt(self, f) }
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FormatError> { self.fmt(f) }
 }
 
 /// Load configuration from `$VERUM_REGISTRY_CONFIG` (env var pointing
