@@ -43,6 +43,11 @@
 )
 module verum_registry.audit;
 
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
+mount collections.List;
+mount database.postgres.async_pool.AsyncPgPool;
+
 public mount verum_registry.audit.lifecycle.{
     LifecycleDistribution, lifecycle_distribution_for_corpus,
     PosetViolation, detect_poset_violations,
@@ -65,10 +70,38 @@ public mount verum_registry.audit.self_reference.{
 // =============================================================================
 // AuditService — service-layer entry point used by the HTTP handlers
 // =============================================================================
+//
+// Owns the pool reference and exposes all audit-observatory queries
+// behind a single struct. HTTP handlers obtain the service from
+// router state and call methods directly — no `using [Database]`
+// context required.
 
 @derive(Clone, Debug)
-public type AuditService is {};
+public type AuditService is {
+    pool: AsyncPgPool,
+};
 
 implement AuditService {
-    public fn new() -> AuditService { AuditService {} }
+    public fn new(pool: AsyncPgPool) -> AuditService { AuditService { pool } }
+
+    /// Corpus-wide Lifecycle distribution.
+    public async fn lifecycle_distribution(&self)
+        -> Result<LifecycleDistribution, AuditError>
+    {
+        lifecycle_distribution_for_corpus(&self.pool).await
+    }
+
+    /// AP-009 / AP-021 / AP-024 transitive poset violations.
+    public async fn poset_violations(&self, max_depth: Int)
+        -> Result<List<PosetViolation>, AuditError>
+    {
+        detect_poset_violations(&self.pool, max_depth).await
+    }
+
+    /// Corpus-wide AP-NNN summary (counts per AP-id + per-cog totals).
+    public async fn corpus_anti_patterns(&self)
+        -> Result<CorpusAntiPatternSummary, AuditError>
+    {
+        summarise_corpus_anti_patterns(&self.pool).await
+    }
 }

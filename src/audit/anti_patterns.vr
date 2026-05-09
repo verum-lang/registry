@@ -39,6 +39,9 @@ mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
 mount collections.{List, Map};
 mount architecture.types.Severity;
 mount architecture.anti_patterns.AntiPatternCode as ArchAntiPatternId;
+mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
+mount verum_registry.persistence.sql_params.*;
 
 // =============================================================================
 // Catalog
@@ -412,22 +415,29 @@ public type CorpusAntiPatternSummary is {
     cogs_clean: Int { >= 0 },
 };
 
-pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary, AuditError>
-    using [Database]
-{
+public async fn summarise_corpus_anti_patterns(
+    pool: &AsyncPgPool,
+) -> Result<CorpusAntiPatternSummary, AuditError> {
+    let conn = pool.acquire().await
+        .map_err(|e| AuditError.QueryFailed(f"acquire: {e}"))?;
     // Read the per-cog AP findings from cog_audit_records and aggregate.
-    let rows = sql#"""
-        SELECT ap_id, COUNT(*) as n
-        FROM cog_audit_findings
-        WHERE verdict <> 'ok'
-        GROUP BY ap_id
-    """.fetch_all().await
+    let rows = conn.query(
+        """SELECT ap_id, COUNT(*) as n
+              FROM cog_audit_findings
+              WHERE verdict <> 'ok'
+              GROUP BY ap_id""",
+        no_params(),
+    ).await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut counts: Map<Text, Int> = Map.new();
     let mut i: Int = 0;
     while i < rows.len() {
-        counts.insert(rows[i].ap_id.clone(), rows[i].n);
+        let ap_id = rows[i].get_text("ap_id")
+            .map_err(|e| AuditError.QueryFailed(f"ap_id: {e}"))?;
+        let n = rows[i].get_int("n")
+            .map_err(|e| AuditError.QueryFailed(f"n: {e}"))?;
+        counts.insert(ap_id, n);
         i = i + 1;
     }
     let mut counts_by_id: List<(AntiPatternId, Int)> = List.with_capacity(40);
@@ -441,32 +451,26 @@ pub async fn summarise_corpus_anti_patterns() -> Result<CorpusAntiPatternSummary
         j = j + 1;
     }
 
-    let totals: TotalsRow = sql#"""
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END)   AS with_errors,
-            SUM(CASE WHEN error_count = 0 AND warning_count > 0 THEN 1 ELSE 0 END) AS warning_only,
-            SUM(CASE WHEN error_count = 0 AND warning_count = 0 THEN 1 ELSE 0 END) AS clean
-        FROM cog_audit_records
-    """.fetch_one().await
+    let totals_row = conn.query_one(
+        """SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END)   AS with_errors,
+              SUM(CASE WHEN error_count = 0 AND warning_count > 0 THEN 1 ELSE 0 END) AS warning_only,
+              SUM(CASE WHEN error_count = 0 AND warning_count = 0 THEN 1 ELSE 0 END) AS clean
+          FROM cog_audit_records""",
+        no_params(),
+    ).await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     Ok(CorpusAntiPatternSummary {
         counts_by_id,
-        cogs_total:        totals.total,
-        cogs_with_errors:  totals.with_errors.unwrap_or(0),
-        cogs_warning_only: totals.warning_only.unwrap_or(0),
-        cogs_clean:        totals.clean.unwrap_or(0),
+        cogs_total:        totals_row.get_int("total")
+            .map_err(|e| AuditError.QueryFailed(f"total: {e}"))?,
+        cogs_with_errors:  totals_row.get_int("with_errors").unwrap_or(0),
+        cogs_warning_only: totals_row.get_int("warning_only").unwrap_or(0),
+        cogs_clean:        totals_row.get_int("clean").unwrap_or(0),
     })
 }
-
-@derive(FromRow)
-type TotalsRow is {
-    total:        Int,
-    with_errors:  Maybe<Int>,
-    warning_only: Maybe<Int>,
-    clean:        Maybe<Int>,
-};
 
 // =============================================================================
 // Errors

@@ -33,16 +33,18 @@
 module verum_registry.http.handlers.audit;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
 mount net.weft.{WeftRequest, Response, StatusCode};
 mount encoding.json.{JsonValue, json_object, json_string, json_array, json_number};
 
 mount verum_registry.audit.{
-    LifecycleDistribution, lifecycle_distribution_for_corpus,
-    PosetViolation, detect_poset_violations,
+    AuditService,
+    LifecycleDistribution,
+    PosetViolation,
     AntiPatternRoster, AntiPatternFinding, AntiPatternId,
-    CorpusAntiPatternSummary, summarise_corpus_anti_patterns,
+    CorpusAntiPatternSummary,
     anti_pattern_roster_for_cog, all_ap_ids,
     CveBundle, render_developer_summary, render_auditor_json,
     SelfAuditResult, run_self_audit,
@@ -58,15 +60,16 @@ const POSET_MAX_DEPTH: Int = 8;
 // =============================================================================
 
 pub async fn lifecycle(_req: WeftRequest) -> Response
-    using [Database, Logger]
+    using [AuditService, Logger]
 {
-    let dist = match lifecycle_distribution_for_corpus().await {
+    let dist = match AuditService.lifecycle_distribution().await {
         Ok(d)  => d,
-        Err(e) => return render_error("internal_error".to_text(),
-            f"{e}", None, None,
+        Err(e) => return render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
         ).status(StatusCode.InternalServerError),
     };
-    let violations = detect_poset_violations(POSET_MAX_DEPTH).await
+    let violations = AuditService.poset_violations(POSET_MAX_DEPTH).await
         .unwrap_or_else(|_| List.new());
 
     let mut d = Map.new();
@@ -106,12 +109,13 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
 // =============================================================================
 
 pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
-    using [Database, Logger]
+    using [AuditService, Logger]
 {
-    let summary = match summarise_corpus_anti_patterns().await {
+    let summary = match AuditService.corpus_anti_patterns().await {
         Ok(s)  => s,
-        Err(e) => return render_error("internal_error".to_text(),
-            f"{e}", None, None,
+        Err(e) => return render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
         ).status(StatusCode.InternalServerError),
     };
     let mut obj = Map.new();
@@ -136,7 +140,7 @@ pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
 }
 
 pub async fn cog_anti_patterns(req: WeftRequest) -> Response
-    using [CogAuditRepository, Database, Logger]
+    using [CogAuditRepository, Logger]
 {
     let cog_id = match cog_id_from_req(&req) {
         Ok(s)  => s,
@@ -145,11 +149,13 @@ pub async fn cog_anti_patterns(req: WeftRequest) -> Response
     let repo = CogAuditRepository {};
     let roster = match repo.fetch_roster(&cog_id).await {
         Ok(Some(r)) => r,
-        Ok(None) => return render_error("not_found".to_text(),
-            f"no audit record for {cog_id}", None, None,
+        Ok(None) => return render_simple_error(
+            "not_found".to_text(),
+            f"no audit record for {cog_id}"
         ).status(StatusCode.NotFound),
-        Err(e) => return render_error("internal_error".to_text(),
-            f"{e}", None, None,
+        Err(e) => return render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
         ).status(StatusCode.InternalServerError),
     };
     Response.json(&roster_to_json(&roster))
@@ -190,7 +196,7 @@ fn finding_to_json(f: &AntiPatternFinding) -> JsonValue {
 // =============================================================================
 
 pub async fn cog_cve_bundle(req: WeftRequest) -> Response
-    using [CogAuditRepository, Database, Logger]
+    using [CogAuditRepository, Logger]
 {
     let cog_id = match cog_id_from_req(&req) {
         Ok(s)  => s,
@@ -199,11 +205,13 @@ pub async fn cog_cve_bundle(req: WeftRequest) -> Response
     let repo = CogAuditRepository {};
     let bundle = match repo.fetch_cve_bundle(&cog_id).await {
         Ok(Some(b)) => b,
-        Ok(None) => return render_error("not_found".to_text(),
-            f"no audit record for {cog_id}", None, None,
+        Ok(None) => return render_simple_error(
+            "not_found".to_text(),
+            f"no audit record for {cog_id}"
         ).status(StatusCode.NotFound),
-        Err(e) => return render_error("internal_error".to_text(),
-            f"{e}", None, None,
+        Err(e) => return render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
         ).status(StatusCode.InternalServerError),
     };
 
@@ -223,8 +231,9 @@ pub async fn self_audit(req: WeftRequest) -> Response
 {
     let result = match run_self_audit().await {
         Ok(r)  => r,
-        Err(e) => return render_error("internal_error".to_text(),
-            f"{e}", None, None,
+        Err(e) => return render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
         ).status(StatusCode.InternalServerError),
     };
     if accept_text_plain(&req) {
@@ -243,8 +252,9 @@ fn cog_id_from_req(req: &WeftRequest) -> Result<Text, Response> {
     let name  = req.path_param("name").unwrap_or_else(|| "".to_text());
     let ver   = req.path_param("version").unwrap_or_else(|| "".to_text());
     if name.is_empty() || ver.is_empty() {
-        return Err(render_error("validation_failed".to_text(),
-            "missing scope/name/version".to_text(), None, None,
+        return Err(render_simple_error(
+            "validation_failed".to_text(),
+            "missing scope/name/version".to_text()
         ).status(StatusCode.BadRequest));
     }
     let id = if scope.is_empty() { f"{name}@{ver}" }

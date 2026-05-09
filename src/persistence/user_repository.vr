@@ -27,13 +27,14 @@ mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.{List, Map};
 mount database.common.error.DbError;
-mount database.postgres.async_pool.AsyncPgPool;
-mount database.postgres.async_connection.AsyncPgConnection;
+mount database.postgres.async_pool.{AsyncPgPool, AsyncPgPoolGuard};
 mount database.postgres.row.Row;
+mount encoding.json.*;
 
 mount verum_registry.domain.{
     User, UserId, Username, EmailAddress, OidcIdentity,
 };
+mount verum_registry.persistence.sql_params.*;
 
 public type UserRepository is {
     pool: AsyncPgPool,
@@ -47,14 +48,14 @@ public async fn lookup_user_by_id(
     repo: &UserRepository,
     id: &UserId,
 ) -> Result<Maybe<User>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"""SELECT id, username, email, password_hash, created_at
+        """SELECT id, username, email, password_hash, created_at
               FROM users WHERE id = $1""",
-        (id,),
+        [tv_ref(id)],
     ).await?;
     match row_opt {
-        Some(row) => Ok(Some(decode_user_with_oidc(&mut conn, &row).await?)),
+        Some(row) => Ok(Some(decode_user_with_oidc(&conn, &row).await?)),
         None      => Ok(None),
     }
 }
@@ -63,14 +64,14 @@ public async fn lookup_user_by_username(
     repo: &UserRepository,
     username: &Username,
 ) -> Result<Maybe<User>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"""SELECT id, username, email, password_hash, created_at
+        """SELECT id, username, email, password_hash, created_at
               FROM users WHERE username = $1""",
-        (username,),
+        [tv_ref(username)],
     ).await?;
     match row_opt {
-        Some(row) => Ok(Some(decode_user_with_oidc(&mut conn, &row).await?)),
+        Some(row) => Ok(Some(decode_user_with_oidc(&conn, &row).await?)),
         None      => Ok(None),
     }
 }
@@ -79,15 +80,21 @@ public async fn create_user(
     repo: &UserRepository,
     user: &User,
 ) -> Result<(), DbError> {
-    let mut conn = repo.pool.acquire().await?;
-    conn.execute(
-        sql#"""INSERT INTO users (id, username, email, password_hash, created_at)
+    let conn = repo.pool.acquire().await?;
+    conn.execute_with_params(
+        """INSERT INTO users (id, username, email, password_hash, created_at)
               VALUES ($1, $2, $3, $4, $5)""",
-        (&user.id, &user.username, &user.email, &user.password_hash, &user.created_at),
+        [
+            tv_ref(&user.id),
+            tv_ref(&user.username),
+            tv_ref(&user.email),
+            tv_text_opt(&user.password_hash),
+            tv_timestamp(&user.created_at),
+        ],
     ).await?;
     let mut i: Int = 0;
     while i < user.oidc_identities.len() {
-        link_oidc_identity_inner(&mut conn, &user.id, &user.oidc_identities[i]).await?;
+        link_oidc_identity_inner(&conn, &user.id, &user.oidc_identities[i]).await?;
         i = i + 1;
     }
     Ok(())
@@ -98,43 +105,48 @@ public async fn link_oidc_identity(
     user_id: &UserId,
     identity: &OidcIdentity,
 ) -> Result<(), DbError> {
-    let mut conn = repo.pool.acquire().await?;
-    link_oidc_identity_inner(&mut conn, user_id, identity).await
+    let conn = repo.pool.acquire().await?;
+    link_oidc_identity_inner(&conn, user_id, identity).await
 }
 
 async fn link_oidc_identity_inner(
-    conn: &mut AsyncPgConnection,
+    conn: &AsyncPgPoolGuard,
     user_id: &UserId,
     identity: &OidcIdentity,
 ) -> Result<(), DbError> {
-    let metadata_json = encoding.json.stringify(&identity.metadata);
-    conn.execute(
-        sql#"""INSERT INTO oidc_identities (user_id, issuer, subject, metadata)
+    let metadata_json = stringify(&identity.metadata);
+    conn.execute_with_params(
+        """INSERT INTO oidc_identities (user_id, issuer, subject, metadata)
               VALUES ($1, $2, $3, $4::jsonb)
               ON CONFLICT (issuer, subject) DO UPDATE SET
                   user_id = EXCLUDED.user_id,
                   metadata = EXCLUDED.metadata""",
-        (user_id, &identity.issuer, &identity.subject, &metadata_json),
+        [
+            tv_ref(user_id),
+            tv_ref(&identity.issuer),
+            tv_ref(&identity.subject),
+            tv(metadata_json),
+        ],
     ).await?;
     Ok(())
 }
 
 async fn decode_user_with_oidc(
-    conn: &mut AsyncPgConnection,
+    conn: &AsyncPgPoolGuard,
     row: &Row,
 ) -> Result<User, DbError> {
     let id: UserId = row.get_text("id")?;
     let oidc_rows = conn.query(
-        sql#"""SELECT issuer, subject, metadata
+        """SELECT issuer, subject, metadata
               FROM oidc_identities WHERE user_id = $1""",
-        (&id,),
+        [tv_ref(&id)],
     ).await?;
     let mut oidc_identities: List<OidcIdentity> = List.new();
     let mut i: Int = 0;
     while i < oidc_rows.len() {
-        let metadata: Map<Text, Text> = encoding.json.parse(
-            &oidc_rows[i].get_text("metadata").unwrap_or_else(|_| "{}".to_text())
-        ).unwrap_or_default();
+        let metadata_text = oidc_rows[i].get_text("metadata").unwrap_or_else(|_| "{}".to_text());
+        let metadata: Map<Text, Text> = parse(&metadata_text)
+            .unwrap_or_else(|_| Map.new());
         oidc_identities.push(OidcIdentity {
             issuer:   oidc_rows[i].get_text("issuer")?,
             subject:  oidc_rows[i].get_text("subject")?,

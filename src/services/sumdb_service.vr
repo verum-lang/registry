@@ -29,9 +29,11 @@
 module verum_registry.services.sumdb_service;
 
 mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount context.standard.{Logger, Metrics, Cache};
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
-mount base.semver.SemVer;
+mount base.semver.*;
+mount time.rfc3339.*;
 mount security.transparency_log.{
     TransparencyLog, LogLeaf, SignedTreeHead, Tile, TileCoord,
     LogError, new as log_new,
@@ -42,6 +44,7 @@ mount security.ecc.ed25519.{generate_seed, public_key};
 mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
 mount time.system_time.now_unix_ns;
+mount verum_registry.persistence.sql_params.*;
 
 mount verum_registry.config.SumdbConfig;
 mount verum_registry.domain.{
@@ -72,11 +75,12 @@ public type SumdbLookupResult is {
 
 public type SumdbService is {
     log: TransparencyLog,
+    pool: AsyncPgPool,
 };
 
 implement SumdbService {
     /// Hydrate the transparency-log from the sumdb tables.
-    pub async fn from_db(pool: &AsyncPgPool, config: &SumdbConfig) -> Result<SumdbService, Text> {
+    public async fn from_db(pool: &AsyncPgPool, config: &SumdbConfig) -> Result<SumdbService, Text> {
         // Load operator seed from configured path; for new installs,
         // generate at first run.
         let seed = load_or_init_signing_seed(&config.signing_key_path)
@@ -85,12 +89,12 @@ implement SumdbService {
         let mut log = log_new(seed, pubkey);
 
         // Replay all sumdb_entries to rebuild the in-memory log.
-        let mut conn = pool.acquire().await.map_err(|e| f"{e}")?;
+        let conn = pool.acquire().await.map_err(|e| f"{e}")?;
         let rows = conn.query(
-            sql#"""SELECT package_id, version, checksum, timestamp
+            """SELECT package_id, version, checksum, timestamp
                   FROM sumdb_entries
                   ORDER BY sequence""",
-            (),
+            no_params(),
         ).await.map_err(|e| f"{e}")?;
 
         let mut i: Int = 0;
@@ -102,11 +106,11 @@ implement SumdbService {
             i = i + 1;
         }
 
-        Ok(SumdbService { log: log })
+        Ok(SumdbService { log: log, pool: pool.clone() })
     }
 
     /// Append a new leaf to the log.  Returns the resulting STH.
-    pub async fn append_leaf(
+    public async fn append_leaf(
         &mut self,
         leaf_bytes: List<Byte>,
     ) -> Result<SignedTreeHead, SumdbError> {
@@ -114,35 +118,36 @@ implement SumdbService {
             .map_err(|e| LogIntegrityFailed(f"{e}"))
     }
 
-    pub async fn lookup(
+    public async fn lookup(
         &self,
         package: &PackageScope,
         version: &SemVer,
     ) -> Result<SumdbLookupResult, SumdbError>
-        using [Database, Cache]
+        using [Cache]
     {
-        let v_text = base.semver.format_semver(version);
+        let v_text = format_semver(version);
         let cache_key = f"sumdb:{package}@{v_text}";
         if let Ok(Some(cached)) = Cache.get<SumdbLookupResult>(&cache_key).await {
             return Ok(cached);
         }
-        let row_opt = Database.query_one_opt(
-            sql#"""SELECT sequence, package_id, version, checksum
+        let conn = self.pool.acquire().await
+            .map_err(|e| SumdbStorageFailed(f"{e}"))?;
+        let row_opt = conn.query_one_opt(
+            """SELECT sequence, package_id, version, checksum
                   FROM sumdb_entries
                   WHERE package_id = $1 AND version = $2""",
-            (package, &v_text),
+            [tv_ref(package), tv(v_text)],
         ).await.map_err(|e| SumdbStorageFailed(f"{e}"))?;
         let row = row_opt.ok_or(VersionNotInLog {
             package_id: package.clone(),
             version: version.clone(),
         })?;
 
-        let sequence = row.get_int64("sequence")
-            .map_err(|e| SumdbStorageFailed(f"{e}"))? as Int;
+        let sequence = row.get_int("sequence")
+            .map_err(|e| SumdbStorageFailed(f"{e}"))?;
         let checksum_text = row.get_text("checksum")
             .map_err(|e| SumdbStorageFailed(f"{e}"))?;
-        let checksum = Hex64::try_from(checksum_text)
-            .map_err(|e| LogIntegrityFailed(f"{e}"))?;
+        let checksum = Hex64(checksum_text);
 
         // Compute tile coordinates the verifier needs.
         let current_size = self.log.leaves.len();
@@ -159,7 +164,7 @@ implement SumdbService {
         Ok(result)
     }
 
-    pub async fn latest_tree_head(&self) -> Result<SignedTreeHead, SumdbError>
+    public async fn latest_tree_head(&self) -> Result<SignedTreeHead, SumdbError>
         using [Cache]
     {
         let cache_key = "sumdb:latest".to_text();
@@ -172,7 +177,7 @@ implement SumdbService {
         Ok(sth)
     }
 
-    pub async fn tile(&self, coord: TileCoord) -> Result<Tile, SumdbError>
+    public async fn tile(&self, coord: TileCoord) -> Result<Tile, SumdbError>
         using [Cache]
     {
         let cache_key = f"sumdb:tile:{coord.level}:{coord.index}";
@@ -216,6 +221,6 @@ fn encode_leaf_text(row: &Row) -> Result<Text, Text> {
     let ver = row.get_text("version").map_err(|e| f"{e}")?;
     let chk = row.get_text("checksum").map_err(|e| f"{e}")?;
     let ts = row.get_timestamp("timestamp").map_err(|e| f"{e}")?;
-    Ok(format_unsupported("""{{"package":"{}","version":"{}","checksum":"{}","timestamp":"{}"}}""",
-                pkg, ver, chk, time.rfc3339.format(&ts)))
+    let ts_text = format_utc(ts.unix_seconds, ts.nanos);
+    Ok(f"{{\"package\":\"{pkg}\",\"version\":\"{ver}\",\"checksum\":\"{chk}\",\"timestamp\":\"{ts_text}\"}}")
 }

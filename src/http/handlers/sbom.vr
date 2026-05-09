@@ -39,6 +39,7 @@
 module verum_registry.http.handlers.sbom;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
 mount security.hash.sha256.{digest as sha256_digest};
@@ -59,26 +60,26 @@ type SbomFormat is CycloneDx | Spdx;
 /// Combined entry — `?format=` query selects which form to return.
 /// Default: CycloneDX (the more widely-tooled format).
 pub async fn handle_sbom(req: WeftRequest) -> Response
-    using [Storage, Database, Cache, Logger]
+    using [Storage, Cache, Logger]
 {
     let fmt = parse_format_query(&req).unwrap_or(SbomFormat.CycloneDx);
     serve_sbom(req, fmt).await
 }
 
 pub async fn handle_sbom_cyclonedx(req: WeftRequest) -> Response
-    using [Storage, Database, Cache, Logger]
+    using [Storage, Cache, Logger]
 {
     serve_sbom(req, SbomFormat.CycloneDx).await
 }
 
 pub async fn handle_sbom_spdx(req: WeftRequest) -> Response
-    using [Storage, Database, Cache, Logger]
+    using [Storage, Cache, Logger]
 {
     serve_sbom(req, SbomFormat.Spdx).await
 }
 
 async fn serve_sbom(req: WeftRequest, fmt: SbomFormat) -> Response
-    using [Storage, Database, Cache, Logger]
+    using [Storage, Cache, Logger]
 {
     let scope_text   = req.path_param("scope").unwrap_or_else(|| "".to_text());
     let name_text    = req.path_param("name").unwrap_or_else(|| "".to_text());
@@ -88,27 +89,31 @@ async fn serve_sbom(req: WeftRequest, fmt: SbomFormat) -> Response
                       else { f"{scope_text}/{name_text}" };
     let pkg_id: PackageScope = match pkg_id_text.try_into() {
         Ok(s)  => s,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid package scope".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid package scope".to_text()
         ).status(StatusCode.BadRequest),
     };
     let semver = match base.semver.parse_semver(&version_text) {
         Ok(v)  => v,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid SemVer".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid SemVer".to_text()
         ).status(StatusCode.BadRequest),
     };
 
     let version_row = match lookup_version(&VersionRepository, &pkg_id, &semver).await {
         Ok(Some(r)) => r,
-        Ok(None) => return render_error("not_found".to_text(),
-            f"version {pkg_id}@{version_text}", None, None,
+        Ok(None) => return render_simple_error(
+            "not_found".to_text(),
+            f"version {pkg_id}@{version_text}"
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Warn, &f"sbom lookup_version: {e}");
-            return render_error("internal_error".to_text(),
-                "version lookup failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError);
+            return render_simple_error(
+            "internal_error".to_text(),
+            "version lookup failed".to_text()
+        ).status(StatusCode.InternalServerError);
         }
     };
 
@@ -129,9 +134,9 @@ async fn serve_sbom(req: WeftRequest, fmt: SbomFormat) -> Response
 
     let expected = match expected_sha {
         Some(s) => s,
-        None    => return render_error("not_found".to_text(),
-            "SBOM not generated for this version (pre-REG-8 publish)".to_text(),
-            None, None,
+        None    => return render_simple_error(
+            "not_found".to_text(),
+            "SBOM not generated for this version (pre-REG-8 publish)".to_text()
         ).status(StatusCode.NotFound),
     };
 
@@ -139,9 +144,10 @@ async fn serve_sbom(req: WeftRequest, fmt: SbomFormat) -> Response
         Ok(b)  => b,
         Err(e) => {
             Logger.log(Level.Warn, &f"sbom storage get: {e}");
-            return render_error("not_found".to_text(),
-                "SBOM blob missing from object store".to_text(), None, None,
-            ).status(StatusCode.NotFound);
+            return render_simple_error(
+            "not_found".to_text(),
+            "SBOM blob missing from object store".to_text()
+        ).status(StatusCode.NotFound);
         }
     };
 
@@ -152,9 +158,9 @@ async fn serve_sbom(req: WeftRequest, fmt: SbomFormat) -> Response
     let computed = hex_encode(&sha256_digest(&bytes));
     if !ct_eq_text(&computed, &expected.0) {
         Logger.log(Level.Error, &f"sbom hash mismatch for {pkg_id}@{version_text} ({fmt:?}); expected={expected.0} computed={computed}");
-        return render_error("integrity_failed".to_text(),
-            "SBOM bytes failed integrity check; reconciliation triggered".to_text(),
-            None, None,
+        return render_simple_error(
+            "integrity_failed".to_text(),
+            "SBOM bytes failed integrity check; reconciliation triggered".to_text()
         ).status(StatusCode.BadGateway);
     }
 

@@ -1,8 +1,7 @@
 // =============================================================================
 // verum_registry/persistence/tuf_metadata_repository.vr (spec v3.0 §6.1)
 // =============================================================================
-// CRUD for `tuf_root_history` + `tuf_signed_metadata`. Used by
-// `TufService` to persist + serve TUF metadata at /tuf/<role>.json.
+// CRUD for `tuf_root_history` + `tuf_signed_metadata`.
 // =============================================================================
 
 @arch_module(
@@ -27,15 +26,24 @@ module verum_registry.persistence.tuf_metadata_repository;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
-mount time.rfc3339.Rfc3339Time;
-mount database.postgres.PgError;
+mount time.rfc3339.*;
+mount database.common.error.DbError;
+mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 mount security.tuf.types.RoleName;
 
 mount verum_registry.domain.tuf_state.{
     TufRootSnapshot, TufSignedMetadata, Hex64, role_to_db_text,
 };
+mount verum_registry.persistence.sql_params.*;
 
-public type TufMetadataRepository is {};
+public type TufMetadataRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn tuf_metadata_repository_new(pool: AsyncPgPool) -> TufMetadataRepository {
+    TufMetadataRepository { pool }
+}
 
 implement TufMetadataRepository {
     // =========================================================================
@@ -45,42 +53,57 @@ implement TufMetadataRepository {
     public async fn insert_root(
         &self,
         snap: &TufRootSnapshot,
-    ) -> Result<(), PgError>
-        using [Database]
+    ) -> Result<(), DbError>
     {
-        sql#"""
-            INSERT INTO tuf_root_history (
-                version, content_bytes, content_sha256, expires_at, created_at
-            ) VALUES (
-                ${snap.version}, ${&snap.content_bytes}, ${&snap.content_sha256.0},
-                ${&snap.expires_at}, ${&snap.created_at}
-            )
-        """.execute().await.map(|_| ())
+        let conn = self.pool.acquire().await?;
+        conn.execute_with_params(
+            """INSERT INTO tuf_root_history (
+                   version, content_bytes, content_sha256, expires_at, created_at
+               ) VALUES ($1, $2, $3, $4, $5)""",
+            [
+                tv_int(snap.version),
+                tv_bytes(&snap.content_bytes),
+                tv_ref(&snap.content_sha256),
+                tv_timestamp(&snap.expires_at),
+                tv_timestamp(&snap.created_at),
+            ],
+        ).await?;
+        Ok(())
     }
 
     public async fn get_root(
         &self,
         version: Int,
-    ) -> Result<Maybe<TufRootSnapshot>, PgError>
-        using [Database]
+    ) -> Result<Maybe<TufRootSnapshot>, DbError>
     {
-        sql#"""
-            SELECT version, content_bytes, content_sha256, expires_at, created_at
-            FROM tuf_root_history
-            WHERE version = ${version}
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_root))
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT version, content_bytes, content_sha256, expires_at, created_at
+               FROM tuf_root_history
+               WHERE version = $1
+               LIMIT 1""",
+            [tv_int(version)],
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_root_row(&row)?)),
+        }
     }
 
-    public async fn latest_root(&self) -> Result<Maybe<TufRootSnapshot>, PgError>
-        using [Database]
+    public async fn latest_root(&self) -> Result<Maybe<TufRootSnapshot>, DbError>
     {
-        sql#"""
-            SELECT version, content_bytes, content_sha256, expires_at, created_at
-            FROM tuf_root_history
-            ORDER BY version DESC
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_root))
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT version, content_bytes, content_sha256, expires_at, created_at
+               FROM tuf_root_history
+               ORDER BY version DESC
+               LIMIT 1""",
+            no_params(),
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_root_row(&row)?)),
+        }
     }
 
     // =========================================================================
@@ -90,66 +113,81 @@ implement TufMetadataRepository {
     public async fn insert_signed(
         &self,
         meta: &TufSignedMetadata,
-    ) -> Result<(), PgError>
-        using [Database]
+    ) -> Result<(), DbError>
     {
-        sql#"""
-            INSERT INTO tuf_signed_metadata (
-                role, version, content_bytes, content_sha256, expires_at, created_at
-            ) VALUES (
-                ${&meta.role}, ${meta.version}, ${&meta.content_bytes},
-                ${&meta.content_sha256.0}, ${&meta.expires_at}, ${&meta.created_at}
-            )
-        """.execute().await.map(|_| ())
+        let conn = self.pool.acquire().await?;
+        conn.execute_with_params(
+            """INSERT INTO tuf_signed_metadata (
+                   role, version, content_bytes, content_sha256, expires_at, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6)""",
+            [
+                tv_ref(&meta.role),
+                tv_int(meta.version),
+                tv_bytes(&meta.content_bytes),
+                tv_ref(&meta.content_sha256),
+                tv_timestamp(&meta.expires_at),
+                tv_timestamp(&meta.created_at),
+            ],
+        ).await?;
+        Ok(())
     }
 
     public async fn get_signed(
         &self,
         role: &RoleName,
         version: Int,
-    ) -> Result<Maybe<TufSignedMetadata>, PgError>
-        using [Database]
+    ) -> Result<Maybe<TufSignedMetadata>, DbError>
     {
+        let conn = self.pool.acquire().await?;
         let role_text = role_to_db_text(role);
-        sql#"""
-            SELECT role, version, content_bytes, content_sha256, expires_at, created_at
-            FROM tuf_signed_metadata
-            WHERE role = ${&role_text} AND version = ${version}
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_signed))
+        let row_opt = conn.query_one_opt(
+            """SELECT role, version, content_bytes, content_sha256, expires_at, created_at
+               FROM tuf_signed_metadata
+               WHERE role = $1 AND version = $2
+               LIMIT 1""",
+            [tv(role_text), tv_int(version)],
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_signed_row(&row)?)),
+        }
     }
 
     public async fn latest_signed(
         &self,
         role: &RoleName,
-    ) -> Result<Maybe<TufSignedMetadata>, PgError>
-        using [Database]
+    ) -> Result<Maybe<TufSignedMetadata>, DbError>
     {
+        let conn = self.pool.acquire().await?;
         let role_text = role_to_db_text(role);
-        sql#"""
-            SELECT role, version, content_bytes, content_sha256, expires_at, created_at
-            FROM tuf_signed_metadata
-            WHERE role = ${&role_text}
-            ORDER BY version DESC
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_signed))
+        let row_opt = conn.query_one_opt(
+            """SELECT role, version, content_bytes, content_sha256, expires_at, created_at
+               FROM tuf_signed_metadata
+               WHERE role = $1
+               ORDER BY version DESC
+               LIMIT 1""",
+            [tv(role_text)],
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_signed_row(&row)?)),
+        }
     }
 
-    /// Atomically increment-and-fetch the next version for a role.
-    /// Used by TufService.resign_targets() and the timestamp/snapshot
-    /// refresh ticker.
     public async fn next_version(
         &self,
         role: &RoleName,
-    ) -> Result<Int, PgError>
-        using [Database]
+    ) -> Result<Int, DbError>
     {
+        let conn = self.pool.acquire().await?;
         let role_text = role_to_db_text(role);
-        sql#"""
-            SELECT COALESCE(MAX(version), 0) + 1
-            FROM tuf_signed_metadata
-            WHERE role = ${&role_text}
-        """.fetch_one_scalar().await
+        let row = conn.query_one(
+            """SELECT COALESCE(MAX(version), 0) + 1 AS next_v
+               FROM tuf_signed_metadata
+               WHERE role = $1""",
+            [tv(role_text)],
+        ).await?;
+        row.get_int("next_v")
     }
 }
 
@@ -157,42 +195,23 @@ implement TufMetadataRepository {
 // Row → domain
 // =============================================================================
 
-fn row_to_root(row: TufRootRow) -> TufRootSnapshot {
-    TufRootSnapshot {
-        version:        row.version,
-        content_bytes:  row.content_bytes,
-        content_sha256: Hex64(row.content_sha256),
-        expires_at:     row.expires_at,
-        created_at:     row.created_at,
-    }
+fn decode_root_row(row: &Row) -> Result<TufRootSnapshot, DbError> {
+    Ok(TufRootSnapshot {
+        version:        row.get_int("version")?,
+        content_bytes:  row.get_bytes("content_bytes")?,
+        content_sha256: Hex64(row.get_text("content_sha256")?),
+        expires_at:     row.get_timestamp("expires_at")?,
+        created_at:     row.get_timestamp("created_at")?,
+    })
 }
 
-fn row_to_signed(row: TufSignedRow) -> TufSignedMetadata {
-    TufSignedMetadata {
-        role:           row.role,
-        version:        row.version,
-        content_bytes:  row.content_bytes,
-        content_sha256: Hex64(row.content_sha256),
-        expires_at:     row.expires_at,
-        created_at:     row.created_at,
-    }
+fn decode_signed_row(row: &Row) -> Result<TufSignedMetadata, DbError> {
+    Ok(TufSignedMetadata {
+        role:           row.get_text("role")?,
+        version:        row.get_int("version")?,
+        content_bytes:  row.get_bytes("content_bytes")?,
+        content_sha256: Hex64(row.get_text("content_sha256")?),
+        expires_at:     row.get_timestamp("expires_at")?,
+        created_at:     row.get_timestamp("created_at")?,
+    })
 }
-
-@derive(FromRow)
-type TufRootRow is {
-    version:        Int,
-    content_bytes:  List<Byte>,
-    content_sha256: Text,
-    expires_at:     Rfc3339Time,
-    created_at:     Rfc3339Time,
-};
-
-@derive(FromRow)
-type TufSignedRow is {
-    role:           Text,
-    version:        Int,
-    content_bytes:  List<Byte>,
-    content_sha256: Text,
-    expires_at:     Rfc3339Time,
-    created_at:     Rfc3339Time,
-};

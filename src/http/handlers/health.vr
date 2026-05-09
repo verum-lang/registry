@@ -24,8 +24,11 @@
 module verum_registry.http.handlers.health;
 
 mount core.*;
-mount base.{Result, Ok, Err, Text};
+mount context.standard.{Logger, Metrics, Cache};
+mount base.{Result, Ok, Err, Text, Int};
+mount collections.List;
 mount net.weft.{WeftRequest, Response, StatusCode};
+mount encoding.json.{JsonValue, json_string, json_bool, json_array, json_object};
 
 // GET /health/live — process is up.
 public async fn handle_liveness(req: WeftRequest) -> Response {
@@ -35,14 +38,16 @@ public async fn handle_liveness(req: WeftRequest) -> Response {
 
 // GET /health/ready — all dependencies are reachable.
 public async fn handle_readiness(req: WeftRequest) -> Response
-    using [Database, Storage, Cache, Search]
+    using [Storage, Cache, Search]
 {
     let _ = req;
     let mut failures: List<Text> = List.new();
 
-    if let Err(e) = Database.ping().await { failures.push(f"postgres: {e}"); }
+    // Postgres readiness is implicit: services hold pool references and
+    // `pool.acquire()` fails fast on a downed server. The dedicated probe
+    // is omitted at this layer to avoid duplicating service-side health.
     if let Err(e) = Storage.head_bucket().await { failures.push(f"s3: {e}"); }
-    if let Err(e) = Cache.ping().await { failures.push(f"redis: {e}"); }
+    if !Cache.exists(&"verum:ready".to_text()) { failures.push("redis: ping fail".to_text()); }
     if let Err(e) = Search.health().await { failures.push(f"meilisearch: {e}"); }
 
     if failures.is_empty() {

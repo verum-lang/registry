@@ -1,10 +1,7 @@
 // =============================================================================
 // verum_registry/persistence/passkey_repository.vr (spec v3.0 §6.1)
 // =============================================================================
-// CRUD operations for the `passkeys` table backing the WebAuthn
-// passwordless-login flow. Composes against
-// `core.database.postgres` + the compile-time `sql#"..."` meta-fn
-// for type-safe queries.
+// CRUD for `passkeys` — WebAuthn VerifiedCredential persistence.
 // =============================================================================
 
 @arch_module(
@@ -29,181 +26,191 @@ module verum_registry.persistence.passkey_repository;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
 mount collections.List;
-mount base.ulid.Ulid;
-mount time.rfc3339.{Rfc3339Time, now_utc};
-mount database.postgres.{AsyncPgPool, AsyncTransaction, PgError};
-mount security.webauthn.types.AttestationFormat;
+mount base.ulid.*;
+mount time.rfc3339.*;
+mount security.webauthn.types.*;
+mount database.common.error.DbError;
+mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 
 mount verum_registry.domain.passkey.Passkey;
 mount verum_registry.domain.user.UserId;
+mount verum_registry.persistence.sql_params.*;
+
+// =============================================================================
+// Repository handle
+// =============================================================================
+
+public type PasskeyRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn passkey_repository_new(pool: AsyncPgPool) -> PasskeyRepository {
+    PasskeyRepository { pool }
+}
 
 // =============================================================================
 // Public API
 // =============================================================================
 
-public type PasskeyRepository is {};
-
 implement PasskeyRepository {
-    /// Insert a fresh passkey on registration.
     public async fn insert(
         &self,
         p: &Passkey,
-    ) -> Result<(), PgError>
-        using [Database]
+    ) -> Result<(), DbError>
     {
-        let attestation_text = attestation_format_to_text(&p.attestation_format);
-        sql#"""
-            INSERT INTO passkeys (
-                id, user_id, credential_id, public_key_cose, cose_alg,
-                aaguid, sign_count, backup_eligible, backup_state,
-                attestation_format, nickname, transports,
-                created_at, last_used_at
-            ) VALUES (
-                ${p.id.0}, ${p.user_id.0}, ${&p.credential_id},
-                ${&p.public_key_cose}, ${p.cose_alg},
-                ${&p.aaguid}, ${p.sign_count},
-                ${p.backup_eligible}, ${p.backup_state},
-                ${&attestation_text}, ${&p.nickname},
-                ${&p.transports},
-                ${&p.created_at}, ${&p.last_used_at}
-            )
-        """.execute().await.map(|_| ())
+        let conn = self.pool.acquire().await?;
+        let attestation_text = security.webauthn.types.attestation_format_to_text(&p.attestation_format);
+        conn.execute_with_params(
+            """INSERT INTO passkeys (
+                   id, user_id, credential_id, public_key_cose, cose_alg,
+                   aaguid, sign_count, backup_eligible, backup_state,
+                   attestation_format, nickname, transports,
+                   created_at, last_used_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)""",
+            [
+                tv(p.id.to_text()),
+                tv(p.user_id.0.clone()),
+                tv_bytes(&p.credential_id),
+                tv_bytes(&p.public_key_cose),
+                tv_int(p.cose_alg),
+                tv_bytes(&p.aaguid),
+                tv_int(p.sign_count),
+                tv_bool(p.backup_eligible),
+                tv_bool(p.backup_state),
+                tv(attestation_text),
+                tv_text_opt(&p.nickname),
+                tv_text_array(&p.transports),
+                tv_timestamp(&p.created_at),
+                tv_timestamp_opt(&p.last_used_at),
+            ],
+        ).await?;
+        Ok(())
     }
 
-    /// Find by the authenticator-chosen credential id (used during
-    /// authentication when allow_credentials is empty).
     public async fn find_by_credential_id(
         &self,
         credential_id: &List<Byte>,
-    ) -> Result<Maybe<Passkey>, PgError>
-        using [Database]
+    ) -> Result<Maybe<Passkey>, DbError>
     {
-        sql#"""
-            SELECT id, user_id, credential_id, public_key_cose, cose_alg,
-                   aaguid, sign_count, backup_eligible, backup_state,
-                   attestation_format, nickname, transports,
-                   created_at, last_used_at
-            FROM passkeys
-            WHERE credential_id = ${credential_id}
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_passkey))
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT id, user_id, credential_id, public_key_cose, cose_alg,
+                      aaguid, sign_count, backup_eligible, backup_state,
+                      attestation_format, nickname, transports,
+                      created_at, last_used_at
+               FROM passkeys
+               WHERE credential_id = $1
+               LIMIT 1""",
+            [tv_bytes(credential_id)],
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_passkey_row(&row)?)),
+        }
     }
 
-    /// All passkeys for a user (settings UI).
     public async fn find_by_user(
         &self,
         user_id: &UserId,
-    ) -> Result<List<Passkey>, PgError>
-        using [Database]
+    ) -> Result<List<Passkey>, DbError>
     {
-        sql#"""
-            SELECT id, user_id, credential_id, public_key_cose, cose_alg,
-                   aaguid, sign_count, backup_eligible, backup_state,
-                   attestation_format, nickname, transports,
-                   created_at, last_used_at
-            FROM passkeys
-            WHERE user_id = ${user_id.0}
-            ORDER BY last_used_at DESC NULLS LAST, created_at DESC
-        """.fetch_all().await.map(|rows| rows.into_iter().map(row_to_passkey).collect())
+        let conn = self.pool.acquire().await?;
+        let rows = conn.query(
+            """SELECT id, user_id, credential_id, public_key_cose, cose_alg,
+                      aaguid, sign_count, backup_eligible, backup_state,
+                      attestation_format, nickname, transports,
+                      created_at, last_used_at
+               FROM passkeys
+               WHERE user_id = $1
+               ORDER BY last_used_at DESC NULLS LAST, created_at DESC""",
+            [tv(user_id.0.clone())],
+        ).await?;
+        let mut out: List<Passkey> = List.new();
+        let mut i: Int = 0;
+        while i < rows.len() {
+            out.push(decode_passkey_row(&rows[i])?);
+            i = i + 1;
+        }
+        Ok(out)
     }
 
-    /// Update sign_count + backup_state + last_used_at after a
-    /// successful authentication. Used as the cloning-detection
-    /// commit point — the row's prior sign_count was already checked.
     public async fn update_after_auth(
         &self,
         id: &Ulid,
         new_sign_count: Int,
         new_backup_state: Bool,
         used_at: &Rfc3339Time,
-    ) -> Result<(), PgError>
-        using [Database]
+    ) -> Result<(), DbError>
     {
-        sql#"""
-            UPDATE passkeys
-               SET sign_count   = ${new_sign_count},
-                   backup_state = ${new_backup_state},
-                   last_used_at = ${used_at}
-             WHERE id = ${id.0}
-        """.execute().await.map(|_| ())
+        let conn = self.pool.acquire().await?;
+        conn.execute_with_params(
+            """UPDATE passkeys
+                  SET sign_count   = $2,
+                      backup_state = $3,
+                      last_used_at = $4
+                WHERE id = $1""",
+            [
+                tv(id.to_text()),
+                tv_int(new_sign_count),
+                tv_bool(new_backup_state),
+                tv_timestamp(used_at),
+            ],
+        ).await?;
+        Ok(())
     }
 
-    /// Revoke (hard-delete) a passkey.
     public async fn revoke(
         &self,
         user_id: &UserId,
         passkey_id: &Ulid,
-    ) -> Result<Int, PgError>
-        using [Database]
+    ) -> Result<(), DbError>
     {
-        sql#"""
-            DELETE FROM passkeys
-             WHERE id = ${passkey_id.0}
-               AND user_id = ${user_id.0}
-        """.execute().await
+        let conn = self.pool.acquire().await?;
+        conn.execute_with_params(
+            """DELETE FROM passkeys WHERE id = $1 AND user_id = $2""",
+            [tv(passkey_id.to_text()), tv(user_id.0.clone())],
+        ).await?;
+        Ok(())
     }
 
-    /// How many passkeys a user has — UX hint for "your last passkey
-    /// would leave you locked out" warnings.
     public async fn count_by_user(
         &self,
         user_id: &UserId,
-    ) -> Result<Int, PgError>
-        using [Database]
+    ) -> Result<Int, DbError>
     {
-        sql#"""
-            SELECT COUNT(*)::BIGINT
-            FROM passkeys
-            WHERE user_id = ${user_id.0}
-        """.fetch_one_scalar().await
+        let conn = self.pool.acquire().await?;
+        let row = conn.query_one(
+            """SELECT COUNT(*)::BIGINT AS cnt FROM passkeys WHERE user_id = $1""",
+            [tv(user_id.0.clone())],
+        ).await?;
+        row.get_int("cnt")
     }
 }
 
 // =============================================================================
-// Row → domain mapping
+// Row → domain
 // =============================================================================
 
-fn row_to_passkey(row: PasskeyRow) -> Passkey {
-    Passkey {
-        id:                 Ulid.parse(&row.id).unwrap_or_else(|_| Ulid.now()),
-        user_id:            UserId(row.user_id),
-        credential_id:      row.credential_id,
-        public_key_cose:    row.public_key_cose,
-        cose_alg:           row.cose_alg,
-        aaguid:             row.aaguid,
-        sign_count:         row.sign_count,
-        backup_eligible:    row.backup_eligible,
-        backup_state:       row.backup_state,
-        attestation_format: attestation_format_from_text(&row.attestation_format),
-        nickname:           row.nickname,
-        transports:         row.transports,
-        created_at:         row.created_at,
-        last_used_at:       row.last_used_at,
-    }
-}
-
-@derive(FromRow)
-type PasskeyRow is {
-    id:                 Text,
-    user_id:            Text,
-    credential_id:      List<Byte>,
-    public_key_cose:    List<Byte>,
-    cose_alg:           Int,
-    aaguid:             List<Byte>,
-    sign_count:         Int,
-    backup_eligible:    Bool,
-    backup_state:       Bool,
-    attestation_format: Text,
-    nickname:           Maybe<Text>,
-    transports:         List<Text>,
-    created_at:         Rfc3339Time,
-    last_used_at:       Maybe<Rfc3339Time>,
-};
-
-fn attestation_format_to_text(f: &AttestationFormat) -> Text {
-    security.webauthn.types.attestation_format_to_text(f)
-}
-
-fn attestation_format_from_text(s: &Text) -> AttestationFormat {
-    security.webauthn.types.attestation_format_from_text(s)
+fn decode_passkey_row(row: &Row) -> Result<Passkey, DbError> {
+    let id_text = row.get_text("id")?;
+    let id = parse_ulid(&id_text)
+        .unwrap_or_else(|_| new_ulid());
+    let user_id_text = row.get_text("user_id")?;
+    Ok(Passkey {
+        id:                 id,
+        user_id:            UserId(user_id_text),
+        credential_id:      row.get_bytes("credential_id")?,
+        public_key_cose:    row.get_bytes("public_key_cose")?,
+        cose_alg:           row.get_int("cose_alg")?,
+        aaguid:             row.get_bytes("aaguid")?,
+        sign_count:         row.get_int("sign_count")?,
+        backup_eligible:    row.get_bool("backup_eligible")?,
+        backup_state:       row.get_bool("backup_state")?,
+        attestation_format: security.webauthn.types.attestation_format_from_text(&row.get_text("attestation_format")?),
+        nickname:           row.get_text_opt("nickname")?,
+        transports:         row.get_text_array("transports").unwrap_or_else(|_| List.new()),
+        created_at:         row.get_timestamp("created_at")?,
+        last_used_at:       row.get_timestamp_opt("last_used_at")?,
+    })
 }

@@ -1,8 +1,7 @@
 // =============================================================================
 // verum_registry/persistence/sigstore_bundle_repository.vr (spec v3.0 §6.1)
 // =============================================================================
-// CRUD for `sigstore_bundles`. Composes against
-// `core.database.postgres` for type-safe queries.
+// CRUD for `sigstore_bundles`.
 // =============================================================================
 
 @arch_module(
@@ -27,94 +26,123 @@ module verum_registry.persistence.sigstore_bundle_repository;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
-mount base.ulid.Ulid;
-mount time.rfc3339.Rfc3339Time;
-mount database.postgres.PgError;
+mount base.ulid.*;
+mount time.rfc3339.*;
+mount database.common.error.DbError;
+mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 
 mount verum_registry.domain.sigstore_bundle.{SigstoreBundleRecord, Hex64};
+mount verum_registry.persistence.sql_params.*;
 
-public type SigstoreBundleRepository is {};
+public type SigstoreBundleRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn sigstore_bundle_repository_new(pool: AsyncPgPool) -> SigstoreBundleRepository {
+    SigstoreBundleRepository { pool }
+}
 
 implement SigstoreBundleRepository {
     public async fn insert(
         &self,
         rec: &SigstoreBundleRecord,
-    ) -> Result<(), PgError>
-        using [Database]
+    ) -> Result<(), DbError>
     {
-        sql#"""
-            INSERT INTO sigstore_bundles (
-                id, version_id, bundle_json,
-                envelope_sha256, cert_chain_leaf_sha256,
-                rekor_log_index, integrated_time,
-                oidc_issuer, oidc_subject, created_at
-            ) VALUES (
-                ${rec.id.0}, ${rec.version_id}, ${&rec.bundle_json},
-                ${&rec.envelope_sha256.0}, ${&rec.cert_chain_leaf_sha256.0},
-                ${rec.rekor_log_index}, ${&rec.integrated_time},
-                ${&rec.oidc_issuer}, ${&rec.oidc_subject},
-                ${&rec.created_at}
-            )
-        """.execute().await.map(|_| ())
+        let conn = self.pool.acquire().await?;
+        conn.execute_with_params(
+            """INSERT INTO sigstore_bundles (
+                   id, version_id, bundle_json,
+                   envelope_sha256, cert_chain_leaf_sha256,
+                   rekor_log_index, integrated_time,
+                   oidc_issuer, oidc_subject, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+            [
+                tv(rec.id.to_text()),
+                tv_int(rec.version_id),
+                tv_ref(&rec.bundle_json),
+                tv_ref(&rec.envelope_sha256.0),
+                tv_ref(&rec.cert_chain_leaf_sha256.0),
+                tv_int(rec.rekor_log_index),
+                tv_timestamp(&rec.integrated_time),
+                tv_ref(&rec.oidc_issuer),
+                tv_ref(&rec.oidc_subject),
+                tv_timestamp(&rec.created_at),
+            ],
+        ).await?;
+        Ok(())
     }
 
     public async fn fetch_by_version_id(
         &self,
         version_id: Int,
-    ) -> Result<Maybe<SigstoreBundleRecord>, PgError>
-        using [Database]
+    ) -> Result<Maybe<SigstoreBundleRecord>, DbError>
     {
-        sql#"""
-            SELECT id, version_id, bundle_json,
-                   envelope_sha256, cert_chain_leaf_sha256,
-                   rekor_log_index, integrated_time,
-                   oidc_issuer, oidc_subject, created_at
-            FROM sigstore_bundles
-            WHERE version_id = ${version_id}
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_record))
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT id, version_id, bundle_json,
+                      envelope_sha256, cert_chain_leaf_sha256,
+                      rekor_log_index, integrated_time,
+                      oidc_issuer, oidc_subject, created_at
+               FROM sigstore_bundles
+               WHERE version_id = $1
+               LIMIT 1""",
+            [tv_int(version_id)],
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_bundle_row(&row)?)),
+        }
     }
 
-    /// Lookup by SHA-256 of the canonical envelope — used by the
-    /// "verify any bundle bytes" admin/diagnostic endpoint.
-    pub async fn find_by_envelope_hash(
+    public async fn find_by_envelope_hash(
         &self,
         envelope_sha256: &Hex64,
-    ) -> Result<Maybe<SigstoreBundleRecord>, PgError>
-        using [Database]
+    ) -> Result<Maybe<SigstoreBundleRecord>, DbError>
     {
-        sql#"""
-            SELECT id, version_id, bundle_json,
-                   envelope_sha256, cert_chain_leaf_sha256,
-                   rekor_log_index, integrated_time,
-                   oidc_issuer, oidc_subject, created_at
-            FROM sigstore_bundles
-            WHERE envelope_sha256 = ${&envelope_sha256.0}
-            LIMIT 1
-        """.fetch_optional().await.map(|opt| opt.map(row_to_record))
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT id, version_id, bundle_json,
+                      envelope_sha256, cert_chain_leaf_sha256,
+                      rekor_log_index, integrated_time,
+                      oidc_issuer, oidc_subject, created_at
+               FROM sigstore_bundles
+               WHERE envelope_sha256 = $1
+               LIMIT 1""",
+            [tv_ref(&envelope_sha256.0)],
+        ).await?;
+        match row_opt {
+            None      => Ok(None),
+            Some(row) => Ok(Some(decode_bundle_row(&row)?)),
+        }
     }
 
-    /// Audit query: list all bundles published under a given OIDC
-    /// identity. Drives the "audit by publisher" UX.
     public async fn list_by_identity(
         &self,
         issuer: &Text,
         subject: &Text,
         limit: Int,
-    ) -> Result<List<SigstoreBundleRecord>, PgError>
-        using [Database]
+    ) -> Result<List<SigstoreBundleRecord>, DbError>
     {
-        sql#"""
-            SELECT id, version_id, bundle_json,
-                   envelope_sha256, cert_chain_leaf_sha256,
-                   rekor_log_index, integrated_time,
-                   oidc_issuer, oidc_subject, created_at
-            FROM sigstore_bundles
-            WHERE oidc_issuer  = ${issuer}
-              AND oidc_subject = ${subject}
-            ORDER BY rekor_log_index DESC
-            LIMIT ${limit}
-        """.fetch_all().await.map(|rows| rows.into_iter().map(row_to_record).collect())
+        let conn = self.pool.acquire().await?;
+        let rows = conn.query(
+            """SELECT id, version_id, bundle_json,
+                      envelope_sha256, cert_chain_leaf_sha256,
+                      rekor_log_index, integrated_time,
+                      oidc_issuer, oidc_subject, created_at
+               FROM sigstore_bundles
+               WHERE oidc_issuer = $1 AND oidc_subject = $2
+               ORDER BY rekor_log_index DESC
+               LIMIT $3""",
+            [tv_ref(issuer), tv_ref(subject), tv_int(limit)],
+        ).await?;
+        let mut out: List<SigstoreBundleRecord> = List.new();
+        let mut i: Int = 0;
+        while i < rows.len() {
+            out.push(decode_bundle_row(&rows[i])?);
+            i = i + 1;
+        }
+        Ok(out)
     }
 }
 
@@ -122,31 +150,20 @@ implement SigstoreBundleRepository {
 // Row → domain
 // =============================================================================
 
-fn row_to_record(row: BundleRow) -> SigstoreBundleRecord {
-    SigstoreBundleRecord {
-        id:                     Ulid.parse(&row.id).unwrap_or_else(|_| Ulid.now()),
-        version_id:             row.version_id,
-        bundle_json:            row.bundle_json,
-        envelope_sha256:        Hex64(row.envelope_sha256),
-        cert_chain_leaf_sha256: Hex64(row.cert_chain_leaf_sha256),
-        rekor_log_index:        row.rekor_log_index,
-        integrated_time:        row.integrated_time,
-        oidc_issuer:            row.oidc_issuer,
-        oidc_subject:           row.oidc_subject,
-        created_at:             row.created_at,
-    }
+fn decode_bundle_row(row: &Row) -> Result<SigstoreBundleRecord, DbError> {
+    let id_text = row.get_text("id")?;
+    let id = parse_ulid(&id_text)
+        .unwrap_or_else(|_| new_ulid());
+    Ok(SigstoreBundleRecord {
+        id:                     id,
+        version_id:             row.get_int("version_id")?,
+        bundle_json:            row.get_text("bundle_json")?,
+        envelope_sha256:        Hex64(row.get_text("envelope_sha256")?),
+        cert_chain_leaf_sha256: Hex64(row.get_text("cert_chain_leaf_sha256")?),
+        rekor_log_index:        row.get_int("rekor_log_index")?,
+        integrated_time:        row.get_timestamp("integrated_time")?,
+        oidc_issuer:            row.get_text("oidc_issuer")?,
+        oidc_subject:           row.get_text("oidc_subject")?,
+        created_at:             row.get_timestamp("created_at")?,
+    })
 }
-
-@derive(FromRow)
-type BundleRow is {
-    id:                     Text,
-    version_id:             Int,
-    bundle_json:            Text,
-    envelope_sha256:        Text,
-    cert_chain_leaf_sha256: Text,
-    rekor_log_index:        Int,
-    integrated_time:        Rfc3339Time,
-    oidc_issuer:            Text,
-    oidc_subject:           Text,
-    created_at:             Rfc3339Time,
-};

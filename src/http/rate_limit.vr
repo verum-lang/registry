@@ -66,6 +66,7 @@
 module verum_registry.http.rate_limit;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int, Bool};
 mount collections.{List, Map};
 mount net.weft.{Middleware, Next, WeftRequest, Response, StatusCode};

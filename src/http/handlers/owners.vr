@@ -22,6 +22,7 @@
 module verum_registry.http.handlers.owners;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
 mount time.rfc3339.now_utc;
@@ -35,7 +36,7 @@ mount verum_registry.persistence.{
 mount verum_registry.domain.{
     PackageScope, PackageOwner, OwnerRole, RoleOwner, RoleMaintainer,
 };
-mount verum_registry.http.error_response.{render_error};
+mount verum_registry.http.error_response.{render_error, render_simple_error};
 
 // GET /api/v2/packages/:scope/:name/owners
 public async fn list_owners(req: WeftRequest) -> Response
@@ -46,9 +47,10 @@ public async fn list_owners(req: WeftRequest) -> Response
         Ok(os) => Response.json(&os),
         Err(e) => {
             Logger.log(Level.Error, f"list_owners: {e}");
-            render_error("internal_error".to_text(),
-                "list owners failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            "list owners failed".to_text()
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -67,21 +69,24 @@ public async fn invite_owner(req: WeftRequest) -> Response
     }
     let body: InviteRequest = match req.json().await {
         Ok(b)  => b,
-        Err(e) => return render_error("validation_failed".to_text(),
-            f"invalid body: {e}".to_text(), None, None,
+        Err(e) => return render_simple_error(
+            "validation_failed".to_text(),
+            f"invalid body: {e}".to_text()
         ).status(StatusCode.BadRequest),
     };
     let target_user = match lookup_user_by_username(&UserRepository, &body.username).await {
         Ok(Some(u)) => u,
-        _ => return render_error("user_not_found".to_text(),
-            f"no such user: {body.username}".to_text(), None, None,
+        _ => return render_simple_error(
+            "user_not_found".to_text(),
+            f"no such user: {body.username}".to_text()
         ).status(StatusCode.NotFound),
     };
     let role = match body.role.as_str() {
         "owner"      => RoleOwner,
         "maintainer" => RoleMaintainer,
-        _ => return render_error("validation_failed".to_text(),
-            "role must be 'owner' or 'maintainer'".to_text(), None, None,
+        _ => return render_simple_error(
+            "validation_failed".to_text(),
+            "role must be 'owner' or 'maintainer'".to_text()
         ).status(StatusCode.BadRequest),
     };
     let owner = PackageOwner {
@@ -95,9 +100,10 @@ public async fn invite_owner(req: WeftRequest) -> Response
         Ok(())  => Response.json(&owner).status(StatusCode.Created),
         Err(e) => {
             Logger.log(Level.Error, f"add_owner: {e}");
-            render_error("internal_error".to_text(),
-                "add owner failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            "add owner failed".to_text()
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -117,30 +123,34 @@ public async fn remove_owner(req: WeftRequest) -> Response
     let target_username_text = req.path_param("user").unwrap_or_else(|| "".to_text());
     let target_username = match target_username_text.try_into() {
         Ok(u)  => u,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid username".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid username".to_text()
         ).status(StatusCode.BadRequest),
     };
     let target = match lookup_user_by_username(&UserRepository, &target_username).await {
         Ok(Some(u)) => u,
-        _ => return render_error("user_not_found".to_text(),
-            f"no such user: {target_username}".to_text(), None, None,
+        _ => return render_simple_error(
+            "user_not_found".to_text(),
+            f"no such user: {target_username}".to_text()
         ).status(StatusCode.NotFound),
     };
     // Spec §5.1.2: at-least-one-owner refinement.  Caller-side check.
     let owners = list_owners(&OwnerRepository, &id).await.unwrap_or_default();
     if owners.len() <= 1 {
-        return render_error("validation_failed".to_text(),
-            "cannot remove the last owner".to_text(), None, None,
+        return render_simple_error(
+            "validation_failed".to_text(),
+            "cannot remove the last owner".to_text()
         ).status(StatusCode.UnprocessableEntity);
     }
     match remove_owner(&OwnerRepository, &id, &target.id).await {
         Ok(())  => Response.new().status(StatusCode.NoContent),
         Err(e) => {
             Logger.log(Level.Error, f"remove_owner: {e}");
-            render_error("internal_error".to_text(),
-                "remove owner failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            "remove owner failed".to_text()
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -159,20 +169,22 @@ fn scope_name(req: &WeftRequest) -> Result<PackageScope, Response> {
     let scope = req.path_param("scope").unwrap_or_else(|| "".to_text());
     let name = req.path_param("name").unwrap_or_else(|| "".to_text());
     let combined = if scope.starts_with("@") { f"{scope}/{name}".to_text() } else { name };
-    combined.try_into().map_err(|e| render_error(
-        "validation_failed".to_text(),
-        f"invalid scope: {e}".to_text(), None, None,
-    ).status(StatusCode.BadRequest))
+    combined.try_into().map_err(|e| render_simple_error(
+            "validation_failed".to_text(),
+            f"invalid scope: {e}".to_text()
+        ).status(StatusCode.BadRequest))
 }
 
 fn unauth() -> Response {
-    render_error("missing_credentials".to_text(),
-        "authentication required".to_text(), None, None,
-    ).status(StatusCode.Unauthorized)
+    render_simple_error(
+            "missing_credentials".to_text(),
+            "authentication required".to_text()
+        ).status(StatusCode.Unauthorized)
 }
 
 fn forbidden(reason: &str) -> Response {
-    render_error("not_an_owner".to_text(),
-        reason.to_text(), None, None,
-    ).status(StatusCode.Forbidden)
+    render_simple_error(
+            "not_an_owner".to_text(),
+            reason.to_text()
+        ).status(StatusCode.Forbidden)
 }

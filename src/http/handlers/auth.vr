@@ -22,6 +22,7 @@
 module verum_registry.http.handlers.auth;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
 mount encoding.json.{JsonValue, JsonObject, json_object, json_string, json_bool, json_array};
@@ -31,23 +32,24 @@ mount verum_registry.persistence.{
     UserRepository, TokenRepository,
     lookup_user_by_username, create_token, revoke_token,
 };
-mount verum_registry.http.error_response.{render_error};
+mount verum_registry.http.error_response.{render_error, render_simple_error};
 
 // POST /api/v2/auth/login
 public async fn handle_login(req: WeftRequest) -> Response {
     let _ = req;
-    render_error("not_implemented".to_text(),
-        "OIDC trusted publishing is the canonical auth path; password login deferred".to_text(),
-        None, None,
-    ).status(StatusCode.NotImplemented)
+    render_simple_error(
+            "not_implemented".to_text(),
+            "OIDC trusted publishing is the canonical auth path; password login deferred".to_text()
+        ).status(StatusCode.NotImplemented)
 }
 
 // POST /api/v2/auth/oidc/discover/:provider
 public async fn handle_oidc_discover(req: WeftRequest) -> Response {
     let _ = req;
-    render_error("not_implemented".to_text(),
-        "OIDC discovery pending Stdlib-G6".to_text(), None, None,
-    ).status(StatusCode.NotImplemented)
+    render_simple_error(
+            "not_implemented".to_text(),
+            "OIDC discovery pending Stdlib-G6".to_text()
+        ).status(StatusCode.NotImplemented)
 }
 
 // POST /api/v2/auth/tokens
@@ -58,10 +60,10 @@ public async fn handle_create_token(req: WeftRequest) -> Response
     // Implementation: authenticate, parse {expires_in, scopes, label},
     // generate ULID + secret (32 cryptographic-random bytes hex-encoded),
     // store Argon2id hash, return plaintext token ONCE.
-    render_error("not_implemented".to_text(),
-        "token creation handler pending finalised auth flow".to_text(),
-        None, None,
-    ).status(StatusCode.NotImplemented)
+    render_simple_error(
+            "not_implemented".to_text(),
+            "token creation handler pending finalised auth flow".to_text()
+        ).status(StatusCode.NotImplemented)
 }
 
 // DELETE /api/v2/auth/tokens/:id
@@ -70,14 +72,16 @@ public async fn handle_revoke_token(req: WeftRequest) -> Response
 {
     let auth_user = match AuthService.authenticate(&req).await {
         Ok(u)  => u,
-        Err(_) => return render_error("missing_credentials".to_text(),
-            "authentication required".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "missing_credentials".to_text(),
+            "authentication required".to_text()
         ).status(StatusCode.Unauthorized),
     };
     let token_id = match req.path_param("id") {
         Some(id) => id,
-        None     => return render_error("validation_failed".to_text(),
-            "missing token id".to_text(), None, None,
+        None     => return render_simple_error(
+            "validation_failed".to_text(),
+            "missing token id".to_text()
         ).status(StatusCode.BadRequest),
     };
     // Authorisation: caller may only revoke their own tokens.
@@ -86,9 +90,10 @@ public async fn handle_revoke_token(req: WeftRequest) -> Response
         Ok(())  => Response.new().status(StatusCode.NoContent),
         Err(e) => {
             Logger.log(Level.Error, f"revoke_token: {e}");
-            render_error("internal_error".to_text(),
-                "revocation failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            "revocation failed".to_text()
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -99,14 +104,16 @@ public async fn handle_get_user_profile(req: WeftRequest) -> Response
 {
     let username_text = match req.path_param("username") {
         Some(u) => u,
-        None    => return render_error("validation_failed".to_text(),
-            "missing username".to_text(), None, None,
+        None    => return render_simple_error(
+            "validation_failed".to_text(),
+            "missing username".to_text()
         ).status(StatusCode.BadRequest),
     };
     let username = match username_text.try_into() {
         Ok(u)  => u,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid username".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid username".to_text()
         ).status(StatusCode.BadRequest),
     };
     match lookup_user_by_username(&UserRepository, &username).await {
@@ -119,11 +126,13 @@ public async fn handle_get_user_profile(req: WeftRequest) -> Response
             let public_profile = json_object(profile_obj);
             Response.json(&public_profile)
         }
-        Ok(None) => render_error("user_not_found".to_text(),
-            f"no such user: {username}".to_text(), None, None,
+        Ok(None) => render_simple_error(
+            "user_not_found".to_text(),
+            f"no such user: {username}".to_text()
         ).status(StatusCode.NotFound),
-        Err(_) => render_error("internal_error".to_text(),
-            "user lookup failed".to_text(), None, None,
+        Err(_) => render_simple_error(
+            "internal_error".to_text(),
+            "user lookup failed".to_text()
         ).status(StatusCode.InternalServerError),
     }
 }

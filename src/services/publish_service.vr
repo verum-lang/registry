@@ -40,12 +40,16 @@
 module verum_registry.services.publish_service;
 
 mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount context.standard.{Logger, Metrics};
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool};
 mount collections.{List, Map};
 mount async.spawn;
+mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
-mount base.semver.{SemVer, cmp as cmp_semver};
+mount base.semver.*;
 mount base.string_distance.{damerau_levenshtein};
+mount verum_registry.contexts.{Storage, Search, Sumdb};
+mount verum_registry.persistence.sql_params.*;
 mount core.cog.manifest.{
     CogManifest, DependencySpec, LanguageProfile,
     parse_text as parse_manifest,
@@ -79,9 +83,13 @@ mount verum_registry.services.sbom_service.{
 // PublishService
 // =============================================================================
 
-public type PublishService is {};
+public type PublishService is {
+    pool: AsyncPgPool,
+};
 
 implement PublishService {
+    public fn new(pool: AsyncPgPool) -> PublishService { PublishService { pool } }
+
     /// Eight-phase publish.  Returns the persisted `PackageVersion`
     /// on success; otherwise the structured `PublishError`.
     public async fn publish(
@@ -91,7 +99,7 @@ implement PublishService {
         source_archive: List<Byte>,
         sbom_svc: &SbomService,
     ) -> Result<PackageVersion, PublishError>
-        using [Database, Storage, Cache, Search, Sumdb, Logger, Metrics]
+        using [Storage, Cache, Search, Sumdb, Logger, Metrics]
     {
         Metrics.increment("publish.attempts");
 
@@ -132,7 +140,7 @@ implement PublishService {
         &self,
         user: &User,
         package_name: &CogName,
-    ) -> Result<(), PublishError> using [Database] {
+    ) -> Result<(), PublishError> {
         let exists = self.package_exists(package_name).await?;
         if !exists {
             // First publish — no ownership entry yet; created in Phase 7.
@@ -152,7 +160,7 @@ implement PublishService {
     async fn phase3_check_version_bump(
         &self,
         manifest: &CogManifest,
-    ) -> Result<(), PublishError> using [Database] {
+    ) -> Result<(), PublishError> {
         if let Some(latest) = self.lookup_latest_version(&manifest.cog.name).await? {
             // SemVer monotonicity (cmp returns negative if a < b, zero if a == b, positive if a > b).
             if cmp_semver(&manifest.cog.version, &latest) <= 0 {
@@ -176,7 +184,7 @@ implement PublishService {
         &self,
         manifest: &CogManifest,
         source: &List<Byte>,
-    ) -> Result<(), PublishError> using [Database, Logger, Metrics] {
+    ) -> Result<(), PublishError> using [Logger, Metrics] {
         // 4a. Typosquatting — Damerau–Levenshtein distance vs high-download names.
         let candidates = self.lookup_high_download_candidates(&manifest.cog.name).await?;
         let proposed_str = manifest.cog.name.as_str();
@@ -286,7 +294,6 @@ implement PublishService {
         analyzed: &AnalyzedArchive,
         sbom_svc: &SbomService,
     ) -> Result<PublishArtefacts, PublishError>
-        using [Database]
     {
         // 6a. Sumdb leaf — canonical JSON of SumdbEntry (sequence allocated at append).
         let leaf = SumdbEntry {
@@ -334,19 +341,19 @@ implement PublishService {
         &self,
         deps: &Map<Text, DependencySpec>,
     ) -> Result<List<ResolvedDependency>, PublishError>
-        using [Database]
     {
+        let conn = self.pool.acquire().await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<ResolvedDependency> = List.new();
         for (name, spec) in deps.iter() {
-            let row_opt = Database.query_one_opt(sql#"""
-                SELECT version, source_sha256, license
-                FROM versions v
-                JOIN packages p ON v.package_id = p.id
-                WHERE v.package_id = $1
-                ORDER BY v.published_at DESC
-                LIMIT 1
-            """, (name,))
-                .await
+            let row_opt = conn.query_one_opt(
+                """SELECT version, source_sha256, license
+                      FROM versions v
+                      JOIN packages p ON v.package_id = p.id
+                      WHERE v.package_id = $1
+                      ORDER BY v.published_at DESC
+                      LIMIT 1""",
+                [tv_ref(name)],
+            ).await
                 .map_err(|e| DatabaseFailed(f"sbom dep resolve: {e}"))?;
             let row = match row_opt {
                 Some(r) => r,
@@ -354,10 +361,10 @@ implement PublishService {
             };
             let v_text  = row.get_text("version").map_err(|e| DatabaseFailed(f"{e}"))?;
             let sha_hex = row.get_text("source_sha256").map_err(|e| DatabaseFailed(f"{e}"))?;
-            let license_opt: Maybe<Text> = row.get_text_opt("license").ok();
-            let semver = base.semver.parse(&v_text)
+            let license_opt: Maybe<Text> = row.get_text_opt("license").ok().flatten();
+            let semver = parse(&v_text)
                 .map_err(|e| InternalError(f"sbom: bad dep version {v_text}: {e}"))?;
-            let sha = Hex64::try_from(sha_hex).map_err(|e| InternalError(f"sbom: bad sha: {e}"))?;
+            let sha = Hex64(sha_hex);
             out.push(resolved_dependency_from_spec(name, &semver, &sha, &license_opt));
             let _ = spec; // constraint kept in spec; selection above already filters
         }
@@ -376,10 +383,10 @@ implement PublishService {
         analyzed: &AnalyzedArchive,
         artefacts: &PublishArtefacts,
     ) -> Result<PackageVersion, PublishError>
-        using [Database, Storage, Sumdb, Logger]
+        using [Storage, Sumdb, Logger]
     {
         // S3 upload OUTSIDE transaction (S3 is non-transactional).
-        let v_text = base.semver.format_semver(&manifest.cog.version);
+        let v_text = format_semver(&manifest.cog.version);
         let s3_key = f"packages/{manifest.cog.name}/{v_text}/source.tar.zst";
         match Storage.put(&s3_key, source_archive).await {
             Ok(()) => {}
@@ -403,26 +410,38 @@ implement PublishService {
         }
 
         // Postgres transaction: packages + versions + ownership + sumdb.
-        let tx_result = Database.transaction(async |tx| {
-            self.upsert_package(tx, manifest, user).await?;
-            let version_record = self.insert_version(tx, manifest, analyzed, artefacts, user).await?;
-            if !self.package_owner_exists_in_tx(tx, &manifest.cog.name, &user.id).await? {
-                self.insert_owner(tx, &manifest.cog.name, &user.id, &user.id).await?;
+        // Manual BEGIN/COMMIT/ROLLBACK — async closure-based transaction
+        // helpers do not exist on AsyncPgPoolGuard.
+        let conn = self.pool.acquire().await
+            .map_err(|e| DatabaseFailed(f"acquire: {e}"))?;
+        let begin_sql = "BEGIN".to_text();
+        let _ = conn.execute(&begin_sql).await
+            .map_err(|e| DatabaseFailed(f"begin: {e}"))?;
+
+        let tx_result: Result<PackageVersion, PublishError> = async {
+            self.upsert_package_with_conn(&conn, manifest, user).await?;
+            let version_record = self.insert_version_with_conn(&conn, manifest, analyzed, artefacts, user).await?;
+            if !self.package_owner_exists_with_conn(&conn, &manifest.cog.name, &user.id).await? {
+                self.insert_owner_with_conn(&conn, &manifest.cog.name, &user.id, &user.id).await?;
             }
             // Append to sumdb log; the new sequence is assigned by Postgres
             // BIGSERIAL inside the transaction.
-            let _seq = Sumdb.append(LogLeaf { bytes: artefacts.sumdb_leaf_bytes.clone() })
+            let _seq = Sumdb.append(&manifest.cog.name, &v_text, &artefacts.sumdb_leaf.checksum.0)
                 .await
                 .map_err(|e| DatabaseFailed(f"sumdb append: {e}"))?;
             Ok(version_record)
-        }).await;
+        }.await;
 
         match tx_result {
-            Ok(v)  => {
+            Ok(v) => {
+                let commit_sql = "COMMIT".to_text();
+                let _ = conn.execute(&commit_sql).await;
                 Logger.log(Level.Info, f"persisted {manifest.cog.name}@{manifest.cog.version}");
                 Ok(v)
             }
             Err(e) => {
+                let rollback_sql = "ROLLBACK".to_text();
+                let _ = conn.execute(&rollback_sql).await;
                 // Best-effort: try to delete the S3 object that was uploaded
                 // before the transaction failed.  Failures here are logged
                 // but not surfaced (the storage reconciler will sweep).
@@ -460,10 +479,12 @@ implement PublishService {
     async fn package_exists(
         &self,
         name: &CogName,
-    ) -> Result<Bool, PublishError> using [Database] {
-        let row = Database.query_one(sql#"""SELECT EXISTS (SELECT 1 FROM packages WHERE id = $1) AS x""", (name,))
-            .await
-            .map_err(|e| DatabaseFailed(f"{e}"))?;
+    ) -> Result<Bool, PublishError> {
+        let conn = self.pool.acquire().await.map_err(|e| DatabaseFailed(f"{e}"))?;
+        let row = conn.query_one(
+            """SELECT EXISTS (SELECT 1 FROM packages WHERE id = $1) AS x""",
+            [tv_ref(name)],
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
     }
 
@@ -471,11 +492,12 @@ implement PublishService {
         &self,
         name: &CogName,
         version: &SemVer,
-    ) -> Result<Bool, PublishError> using [Database] {
-        let v_text = base.semver.format_semver(version);
-        let row = Database.query_one(
-            sql#"""SELECT EXISTS (SELECT 1 FROM versions WHERE package_id = $1 AND version = $2) AS x""",
-            (name, &v_text),
+    ) -> Result<Bool, PublishError> {
+        let conn = self.pool.acquire().await.map_err(|e| DatabaseFailed(f"{e}"))?;
+        let v_text = format_semver(version);
+        let row = conn.query_one(
+            """SELECT EXISTS (SELECT 1 FROM versions WHERE package_id = $1 AND version = $2) AS x""",
+            [tv_ref(name), tv(v_text)],
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
     }
@@ -483,16 +505,17 @@ implement PublishService {
     async fn lookup_latest_version(
         &self,
         name: &CogName,
-    ) -> Result<Maybe<SemVer>, PublishError> using [Database] {
-        let row_opt = Database.query_one_opt(
-            sql#"""SELECT latest_version FROM packages WHERE id = $1""",
-            (name,),
+    ) -> Result<Maybe<SemVer>, PublishError> {
+        let conn = self.pool.acquire().await.map_err(|e| DatabaseFailed(f"{e}"))?;
+        let row_opt = conn.query_one_opt(
+            """SELECT latest_version FROM packages WHERE id = $1""",
+            [tv_ref(name)],
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         match row_opt {
             Some(row) => {
                 let v_text: Text = row.get_text("latest_version")
                     .map_err(|e| DatabaseFailed(f"{e}"))?;
-                base.semver.parse(&v_text).map(Some)
+                parse(&v_text).map(Some)
                     .map_err(|e| InternalError(f"bad latest_version: {e}"))
             }
             None => Ok(None),
@@ -502,11 +525,12 @@ implement PublishService {
     async fn lookup_owners(
         &self,
         name: &CogName,
-    ) -> Result<List<PackageOwner>, PublishError> using [Database] {
-        let rows = Database.query(
-            sql#"""SELECT package_id, user_id, role, granted_at, granted_by
+    ) -> Result<List<PackageOwner>, PublishError> {
+        let conn = self.pool.acquire().await.map_err(|e| DatabaseFailed(f"{e}"))?;
+        let rows = conn.query(
+            """SELECT package_id, user_id, role, granted_at, granted_by
                   FROM package_owners WHERE package_id = $1""",
-            (name,),
+            [tv_ref(name)],
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<PackageOwner> = List.new();
         let mut i: Int = 0;
@@ -520,11 +544,12 @@ implement PublishService {
     async fn lookup_high_download_candidates(
         &self,
         proposed: &CogName,
-    ) -> Result<List<CogName>, PublishError> using [Database] {
+    ) -> Result<List<CogName>, PublishError> {
+        let conn = self.pool.acquire().await.map_err(|e| DatabaseFailed(f"{e}"))?;
         // Top 1000 packages by download count — typosquatting candidates.
-        let rows = Database.query(
-            sql#"""SELECT id FROM packages WHERE id <> $1 ORDER BY downloads DESC LIMIT 1000""",
-            (proposed,),
+        let rows = conn.query(
+            """SELECT id FROM packages WHERE id <> $1 ORDER BY downloads DESC LIMIT 1000""",
+            [tv_ref(proposed)],
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         let mut out: List<CogName> = List.new();
         let mut i: Int = 0;
@@ -555,85 +580,87 @@ implement PublishService {
         unreachable()  // wired up by the Config-driven initialiser
     }
 
-    async fn upsert_package(
+    async fn upsert_package_with_conn(
         &self,
-        tx: &mut Transaction,
+        conn: &database.postgres.async_pool.AsyncPgPoolGuard,
         manifest: &CogManifest,
         user: &User,
     ) -> Result<(), PublishError> {
-        let v_text = base.semver.format_semver(&manifest.cog.version);
-        let kw_array = manifest.cog.keywords.iter().map(|k| k.clone()).collect<Vec<_>>();
-        tx.execute(sql#"""
-            INSERT INTO packages (
-                id, description, homepage, repository, license, keywords,
-                latest_version, downloads, score, created_at, updated_at
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, 0, 0, now(), now()
-            ) ON CONFLICT (id) DO UPDATE SET
-                description = EXCLUDED.description,
-                homepage = EXCLUDED.homepage,
-                repository = EXCLUDED.repository,
-                license = EXCLUDED.license,
-                keywords = EXCLUDED.keywords,
-                latest_version = CASE
-                    WHEN EXCLUDED.latest_version > packages.latest_version
-                    THEN EXCLUDED.latest_version
-                    ELSE packages.latest_version
-                END,
-                updated_at = now()
-        """, (
-            &manifest.cog.name,
-            &manifest.cog.description.clone().unwrap_or_else(|| "".to_text()),
-            &manifest.cog.homepage,
-            &manifest.cog.repository,
-            &manifest.cog.license.clone().unwrap_or_else(|| "Unlicense".to_text()),
-            &kw_array,
-            &v_text,
-        )).await.map_err(|e| DatabaseFailed(f"{e}"))?;
+        let _ = user;
+        let v_text = format_semver(&manifest.cog.version);
+        conn.execute_with_params(
+            """INSERT INTO packages (
+                  id, description, homepage, repository, license, keywords,
+                  latest_version, downloads, score, created_at, updated_at
+              ) VALUES (
+                  $1, $2, $3, $4, $5, $6, $7, 0, 0, now(), now()
+              ) ON CONFLICT (id) DO UPDATE SET
+                  description = EXCLUDED.description,
+                  homepage = EXCLUDED.homepage,
+                  repository = EXCLUDED.repository,
+                  license = EXCLUDED.license,
+                  keywords = EXCLUDED.keywords,
+                  latest_version = CASE
+                      WHEN EXCLUDED.latest_version > packages.latest_version
+                      THEN EXCLUDED.latest_version
+                      ELSE packages.latest_version
+                  END,
+                  updated_at = now()""",
+            [
+                tv_ref(&manifest.cog.name),
+                tv(manifest.cog.description.clone().unwrap_or_else(|| "".to_text())),
+                tv_text_opt(&manifest.cog.homepage),
+                tv_text_opt(&manifest.cog.repository),
+                tv(manifest.cog.license.clone().unwrap_or_else(|| "Unlicense".to_text())),
+                tv_text_array(&manifest.cog.keywords),
+                tv(v_text),
+            ],
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(())
     }
 
-    async fn insert_version(
+    async fn insert_version_with_conn(
         &self,
-        tx: &mut Transaction,
+        conn: &database.postgres.async_pool.AsyncPgPoolGuard,
         manifest: &CogManifest,
         analyzed: &AnalyzedArchive,
         artefacts: &PublishArtefacts,
         user: &User,
     ) -> Result<PackageVersion, PublishError> {
-        let v_text = base.semver.format_semver(&manifest.cog.version);
+        let v_text = format_semver(&manifest.cog.version);
         let lifecycle_text = lifecycle_to_glyph(&analyzed.cve_lifecycle);
-        tx.execute(sql#"""
-            INSERT INTO versions (
-                package_id, version, edition, language_profile,
-                dependencies, dev_dependencies, build_dependencies,
-                features, default_features,
-                source_sha256, cve_lifecycle, shape_declarations_digest,
-                verification_level,
-                sbom_cyclonedx_sha256, sbom_spdx_sha256, sbom_generated_at,
-                published_at, published_by, yanked, yank_reason
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                $14, $15, now(),
-                now(), $16, false, NULL
-            )
-        """, (
-            &manifest.cog.name, &v_text,
-            &manifest.cog.edition,
-            &language_profile_to_text(&manifest.language.profile),
-            &dependencies_to_jsonb(&manifest.dependencies),
-            &dependencies_to_jsonb(&manifest.dev_dependencies),
-            &dependencies_to_jsonb(&manifest.build_dependencies),
-            &features_to_jsonb(&manifest.features),
-            &manifest.default_features,
-            &analyzed.source_sha256,
-            &lifecycle_text,
-            &analyzed.shape_declarations_digest,
-            &analyzed.verification_level,
-            &artefacts.sbom.cyclonedx_sha256,
-            &artefacts.sbom.spdx_sha256,
-            &user.id,
-        )).await.map_err(|e| DatabaseFailed(f"{e}"))?;
+        conn.execute_with_params(
+            """INSERT INTO versions (
+                  package_id, version, edition, language_profile,
+                  dependencies, dev_dependencies, build_dependencies,
+                  features, default_features,
+                  source_sha256, cve_lifecycle, shape_declarations_digest,
+                  verification_level,
+                  sbom_cyclonedx_sha256, sbom_spdx_sha256, sbom_generated_at,
+                  published_at, published_by, yanked, yank_reason
+              ) VALUES (
+                  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                  $14, $15, now(),
+                  now(), $16, false, NULL
+              )""",
+            [
+                tv_ref(&manifest.cog.name), tv(v_text),
+                tv_ref(&manifest.cog.edition),
+                tv(language_profile_to_text(&manifest.language.profile)),
+                tv(dependencies_to_jsonb(&manifest.dependencies)),
+                tv(dependencies_to_jsonb(&manifest.dev_dependencies)),
+                tv(dependencies_to_jsonb(&manifest.build_dependencies)),
+                tv(features_to_jsonb(&manifest.features)),
+                tv_text_array(&manifest.default_features),
+                tv_ref(&analyzed.source_sha256.0),
+                tv(lifecycle_text),
+                tv_ref(&analyzed.shape_declarations_digest),
+                tv_ref(&analyzed.verification_level),
+                tv_ref(&artefacts.sbom.cyclonedx_sha256),
+                tv_ref(&artefacts.sbom.spdx_sha256),
+                tv_ref(&user.id),
+            ],
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
 
         Ok(PackageVersion {
             package_id: manifest.cog.name.clone(),
@@ -657,35 +684,34 @@ implement PublishService {
         })
     }
 
-    async fn package_owner_exists_in_tx(
+    async fn package_owner_exists_with_conn(
         &self,
-        tx: &mut Transaction,
+        conn: &database.postgres.async_pool.AsyncPgPoolGuard,
         name: &CogName,
         user_id: &UserId,
     ) -> Result<Bool, PublishError> {
-        let row = tx.query_one(
-            sql#"""SELECT EXISTS (
+        let row = conn.query_one(
+            """SELECT EXISTS (
                     SELECT 1 FROM package_owners
                     WHERE package_id = $1 AND user_id = $2
                  ) AS x""",
-            (name, user_id),
+            [tv_ref(name), tv_ref(user_id)],
         ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(row.get_bool("x").unwrap_or(false))
     }
 
-    async fn insert_owner(
+    async fn insert_owner_with_conn(
         &self,
-        tx: &mut Transaction,
+        conn: &database.postgres.async_pool.AsyncPgPoolGuard,
         name: &CogName,
         user_id: &UserId,
         granted_by: &UserId,
     ) -> Result<(), PublishError> {
-        tx.execute(sql#"""
-            INSERT INTO package_owners (package_id, user_id, role, granted_at, granted_by)
-            VALUES ($1, $2, 'owner', now(), $3)
-        """, (name, user_id, granted_by))
-            .await
-            .map_err(|e| DatabaseFailed(f"{e}"))?;
+        conn.execute_with_params(
+            """INSERT INTO package_owners (package_id, user_id, role, granted_at, granted_by)
+                  VALUES ($1, $2, 'owner', now(), $3)""",
+            [tv_ref(name), tv_ref(user_id), tv_ref(granted_by)],
+        ).await.map_err(|e| DatabaseFailed(f"{e}"))?;
         Ok(())
     }
 }

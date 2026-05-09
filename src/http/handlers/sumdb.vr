@@ -24,6 +24,7 @@
 module verum_registry.http.handlers.sumdb;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode};
 mount base.semver.{parse as parse_semver};
@@ -31,11 +32,11 @@ mount security.transparency_log.TileCoord;
 
 mount verum_registry.services.SumdbService;
 mount verum_registry.domain.PackageScope;
-mount verum_registry.http.error_response.{render_error};
+mount verum_registry.http.error_response.{render_error, render_simple_error};
 
 // GET /sumdb/lookup/:scope/:name@:version
 public async fn handle_lookup(req: WeftRequest) -> Response
-    using [SumdbService, Database, Cache]
+    using [SumdbService, Cache]
 {
     let scope = req.path_param("scope").unwrap_or_else(|| "".to_text());
     let name = req.path_param("name").unwrap_or_else(|| "".to_text());
@@ -43,21 +44,24 @@ public async fn handle_lookup(req: WeftRequest) -> Response
     let combined = if scope.starts_with("@") { f"{scope}/{name}".to_text() } else { name };
     let id: PackageScope = match combined.try_into() {
         Ok(s)  => s,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid scope/name".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid scope/name".to_text()
         ).status(StatusCode.BadRequest),
     };
     let version = match parse_semver(&version_text) {
         Ok(v)  => v,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid version".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid version".to_text()
         ).status(StatusCode.BadRequest),
     };
     match SumdbService.lookup(&id, &version).await {
         Ok(result) => Response.json(&result)
             .header("Cache-Control", "public, max-age=31536000, immutable"),
-        Err(_) => render_error("version_not_in_log".to_text(),
-            f"no sumdb entry for {id}@{version}".to_text(), None, None,
+        Err(_) => render_simple_error(
+            "version_not_in_log".to_text(),
+            f"no sumdb entry for {id}@{version}".to_text()
         ).status(StatusCode.NotFound),
     }
 }
@@ -70,8 +74,9 @@ public async fn handle_latest(req: WeftRequest) -> Response
     match SumdbService.latest_tree_head().await {
         Ok(sth) => Response.json(&sth)
             .header("Cache-Control", "public, max-age=60"),
-        Err(_) => render_error("internal_error".to_text(),
-            "tree head unavailable".to_text(), None, None,
+        Err(_) => render_simple_error(
+            "internal_error".to_text(),
+            "tree head unavailable".to_text()
         ).status(StatusCode.InternalServerError),
     }
 }
@@ -83,8 +88,9 @@ public async fn handle_tile(req: WeftRequest) -> Response
     let level: Int = req.path_param("level").and_then(|s| s.parse().ok()).unwrap_or(-1);
     let index: Int = req.path_param("index").and_then(|s| s.parse().ok()).unwrap_or(-1);
     if level < 0 || index < 0 {
-        return render_error("validation_failed".to_text(),
-            "level/index must be non-negative".to_text(), None, None,
+        return render_simple_error(
+            "validation_failed".to_text(),
+            "level/index must be non-negative".to_text()
         ).status(StatusCode.BadRequest);
     }
     match SumdbService.tile(TileCoord { level, index }).await {

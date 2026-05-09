@@ -41,7 +41,7 @@ mount encoding.json.{
     JsonValue, JsonObject, json_object, json_string, json_bool,
     json_array, json_number, json_null,
 };
-mount time.rfc3339.{Rfc3339Time, format_rfc3339};
+mount time.rfc3339.*;
 mount architecture.types.Lifecycle;
 
 mount verum_registry.audit.anti_patterns.{
@@ -250,7 +250,7 @@ pub fn render_auditor_json(b: &CveBundle) -> AuditorJson {
     obj.insert("layers".to_text(),        layers_to_json(&b.layers));
     obj.insert("antiPatterns".to_text(),  ap_roster_to_json(&b.anti_patterns));
     obj.insert("loadBearing".to_text(),   json_bool(b.load_bearing));
-    obj.insert("auditedAt".to_text(),     json_string(format_rfc3339(&b.audited_at)));
+    obj.insert("auditedAt".to_text(),     json_string(format_utc(b.audited_at.unix_seconds, b.audited_at.nanos)));
     AuditorJson { value: json_object(obj) }
 }
 

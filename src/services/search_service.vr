@@ -28,11 +28,16 @@
 module verum_registry.services.search_service;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
+mount base.semver.*;
 mount core.cog.manifest.LanguageProfile;
 mount architecture.types.Lifecycle;
+mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
+mount verum_registry.contexts.Search;
+mount verum_registry.persistence.sql_params.*;
 
 mount verum_registry.domain.{
     PackageRecord, PackageVersion, PackageScope, SpdxExpression, VerificationLevel,
@@ -122,10 +127,14 @@ public type SearchResults is {
 // SearchService
 // =============================================================================
 
-public type SearchService is {};
+public type SearchService is {
+    pool: AsyncPgPool,
+};
 
 implement SearchService {
-    pub async fn search(
+    public fn new(pool: AsyncPgPool) -> SearchService { SearchService { pool } }
+
+    public async fn search(
         &self,
         query: SearchQuery,
     ) -> Result<SearchResults, SearchError>
@@ -160,10 +169,10 @@ implement SearchService {
 
     /// Rebuild / refresh the index for a single package version.  Called
     /// by PublishService after a successful publish.
-    pub async fn index_package_version(
+    public async fn index_package_version(
         &self,
         version: &PackageVersion,
-    ) -> Result<(), SearchError> using [Search, Database] {
+    ) -> Result<(), SearchError> using [Search] {
         // Look up the package metadata to assemble the indexed document.
         let pkg = self.lookup_package(&version.package_id).await?;
         let doc = render_indexed_document(&pkg, version);
@@ -175,12 +184,14 @@ implement SearchService {
     async fn lookup_package(
         &self,
         id: &PackageScope,
-    ) -> Result<PackageRecord, SearchError> using [Database] {
-        let row_opt = Database.query_one_opt(
-            sql#"""SELECT id, description, homepage, repository, license, keywords,
+    ) -> Result<PackageRecord, SearchError> {
+        let conn = self.pool.acquire().await
+            .map_err(|e| SearchBackendFailed(f"{e}"))?;
+        let row_opt = conn.query_one_opt(
+            """SELECT id, description, homepage, repository, license, keywords,
                         latest_version, downloads, score, created_at, updated_at
                   FROM packages WHERE id = $1""",
-            (id,),
+            [tv_ref(id)],
         ).await.map_err(|e| SearchBackendFailed(f"{e}"))?;
         match row_opt {
             Some(row) => decode_package_row(&row),
@@ -213,7 +224,7 @@ fn render_indexed_document(pkg: &PackageRecord, ver: &PackageVersion) -> SearchI
         keywords: pkg.keywords.clone(),
         latest_version: ver.version.clone(),
         downloads: pkg.downloads,
-        score: pkg.score,
+        score: pkg.score as Float,
         cve_lifecycle: ver.cve_lifecycle.clone(),
         language_profile: ver.language_profile.clone(),
         verification_level: ver.verification_level.clone(),
@@ -227,11 +238,11 @@ fn decode_package_row(row: &Row) -> Result<PackageRecord, SearchError> {
         homepage: row.get_text_opt("homepage").ok().flatten(),
         repository: row.get_text_opt("repository").ok().flatten(),
         license: row.get_text("license").map_err(|e| SearchBackendFailed(f"{e}"))?,
-        keywords: row.get_text_array("keywords").unwrap_or_default(),
-        latest_version: base.semver.parse(&row.get_text("latest_version")
+        keywords: row.get_text_array("keywords").unwrap_or_else(|_| List.new()),
+        latest_version: parse(&row.get_text("latest_version")
             .map_err(|e| SearchBackendFailed(f"{e}"))?)
             .map_err(|e| SearchBackendFailed(f"{e}"))?,
-        downloads: row.get_int64("downloads").unwrap_or(0) as Int,
+        downloads: row.get_int("downloads").unwrap_or(0),
         score: row.get_int("score").unwrap_or(0),
         created_at: row.get_timestamp("created_at").map_err(|e| SearchBackendFailed(f"{e}"))?,
         updated_at: row.get_timestamp("updated_at").map_err(|e| SearchBackendFailed(f"{e}"))?,

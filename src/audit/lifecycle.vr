@@ -4,18 +4,10 @@
 //
 // Spec: §12.3; architecture-types/cve/seven-symbols.md
 //
-// The Lifecycle distribution is a load-bearing health metric: a
-// healthy Verum corpus shows a strong tail of `[T]` Theorem cogs and
-// minimal `[H]` Hypothesis / `[I]` Interpretation entries. The
-// distribution surfaced here drives the registry's quarterly
-// transparency report.
-//
-// Additionally, this module exposes detection of AP-009
-// LifecycleRegression — when a high-rank cog cites a low-rank cog
-// (e.g., a Theorem citing a Hypothesis). This is a corpus-wide
-// invariant — individual publishes are checked at Phase 5b but the
-// observatory recomputes on schedule to catch transitive violations
-// (AP-021 / AP-024).
+// Lifecycle distribution health-metric reporter + AP-009 poset-violation
+// detector. Reads from `versions` and `packages` via an explicit
+// `AsyncPgPool` reference (no Database context — the standard context
+// surface does not expose the typed-params query API the registry needs).
 // =============================================================================
 
 @arch_module(
@@ -41,8 +33,11 @@ mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.{List, Map};
 mount architecture.types.Lifecycle;
+mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 
 mount verum_registry.audit.anti_patterns.AuditError;
+mount verum_registry.persistence.sql_params.*;
 
 // =============================================================================
 // Distribution
@@ -70,15 +65,18 @@ public type LifecycleDistribution is {
 
 /// Compute the Lifecycle distribution across all currently-published
 /// (non-yanked) versions in the registry.
-pub async fn lifecycle_distribution_for_corpus() -> Result<LifecycleDistribution, AuditError>
-    using [Database]
-{
-    let rows = sql#"""
-        SELECT cve_lifecycle, COUNT(*) AS n
-        FROM versions
-        WHERE NOT yanked
-        GROUP BY cve_lifecycle
-    """.fetch_all().await
+public async fn lifecycle_distribution_for_corpus(
+    pool: &AsyncPgPool,
+) -> Result<LifecycleDistribution, AuditError> {
+    let conn = pool.acquire().await
+        .map_err(|e| AuditError.QueryFailed(f"acquire: {e}"))?;
+    let rows = conn.query(
+        """SELECT cve_lifecycle, COUNT(*) AS n
+              FROM versions
+              WHERE NOT yanked
+              GROUP BY cve_lifecycle""",
+        no_params(),
+    ).await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut dist = LifecycleDistribution {
@@ -87,10 +85,12 @@ pub async fn lifecycle_distribution_for_corpus() -> Result<LifecycleDistribution
     };
     let mut i: Int = 0;
     while i < rows.len() {
-        let r = &rows[i];
-        let n = r.n;
+        let glyph = rows[i].get_text("cve_lifecycle")
+            .map_err(|e| AuditError.QueryFailed(f"cve_lifecycle: {e}"))?;
+        let n = rows[i].get_int("n")
+            .map_err(|e| AuditError.QueryFailed(f"n: {e}"))?;
         dist.total = dist.total + n;
-        match r.cve_lifecycle.as_str() {
+        match glyph.as_str() {
             // Theorem variants are written as "Theorem(<version>)".
             s if s.starts_with("Theorem") => dist.theorem        = dist.theorem + n,
             "Definition"                  => dist.definition     = dist.definition + n,
@@ -105,12 +105,6 @@ pub async fn lifecycle_distribution_for_corpus() -> Result<LifecycleDistribution
     }
     Ok(dist)
 }
-
-@derive(FromRow)
-type LifecycleRow is {
-    cve_lifecycle: Text,
-    n: Int,
-};
 
 // =============================================================================
 // Poset violations (AP-009 transitive)
@@ -134,52 +128,55 @@ public type PosetViolation is {
 ///
 /// This is the registry-side detector for AP-021 (transitive
 /// Lifecycle regression) and AP-024 (Lifecycle regression via
-/// transitive deps). Per-publish checks at Phase 5b only see direct
-/// dependencies; the corpus-wide observatory catches transitive cases.
-pub async fn detect_poset_violations(max_depth: Int) -> Result<List<PosetViolation>, AuditError>
-    using [Database]
-{
-    let rows = sql#"""
-        WITH RECURSIVE dep_walk AS (
-            SELECT
-                p.id || '@' || v.version AS source_cog,
-                v.cve_lifecycle           AS source_lifecycle,
-                d.dep_id                   AS target_cog_name,
-                1::INTEGER                 AS depth
-            FROM versions v
-            JOIN packages p ON p.id = v.package_id
-            CROSS JOIN LATERAL (
-                SELECT key AS dep_id FROM jsonb_object_keys(v.dependencies)
-            ) AS d
-            WHERE NOT v.yanked
-          UNION ALL
-            SELECT
-                w.source_cog,
-                w.source_lifecycle,
-                d2.dep_id,
-                w.depth + 1
-            FROM dep_walk w
-            JOIN packages p2 ON p2.id = split_part(w.target_cog_name, '@', 1)
-            JOIN versions v2 ON v2.package_id = p2.id
-            CROSS JOIN LATERAL (
-                SELECT key AS dep_id FROM jsonb_object_keys(v2.dependencies)
-            ) AS d2
-            WHERE w.depth < ${max_depth}
-              AND NOT v2.yanked
-        )
-        SELECT
-            dw.source_cog,
-            dw.source_lifecycle,
-            dw.target_cog_name AS target_cog,
-            v3.cve_lifecycle    AS target_lifecycle,
-            dw.depth
-        FROM dep_walk dw
-        JOIN packages p3 ON p3.id = split_part(dw.target_cog_name, '@', 1)
-        JOIN versions v3 ON v3.package_id = p3.id
-        WHERE NOT v3.yanked
-          AND lifecycle_rank(dw.source_lifecycle) > lifecycle_rank(v3.cve_lifecycle)
-        ORDER BY dw.depth, dw.source_cog
-    """.fetch_all().await
+/// transitive deps).
+public async fn detect_poset_violations(
+    pool: &AsyncPgPool,
+    max_depth: Int,
+) -> Result<List<PosetViolation>, AuditError> {
+    let conn = pool.acquire().await
+        .map_err(|e| AuditError.QueryFailed(f"acquire: {e}"))?;
+    let rows = conn.query(
+        """WITH RECURSIVE dep_walk AS (
+              SELECT
+                  p.id || '@' || v.version AS source_cog,
+                  v.cve_lifecycle           AS source_lifecycle,
+                  d.dep_id                   AS target_cog_name,
+                  1::INTEGER                 AS depth
+              FROM versions v
+              JOIN packages p ON p.id = v.package_id
+              CROSS JOIN LATERAL (
+                  SELECT key AS dep_id FROM jsonb_object_keys(v.dependencies)
+              ) AS d
+              WHERE NOT v.yanked
+            UNION ALL
+              SELECT
+                  w.source_cog,
+                  w.source_lifecycle,
+                  d2.dep_id,
+                  w.depth + 1
+              FROM dep_walk w
+              JOIN packages p2 ON p2.id = split_part(w.target_cog_name, '@', 1)
+              JOIN versions v2 ON v2.package_id = p2.id
+              CROSS JOIN LATERAL (
+                  SELECT key AS dep_id FROM jsonb_object_keys(v2.dependencies)
+              ) AS d2
+              WHERE w.depth < $1
+                AND NOT v2.yanked
+          )
+          SELECT
+              dw.source_cog,
+              dw.source_lifecycle,
+              dw.target_cog_name AS target_cog,
+              v3.cve_lifecycle    AS target_lifecycle,
+              dw.depth
+          FROM dep_walk dw
+          JOIN packages p3 ON p3.id = split_part(dw.target_cog_name, '@', 1)
+          JOIN versions v3 ON v3.package_id = p3.id
+          WHERE NOT v3.yanked
+            AND lifecycle_rank(dw.source_lifecycle) > lifecycle_rank(v3.cve_lifecycle)
+          ORDER BY dw.depth, dw.source_cog""",
+        [tv_int(max_depth)],
+    ).await
         .map_err(|e| AuditError.QueryFailed(f"{e}"))?;
 
     let mut out: List<PosetViolation> = List.with_capacity(rows.len());
@@ -187,22 +184,18 @@ pub async fn detect_poset_violations(max_depth: Int) -> Result<List<PosetViolati
     while i < rows.len() {
         let r = &rows[i];
         out.push(PosetViolation {
-            high_rank_cog: r.source_cog.clone(),
-            high_rank:     r.source_lifecycle.clone(),
-            low_rank_cog:  r.target_cog.clone(),
-            low_rank:      r.target_lifecycle.clone(),
-            depth:         r.depth,
+            high_rank_cog: r.get_text("source_cog")
+                .map_err(|e| AuditError.QueryFailed(f"source_cog: {e}"))?,
+            high_rank:     r.get_text("source_lifecycle")
+                .map_err(|e| AuditError.QueryFailed(f"source_lifecycle: {e}"))?,
+            low_rank_cog:  r.get_text("target_cog")
+                .map_err(|e| AuditError.QueryFailed(f"target_cog: {e}"))?,
+            low_rank:      r.get_text("target_lifecycle")
+                .map_err(|e| AuditError.QueryFailed(f"target_lifecycle: {e}"))?,
+            depth:         r.get_int("depth")
+                .map_err(|e| AuditError.QueryFailed(f"depth: {e}"))?,
         });
         i = i + 1;
     }
     Ok(out)
 }
-
-@derive(FromRow)
-type PosetRow is {
-    source_cog: Text,
-    source_lifecycle: Text,
-    target_cog: Text,
-    target_lifecycle: Text,
-    depth: Int,
-};

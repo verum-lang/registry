@@ -32,6 +32,7 @@
 module verum_registry.http.handlers.sigstore;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
 mount net.weft.{WeftRequest, Response, StatusCode};
@@ -50,7 +51,7 @@ const BUNDLE_CONTENT_TYPE: Text = SIGSTORE_BUNDLE_MEDIA_TYPE;
 
 /// GET /api/v3/packages/:scope/:name/:version/bundle
 pub async fn get_bundle(req: WeftRequest) -> Response
-    using [SigstoreService, VersionRepository, Database, Cache, Logger]
+    using [SigstoreService, VersionRepository, Cache, Logger]
 {
     let scope_text = req.path_param("scope").unwrap_or_else(|| "".to_text());
     let name_text  = req.path_param("name").unwrap_or_else(|| "".to_text());
@@ -59,27 +60,31 @@ pub async fn get_bundle(req: WeftRequest) -> Response
                       else { f"{scope_text}/{name_text}" };
     let pkg_id: PackageScope = match pkg_id_text.try_into() {
         Ok(s)  => s,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid package scope".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid package scope".to_text()
         ).status(StatusCode.BadRequest),
     };
     let semver: base.semver.SemVer = match base.semver.parse_semver(&version_text) {
         Ok(v)  => v,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid SemVer".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid SemVer".to_text()
         ).status(StatusCode.BadRequest),
     };
 
     let v_row = match lookup_version(&VersionRepository, &pkg_id, &semver).await {
         Ok(Some(r)) => r,
-        Ok(None) => return render_error("not_found".to_text(),
-            f"version {pkg_id}@{version_text}", None, None,
+        Ok(None) => return render_simple_error(
+            "not_found".to_text(),
+            f"version {pkg_id}@{version_text}"
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Warn, &f"get_bundle: {e}");
-            return render_error("internal_error".to_text(),
-                "version lookup failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError);
+            return render_simple_error(
+            "internal_error".to_text(),
+            "version lookup failed".to_text()
+        ).status(StatusCode.InternalServerError);
         }
     };
 
@@ -88,14 +93,16 @@ pub async fn get_bundle(req: WeftRequest) -> Response
         Ok(rec) => Response.text(rec.bundle_json)
             .header("content-type", &BUNDLE_CONTENT_TYPE)
             .header("cache-control", "public, max-age=31536000, immutable"),
-        Err(SigstoreError.NoBundle(_)) => render_error("not_found".to_text(),
-            "no Sigstore bundle on file for this version".to_text(), None, None,
+        Err(SigstoreError.NoBundle(_)) => render_simple_error(
+            "not_found".to_text(),
+            "no Sigstore bundle on file for this version".to_text()
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Warn, &f"fetch_bundle: {e}");
-            render_error("internal_error".to_text(),
-                "bundle fetch failed".to_text(), None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            "bundle fetch failed".to_text()
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -117,20 +124,23 @@ pub async fn verify_bundle(req: WeftRequest) -> Response
 {
     let body: VerifyBody = match req.json().await {
         Ok(b)  => b,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid JSON body".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid JSON body".to_text()
         ).status(StatusCode.BadRequest),
     };
     let bundle = match security.sigstore.types.parse_sigstore_bundle(&body.bundle) {
         Ok(b)  => b,
-        Err(e) => return render_error("validation_failed".to_text(),
-            f"invalid bundle: {e}", None, None,
+        Err(e) => return render_simple_error(
+            "validation_failed".to_text(),
+            f"invalid bundle: {e}"
         ).status(StatusCode.BadRequest),
     };
     let expected = match parse_expected(&body.expected) {
         Ok(e)  => e,
-        Err(m) => return render_error("validation_failed".to_text(),
-            m, None, None,
+        Err(m) => return render_simple_error(
+            "validation_failed".to_text(),
+            m
         ).status(StatusCode.BadRequest),
     };
     match SigstoreService.verify_publish_bundle(&HttpClient, &bundle, &expected).await {

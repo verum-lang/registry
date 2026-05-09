@@ -42,12 +42,13 @@
 module verum_registry.services.webauthn_service;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
 mount collections.{List, Set};
 mount base.ulid.Ulid;
 mount time.rfc3339.{Rfc3339Time, now_utc};
 mount security.util.rng.{secure_random_bytes};
-mount encoding.base64.{encode_url_no_pad as b64url_encode};
+mount encoding.base64.{encode_url_no_pad as b64url_encode, decode_url_no_pad as b64url_decode};
 mount encoding.json.{JsonValue, encode as json_encode, decode as json_decode};
 mount cache.adapters.redis.RedisCacheAdapter as RedisCache;
 
@@ -391,7 +392,7 @@ fn parse_challenge_state(raw: &Text, expected_ceremony: &str) -> Maybe<Challenge
     let challenge_b64 = obj.get("challenge_b64").and_then(|x| x.as_string())?;
     let ceremony = obj.get("ceremony").and_then(|x| x.as_string())?;
     if ceremony != expected_ceremony { return None; }
-    let challenge_bytes = encoding.base64.decode_url_no_pad(&challenge_b64).ok()?;
+    let challenge_bytes = b64url_decode(&challenge_b64).ok()?;
     Some(ChallengeState { user_id: UserId(user_id), challenge_bytes })
 }
 

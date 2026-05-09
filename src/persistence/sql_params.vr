@@ -1,0 +1,170 @@
+// =============================================================================
+// verum_registry/persistence/sql_params.vr — typed SQL parameter helpers
+// =============================================================================
+// Spec: §6.1 (typed-params discipline)
+//
+// Central builder for `List<Maybe<TypedValue>>` — the single accepted
+// parameter type on AsyncPgPoolGuard.{query, query_one, query_one_opt,
+// execute_with_params}.
+//
+// Why this module exists:
+//   * All SQL call sites use the same typed-wire API.
+//   * Encoding decisions (timestamp as UTC text, semver as text, arrays
+//     as Postgres literal {…}) live in one place.
+//   * Named-import limitation for free functions is encapsulated here;
+//     callers `mount persistence.sql_params.*` and get everything.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v1.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "typed SQL parameter builder — PgParam / PgParams helpers",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.persistence.sql_params;
+
+mount core.*;
+mount base.{Maybe, Some, None, Text, Bool, Int, Float};
+mount collections.List;
+mount base.semver.*;                // glob — brings format_semver into scope
+mount time.rfc3339.*;               // glob — brings format_utc, Rfc3339Time
+mount database.postgres.wire.typed.*;  // glob — brings TypedValue, TvNull, TvText, TvInt8, TvBool, TvBytea
+
+// =============================================================================
+// Core types
+// =============================================================================
+
+/// One bound SQL parameter: NULL or a typed wire value.
+public type PgParam is Maybe<TypedValue>;
+
+/// Ordered list of bound parameters for a prepared statement.
+public type PgParams is List<PgParam>;
+
+// =============================================================================
+// Constructors — owned Text
+// =============================================================================
+
+/// Bind an owned `Text` value.
+public fn tv(s: Text) -> PgParam { Some(TvText(s)) }
+
+/// Bind a cloned `&Text` value.
+public fn tv_ref(s: &Text) -> PgParam { Some(TvText(s.clone())) }
+
+/// Bind an `Option<Text>` — produces NULL when None.
+public fn tv_text_opt(opt: &Maybe<Text>) -> PgParam {
+    match opt {
+        Some(t) => Some(TvText(t.clone())),
+        None    => None,
+    }
+}
+
+// =============================================================================
+// Constructors — Int / Bool / Float
+// =============================================================================
+
+/// Bind an `Int` as int8 (i64 wire type).
+public fn tv_int(i: Int) -> PgParam { Some(TvInt8(i)) }
+
+/// Bind an `Option<Int>` as int8; NULL when None.
+public fn tv_int_opt(opt: &Maybe<Int>) -> PgParam {
+    match opt {
+        Some(n) => Some(TvInt8(*n)),
+        None    => None,
+    }
+}
+
+/// Bind a `Bool`.
+public fn tv_bool(b: Bool) -> PgParam { Some(TvBool(b)) }
+
+/// Bind a `Float` as float8 (f64 wire type).
+public fn tv_float(f: Float) -> PgParam { Some(TvFloat8(f)) }
+
+/// Explicit NULL — use when the column is nullable and the value is absent.
+public fn tv_null() -> PgParam { None }
+
+// =============================================================================
+// Constructors — bytes
+// =============================================================================
+
+/// Bind a `List<Byte>` as bytea.
+public fn tv_bytes(b: &List<Byte>) -> PgParam { Some(TvBytea(b.clone())) }
+
+/// Bind an `Option<List<Byte>>` as bytea; NULL when None.
+public fn tv_bytes_opt(opt: &Maybe<List<Byte>>) -> PgParam {
+    match opt {
+        Some(b) => Some(TvBytea(b.clone())),
+        None    => None,
+    }
+}
+
+// =============================================================================
+// Constructors — semantic types
+// =============================================================================
+
+/// Bind a `SemVer` as its canonical text representation (`1.2.3-pre+build`).
+public fn tv_semver(v: &SemVer) -> PgParam {
+    Some(TvText(format_semver(v)))
+}
+
+/// Bind an `Option<SemVer>`.
+public fn tv_semver_opt(opt: &Maybe<SemVer>) -> PgParam {
+    match opt {
+        Some(v) => tv_semver(v),
+        None    => None,
+    }
+}
+
+/// Bind a `Rfc3339Time` as ISO 8601 UTC text (`YYYY-MM-DDTHH:MM:SS.ffffffZ`).
+/// Postgres accepts this for TIMESTAMP / TIMESTAMPTZ columns.
+public fn tv_timestamp(ts: &Rfc3339Time) -> PgParam {
+    Some(TvText(format_utc(ts.unix_seconds, ts.nanos)))
+}
+
+/// Bind an `Option<Rfc3339Time>`; NULL when None.
+public fn tv_timestamp_opt(opt: &Maybe<Rfc3339Time>) -> PgParam {
+    match opt {
+        Some(ts) => tv_timestamp(ts),
+        None     => None,
+    }
+}
+
+// =============================================================================
+// Constructors — Postgres text-array literal
+// =============================================================================
+
+/// Encode `List<Text>` as a Postgres array literal: `{elem1,elem2,...}`.
+/// Postgres parses this literal for TEXT[] / VARCHAR[] columns.
+///
+/// Registry keywords are identifier-style values (no special characters);
+/// elements are emitted unquoted. For elements containing `{`, `}`, `"`,
+/// `\`, `,` or whitespace the caller must pre-escape or use a JSON cast
+/// instead.
+public fn tv_text_array(arr: &List<Text>) -> PgParam {
+    let mut out: Text = "{".to_text();
+    let mut i: Int = 0;
+    while i < arr.len() {
+        if i > 0 { out = f"{out},"; }
+        out = f"{out}{arr[i]}";
+        i = i + 1;
+    }
+    let close = "}";
+    Some(TvText(f"{out}{close}"))
+}
+
+// =============================================================================
+// Empty params
+// =============================================================================
+
+/// Empty parameter list — for queries with no bound parameters.
+public fn no_params() -> PgParams { List.new() }

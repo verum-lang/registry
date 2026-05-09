@@ -55,8 +55,10 @@ module verum_registry.persistence;
 
 mount core.*;
 mount base.{Result, Ok, Err, Text};
+mount collections.List;
 mount database.postgres.{AsyncPgPool, AsyncPoolConfig};
-mount database.postgres.async_pool.{connect as pg_async_connect};
+mount database.postgres.async_pool.*;
+mount database.postgres.config.PgConfig;
 
 mount verum_registry.config.{
     PostgresConfig, S3Config, RedisConfig, MeilisearchConfig,
@@ -94,10 +96,19 @@ public mount verum_registry.persistence.object_store.{
     ObjectStore, put_source_archive, get_source_archive,
     delete_source_archive,
 };
-public mount verum_registry.persistence.passkey_repository.{PasskeyRepository};
-public mount verum_registry.persistence.tuf_metadata_repository.{TufMetadataRepository};
-public mount verum_registry.persistence.sigstore_bundle_repository.{SigstoreBundleRepository};
-public mount verum_registry.persistence.cog_audit_repository.{CogAuditRepository};
+public mount verum_registry.persistence.passkey_repository.{
+    PasskeyRepository, passkey_repository_new,
+};
+public mount verum_registry.persistence.tuf_metadata_repository.{
+    TufMetadataRepository, tuf_metadata_repository_new,
+};
+public mount verum_registry.persistence.sigstore_bundle_repository.{
+    SigstoreBundleRepository, sigstore_bundle_repository_new,
+};
+public mount verum_registry.persistence.cog_audit_repository.{
+    CogAuditRepository, cog_audit_repository_new,
+};
+public mount verum_registry.persistence.sql_params.{PgParam, PgParams};
 
 // =============================================================================
 // Connection openers
@@ -105,14 +116,73 @@ public mount verum_registry.persistence.cog_audit_repository.{CogAuditRepository
 
 public async fn open_postgres(c: &PostgresConfig) -> Result<AsyncPgPool, Text> {
     let pool_cfg = AsyncPoolConfig {
-        min_size: c.min_connections as UInt32,
-        max_size: c.max_connections as UInt32,
+        min_size: c.min_connections,
+        max_size: c.max_connections,
         mailbox_capacity: 64,
-        prepare_on_open: None,
+        prepare_on_open: List.new(),
     };
-    pg_async_connect(&c.url, pool_cfg)
+    let pg_config = pg_config_from_url(&c.url)
+        .map_err(|e| f"postgres url: {e}")?;
+    AsyncPgPool.launch(pg_config, pool_cfg)
         .await
         .map_err(|e| f"postgres: {e}")
+}
+
+/// Parse a Postgres URL `postgres://user:password@host:port/database`
+/// into a `PgConfig`. All components are required.
+///
+/// URL format: `postgres://USER:PASSWORD@HOST:PORT/DATABASE`
+fn pg_config_from_url(url: &Text) -> Result<PgConfig, Text> {
+    // Strip scheme prefix.  Both "postgres://" and "postgresql://" are accepted.
+    let after_scheme: List<Text> = url.split("://");
+    if after_scheme.len() < 2 {
+        return Err("URL must contain ://".to_text());
+    }
+    let rest = after_scheme[1].clone();
+    // Split on '@' to isolate userinfo from host[:port]/database.
+    let at_parts: List<Text> = rest.split("@");
+    if at_parts.len() < 2 {
+        return Err("missing @ in postgres URL".to_text());
+    }
+    let userinfo = at_parts[0].clone();
+    let hostdb   = at_parts[1].clone();
+    // userinfo → user:password
+    let up_parts: List<Text> = userinfo.split(":");
+    if up_parts.len() < 2 {
+        return Err("missing : in userinfo".to_text());
+    }
+    let user     = up_parts[0].clone();
+    let password = up_parts[1].clone();
+    // hostdb → host:port/database or host/database
+    let slash_parts: List<Text> = hostdb.split("/");
+    if slash_parts.len() < 2 {
+        return Err("missing / after host in postgres URL".to_text());
+    }
+    let hostport = slash_parts[0].clone();
+    let database = slash_parts[1].clone();
+    // Parse optional port.
+    let hp_parts: List<Text> = hostport.split(":");
+    let (host, port) = if hp_parts.len() >= 2 {
+        let port_n = parse_port_or_default(&hp_parts[1], 5432);
+        (hp_parts[0].clone(), port_n)
+    } else {
+        (hostport, 5432)
+    };
+    Ok(PgConfig.new(host, port, user, password, database)
+        .with_application_name("verum-registry".to_text()))
+}
+
+fn parse_port_or_default(s: &Text, default: Int) -> Int {
+    let bytes = s.as_bytes();
+    let mut n: Int = 0;
+    let mut i: Int = 0;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        if ch < b'0' || ch > b'9' { return default; }
+        n = n * 10 + (ch - b'0') as Int;
+        i = i + 1;
+    }
+    if n == 0 { default } else { n }
 }
 
 public async fn open_object_store(c: &S3Config) -> Result<ObjectStore, Text> {

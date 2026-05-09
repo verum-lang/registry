@@ -38,16 +38,19 @@
 module verum_registry.services.sigstore_service;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.List;
 mount sync.rwlock.RwLock;
-mount time.rfc3339.now_utc;
-mount encoding.json.{encode as json_encode};
+mount time.rfc3339.*;
+mount encoding.json.{JsonValue, encode as json_encode, json_string, json_object, json_array};
 mount encoding.hex.{encode as hex_encode};
 mount encoding.jcs.{canonicalize as jcs_canonicalize};
 mount security.hash.sha256.{digest as sha256_digest};
 mount security.sigstore.types.{
     SigstoreBundle, SIGSTORE_BUNDLE_MEDIA_TYPE,
+    DsseEnvelope, dsse_envelope_to_json,
+    ProvenanceTlogEntry, ProvenanceInclusionProof,
 };
 mount security.sigstore.verify.{
     SigstoreTrustRoot, ExpectedIdentity, IdentityMatcher,
@@ -190,29 +193,51 @@ implement SigstoreService {
 // for the envelope; we hand-roll the bundle wrapper because its
 // shape depends on which provenance fields are present.
 
-fn sigstore_bundle_to_json(b: &SigstoreBundle) -> encoding.json.JsonValue {
+fn sigstore_bundle_to_json(b: &SigstoreBundle) -> JsonValue {
     let mut obj: Map<Text, JsonValue> = Map.new();
     obj.insert("mediaType".to_text(),
-        encoding.json.json_string(SIGSTORE_BUNDLE_MEDIA_TYPE.to_text()));
-    let mut chain_arr: List<encoding.json.JsonValue> = List.new();
+        json_string(SIGSTORE_BUNDLE_MEDIA_TYPE.to_text()));
+    let mut chain_arr: List<JsonValue> = List.new();
     let mut i: Int = 0;
     while i < b.cert_chain_pem.len() {
-        chain_arr.push(encoding.json.json_string(b.cert_chain_pem[i].clone()));
+        chain_arr.push(json_string(b.cert_chain_pem[i].clone()));
         i = i + 1;
     }
-    obj.insert("certificateChain".to_text(), encoding.json.json_array(chain_arr));
-    obj.insert("dsseEnvelope".to_text(), dsse_envelope_json(&b.envelope));
-    let mut tlog_arr: List<encoding.json.JsonValue> = List.new();
+    obj.insert("certificateChain".to_text(), json_array(chain_arr));
+    obj.insert("dsseEnvelope".to_text(), dsse_envelope_to_json(&b.envelope));
+    let mut tlog_arr: List<JsonValue> = List.new();
     let mut j: Int = 0;
     while j < b.tlog_entries.len() {
-        // Provenance TlogEntry → JSON via core.security.provenance helpers.
-        tlog_arr.push(security.provenance.tlog_entry_to_json(&b.tlog_entries[j]));
+        tlog_arr.push(tlog_entry_to_json_local(&b.tlog_entries[j]));
         j = j + 1;
     }
-    obj.insert("tlogEntries".to_text(), encoding.json.json_array(tlog_arr));
-    encoding.json.json_object(obj)
+    obj.insert("tlogEntries".to_text(), json_array(tlog_arr));
+    json_object(obj)
 }
 
-fn dsse_envelope_json(env: &security.provenance.DsseEnvelope) -> encoding.json.JsonValue {
-    security.provenance.dsse_envelope_to_json(env)
+fn tlog_entry_to_json_local(e: &ProvenanceTlogEntry) -> JsonValue {
+    let mut obj: Map<Text, JsonValue> = Map.new();
+    obj.insert("logIndex".to_text(), json_string(f"{e.log_index}"));
+    let mut id_obj: Map<Text, JsonValue> = Map.new();
+    id_obj.insert("keyId".to_text(), json_string(e.log_id_hex.clone()));
+    obj.insert("logId".to_text(), json_object(id_obj));
+    obj.insert("canonicalizedBody".to_text(), json_string(e.canonicalized_body_b64.clone()));
+    obj.insert("integratedTime".to_text(), json_string(format_utc(e.integrated_time.unix_seconds, e.integrated_time.nanos)));
+    if let Some(proof) = &e.inclusion_proof {
+        let mut p_obj: Map<Text, JsonValue> = Map.new();
+        p_obj.insert("treeSize".to_text(), json_string(f"{proof.tree_size}"));
+        p_obj.insert("logIndex".to_text(), json_string(f"{proof.log_index}"));
+        let mut hashes_arr: List<JsonValue> = List.new();
+        let mut k: Int = 0;
+        while k < proof.hashes_hex.len() {
+            hashes_arr.push(json_string(proof.hashes_hex[k].clone()));
+            k = k + 1;
+        }
+        p_obj.insert("hashes".to_text(), json_array(hashes_arr));
+        let mut c_obj: Map<Text, JsonValue> = Map.new();
+        c_obj.insert("envelope".to_text(), json_string(proof.checkpoint_sig_hex.clone()));
+        p_obj.insert("checkpoint".to_text(), json_object(c_obj));
+        obj.insert("inclusionProof".to_text(), json_object(p_obj));
+    }
+    json_object(obj)
 }

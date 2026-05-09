@@ -24,6 +24,7 @@
 module verum_registry.http.handlers.packages;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode, refined_routes};
 mount base.semver.parse as parse_semver;
@@ -35,7 +36,7 @@ mount verum_registry.persistence.{
     get_source_archive,
 };
 mount verum_registry.domain.{PackageScope, SemVer};
-mount verum_registry.http.error_response.{render_error};
+mount verum_registry.http.error_response.{render_error, render_simple_error};
 
 // =============================================================================
 // GET /:scope/:name — package metadata
@@ -50,13 +51,16 @@ public async fn get_package(req: WeftRequest) -> Response
     };
     match repo_lookup_package(&PackageRepository, &id).await {
         Ok(Some(pkg)) => Response.json(&pkg),
-        Ok(None)      => render_error(
+        Ok(None)      => render_simple_error(
             "package_not_found".to_text(),
-            f"package {id} not found".to_text(), None, None,
+            f"package {id} not found".to_text()
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Error, f"lookup_package: {e}");
-            render_error("internal_error".to_text(), "lookup failed".to_text(), None, None)
+            render_simple_error(
+            "internal_error".to_text(),
+            "lookup failed".to_text()
+        )
                 .status(StatusCode.InternalServerError)
         }
     }
@@ -76,7 +80,10 @@ public async fn list_versions(req: WeftRequest) -> Response
         Ok(vs) => Response.json(&vs),
         Err(e) => {
             Logger.log(Level.Error, f"list_versions: {e}");
-            render_error("internal_error".to_text(), "list failed".to_text(), None, None)
+            render_simple_error(
+            "internal_error".to_text(),
+            "list failed".to_text()
+        )
                 .status(StatusCode.InternalServerError)
         }
     }
@@ -92,13 +99,16 @@ public async fn get_version(req: WeftRequest) -> Response
     let (id, version) = match scope_name_version_param(&req) { Ok(t) => t, Err(r) => return r };
     match lookup_version(&VersionRepository, &id, &version).await {
         Ok(Some(v)) => Response.json(&v),
-        Ok(None)    => render_error(
+        Ok(None)    => render_simple_error(
             "version_not_found".to_text(),
-            f"version {version} not found".to_text(), None, None,
+            f"version {version} not found".to_text()
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Error, f"lookup_version: {e}");
-            render_error("internal_error".to_text(), "lookup failed".to_text(), None, None)
+            render_simple_error(
+            "internal_error".to_text(),
+            "lookup failed".to_text()
+        )
                 .status(StatusCode.InternalServerError)
         }
     }
@@ -122,7 +132,10 @@ public async fn get_source(req: WeftRequest) -> Response
             "".to_text()
         });
     if url.is_empty() {
-        render_error("internal_error".to_text(), "source unavailable".to_text(), None, None)
+        render_simple_error(
+            "internal_error".to_text(),
+            "source unavailable".to_text()
+        )
             .status(StatusCode.InternalServerError)
     } else {
         Response.new()
@@ -144,10 +157,10 @@ public async fn get_manifest(req: WeftRequest) -> Response
     // and let the client re-extract.  (Optimisation: cache extracted
     // manifests in Redis under `manifest:<id>:<version>`.)
     let _ = (id, version);
-    render_error(
-        "not_implemented".to_text(),
-        "manifest extraction served via /source".to_text(), None, None,
-    ).status(StatusCode.NotImplemented)
+    render_simple_error(
+            "not_implemented".to_text(),
+            "manifest extraction served via /source".to_text()
+        ).status(StatusCode.NotImplemented)
 }
 
 // =============================================================================
@@ -162,18 +175,21 @@ public async fn get_provenance(req: WeftRequest) -> Response
         Ok(Some(v)) => match &v.provenance {
             Some(envelope) => Response.text(envelope)
                 .header("Content-Type", "application/vnd.dsse.envelope+json"),
-            None => render_error(
-                "provenance_not_available".to_text(),
-                "this version has no provenance attestation".to_text(), None, None,
-            ).status(StatusCode.NotFound),
+            None => render_simple_error(
+            "provenance_not_available".to_text(),
+            "this version has no provenance attestation".to_text()
+        ).status(StatusCode.NotFound),
         },
-        Ok(None) => render_error(
+        Ok(None) => render_simple_error(
             "version_not_found".to_text(),
-            f"version {version} not found".to_text(), None, None,
+            f"version {version} not found".to_text()
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Error, f"lookup_version: {e}");
-            render_error("internal_error".to_text(), "lookup failed".to_text(), None, None)
+            render_simple_error(
+            "internal_error".to_text(),
+            "lookup failed".to_text()
+        )
                 .status(StatusCode.InternalServerError)
         }
     }
@@ -192,10 +208,9 @@ fn scope_name_param(req: &WeftRequest) -> Result<PackageScope, Response> {
         name.clone()
     };
     PackageScope::try_from(combined)
-        .map_err(|e| render_error(
+        .map_err(|e| render_simple_error(
             "validation_failed".to_text(),
-            f"invalid package scope: {e}".to_text(),
-            None, None,
+            f"invalid package scope: {e}".to_text()
         ).status(StatusCode.BadRequest))
 }
 
@@ -204,18 +219,16 @@ fn scope_name_version_param(req: &WeftRequest) -> Result<(PackageScope, SemVer),
     let version_text = req.path_param("version")
         .ok_or_else(|| missing_param("version"))?;
     let version = parse_semver(&version_text)
-        .map_err(|e| render_error(
+        .map_err(|e| render_simple_error(
             "validation_failed".to_text(),
-            f"invalid version: {e}".to_text(),
-            None, None,
+            f"invalid version: {e}".to_text()
         ).status(StatusCode.BadRequest))?;
     Ok((id, version))
 }
 
 fn missing_param(name: &str) -> Response {
-    render_error(
-        "validation_failed".to_text(),
-        f"missing path parameter: {name}".to_text(),
-        None, None,
-    ).status(StatusCode.BadRequest)
+    render_simple_error(
+            "validation_failed".to_text(),
+            f"missing path parameter: {name}".to_text()
+        ).status(StatusCode.BadRequest)
 }

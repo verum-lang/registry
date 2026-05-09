@@ -42,6 +42,7 @@
 module verum_registry.audit.self_reference;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool};
 mount collections.List;
 mount time.rfc3339.now_utc;

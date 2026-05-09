@@ -22,10 +22,11 @@
 module verum_registry.http.handlers.search;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount net.weft.{WeftRequest, Response, StatusCode, Json};
 mount verum_registry.services.{SearchService, SearchQuery, SortMode};
-mount verum_registry.http.error_response.{render_error};
+mount verum_registry.http.error_response.{render_error, render_simple_error};
 
 // GET /api/v2/search?q=...
 public async fn handle_search(req: WeftRequest) -> Response
@@ -49,7 +50,10 @@ public async fn handle_search(req: WeftRequest) -> Response
         Ok(results) => Response.json(&results),
         Err(e) => {
             Logger.log(Level.Warn, f"search error: {e:?}");
-            render_error("invalid_query".to_text(), "search failed".to_text(), None, None)
+            render_simple_error(
+            "invalid_query".to_text(),
+            "search failed".to_text()
+        )
                 .status(StatusCode.BadRequest)
         }
     }
@@ -58,9 +62,8 @@ public async fn handle_search(req: WeftRequest) -> Response
 // POST /api/v2/resolve — dependency resolver (stubbed pending G5/resolve).
 public async fn handle_resolve(req: WeftRequest) -> Response {
     let _ = req;
-    render_error(
-        "not_implemented".to_text(),
-        "dependency resolver pending Stdlib-G5/resolve (pubgrub)".to_text(),
-        None, None,
-    ).status(StatusCode.NotImplemented)
+    render_simple_error(
+            "not_implemented".to_text(),
+            "dependency resolver pending Stdlib-G5/resolve (pubgrub)".to_text()
+        ).status(StatusCode.NotImplemented)
 }

@@ -32,8 +32,11 @@
 module verum_registry.services.auth_service;
 
 mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
+mount context.standard.{Logger, Metrics, Cache};
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool};
+mount collections.List;
 mount net.weft.WeftRequest;
+mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
 mount security.password_hash.{
     PasswordHasher,
@@ -42,7 +45,8 @@ mount security.password_hash.{
 // `core.security.oidc` is forthcoming (G6); when it lands, this import
 // becomes the canonical path:
 //   mount security.oidc.{OidcProviderRegistry, OidcClaims, validate_jwt};
-mount time.rfc3339.now_utc;
+mount time.rfc3339.*;
+mount verum_registry.persistence.sql_params.*;
 
 mount verum_registry.config.OidcConfig;
 mount verum_registry.domain.{
@@ -78,18 +82,19 @@ public type AuthService is {
     /// t=2, p=1) is the registry default — see
     /// `core.security.kdf.argon2.Argon2idProfile.Sensitive`.
     pwd_hasher:  Argon2idHasher,
+    pool: AsyncPgPool,
 };
 
 implement AuthService {
-    pub async fn from_config(config: &OidcConfig) -> Result<AuthService, Text> {
+    public async fn from_config(config: &OidcConfig, pool: AsyncPgPool) -> Result<AuthService, Text> {
         let hasher = Argon2idHasher.from_profile(Argon2idProfile.Sensitive)
             .map_err(|e| f"argon2id init failed: {e}")?;
-        Ok(AuthService { oidc_config: config.clone(), pwd_hasher: hasher })
+        Ok(AuthService { oidc_config: config.clone(), pwd_hasher: hasher, pool })
     }
 
     /// Hash a fresh API-token secret OR password.  Used by the
     /// token-creation handler + the legacy registration path.
-    pub fn hash_secret(&self, secret: &Text) -> Result<Text, Text> {
+    public fn hash_secret(&self, secret: &Text) -> Result<Text, Text> {
         self.pwd_hasher.hash(secret.as_bytes())
             .map_err(|e| f"argon2id hash: {e}")
     }
@@ -98,11 +103,11 @@ implement AuthService {
     /// success.  Logs but does NOT surface the specific failure mode
     /// to the caller (security: avoid credential-stuffing oracles);
     /// distinct error variants are kept internally for observability.
-    pub async fn authenticate(
+    public async fn authenticate(
         &self,
         req: &WeftRequest,
     ) -> Result<AuthenticatedUser, AuthError>
-        using [Database, Cache, Logger, Metrics]
+        using [Cache, Logger, Metrics]
     {
         // Path 1: OIDC trusted publishing (preferred).
         if let Some(bearer) = bearer_token(req) {
@@ -129,7 +134,7 @@ implement AuthService {
         &self,
         _bearer_jwt: &Text,
     ) -> Result<AuthenticatedUser, AuthError>
-        using [Database, Cache]
+        using [Cache]
     {
         // When `core.security.oidc` lands, this validates the JWT
         // against the issuer's JWKS, extracts (issuer, subject), looks
@@ -144,16 +149,17 @@ implement AuthService {
         token_id: &Text,
         secret: &Text,
     ) -> Result<AuthenticatedUser, AuthError>
-        using [Database, Metrics]
+        using [Metrics]
     {
-        let row_opt = Database.query_one_opt(
-            sql#"""SELECT t.id, t.user_id, t.secret_hash, t.scopes,
+        let conn = self.pool.acquire().await.map_err(|_| InvalidApiToken)?;
+        let row_opt = conn.query_one_opt(
+            """SELECT t.id, t.user_id, t.secret_hash, t.scopes,
                         t.expires_at, t.revoked_at,
                         u.id AS uid, u.username, u.email, u.password_hash, u.created_at
                  FROM api_tokens t
                  INNER JOIN users u ON u.id = t.user_id
                  WHERE t.id = $1""",
-            (token_id,),
+            [tv_ref(token_id)],
         ).await.map_err(|_| InvalidApiToken)?;
 
         let row = match row_opt {
@@ -180,15 +186,16 @@ implement AuthService {
 
         // Expiry check.
         let expires_at = row.get_timestamp("expires_at").map_err(|_| InvalidApiToken)?;
-        if expires_at < now_utc() {
+        let now = now_utc();
+        if expires_at.unix_seconds < now.unix_seconds {
             Metrics.increment("auth.api_token_expired");
             return Err(ExpiredApiToken);
         }
 
         // Update last_used_at (best-effort; failures here don't block auth).
-        let _ = Database.execute(
-            sql#"""UPDATE api_tokens SET last_used_at = now() WHERE id = $1""",
-            (token_id,),
+        let _ = conn.execute_with_params(
+            """UPDATE api_tokens SET last_used_at = now() WHERE id = $1""",
+            [tv_ref(token_id)],
         ).await;
 
         // Decode user + scopes.

@@ -3,13 +3,7 @@
 // =============================================================================
 // Spec: §7.5 (audit surface) + §11 (anti-pattern roster + CVE bundle).
 //
-// Read-only repository over the `cog_audit_records` table.  Two
-// methods are exposed: `fetch_roster` returns the @arch_module +
-// AP-NNN findings rendered as an `AntiPatternRoster`, while
-// `fetch_cve_bundle` produces the OSV-aligned CVE bundle for a
-// given cog version.  Writes happen inside the publish flow via
-// the `audit` subsystem; this module is the dual read path
-// consumed by `http/handlers/audit.vr`.
+// Read-only repository over the `cog_audit_records` table.
 // =============================================================================
 
 @arch_module(
@@ -34,29 +28,36 @@ module verum_registry.persistence.cog_audit_repository;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
+mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
-mount database.postgres.PgError;
 
 mount verum_registry.domain.cog_audit_record.CogAuditRecord;
 mount verum_registry.audit.{AntiPatternRoster, AntiPatternFinding};
+mount verum_registry.persistence.sql_params.*;
 
-public type CogAuditRepository is {};
+public type CogAuditRepository is {
+    pool: AsyncPgPool,
+};
+
+public fn cog_audit_repository_new(pool: AsyncPgPool) -> CogAuditRepository {
+    CogAuditRepository { pool }
+}
 
 implement CogAuditRepository {
     public async fn fetch_roster(
         &self,
         cog_id: &Text,
-    ) -> Result<Maybe<AntiPatternRoster>, PgError>
-        using [Database]
+    ) -> Result<Maybe<AntiPatternRoster>, DbError>
     {
-        let row_opt = Database.query_one_opt(
-            sql#"""SELECT findings_json
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT findings_json
                   FROM cog_audit_records
                   WHERE cog_id = $1
                   ORDER BY recorded_at DESC
                   LIMIT 1""",
-            (cog_id,),
+            [tv_ref(cog_id)],
         ).await?;
         match row_opt {
             None => Ok(None),
@@ -75,16 +76,16 @@ implement CogAuditRepository {
     public async fn fetch_cve_bundle(
         &self,
         cog_id: &Text,
-    ) -> Result<Maybe<Text>, PgError>
-        using [Database]
+    ) -> Result<Maybe<Text>, DbError>
     {
-        let row_opt = Database.query_one_opt(
-            sql#"""SELECT cve_bundle_json
+        let conn = self.pool.acquire().await?;
+        let row_opt = conn.query_one_opt(
+            """SELECT cve_bundle_json
                   FROM cog_audit_records
                   WHERE cog_id = $1
                   ORDER BY recorded_at DESC
                   LIMIT 1""",
-            (cog_id,),
+            [tv_ref(cog_id)],
         ).await?;
         match row_opt {
             None      => Ok(None),

@@ -24,9 +24,7 @@ module verum_registry.persistence.advisory_repository;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
-mount base.semver_constraint.{
-    SemVerConstraint, parse as parse_constraint, format_constraint,
-};
+mount base.semver_constraint.*;
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
 mount database.postgres.row.Row;
@@ -35,6 +33,7 @@ mount verum_registry.domain.{
     SecurityAdvisory, AdvisoryId, PackageScope, Severity,
     SevLow, SevMedium, SevHigh, SevCritical,
 };
+mount verum_registry.persistence.sql_params.*;
 
 public type AdvisoryRepository is {
     pool: AsyncPgPool,
@@ -48,14 +47,14 @@ public async fn list_advisories_for_package(
     repo: &AdvisoryRepository,
     package_id: &PackageScope,
 ) -> Result<List<SecurityAdvisory>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let rows = conn.query(
-        sql#"""SELECT id, package_id, affected_versions, fixed_versions,
+        """SELECT id, package_id, affected_versions, fixed_versions,
                     severity, cve_ids, summary, details, disclosed_at
               FROM security_advisories
               WHERE package_id = $1
               ORDER BY disclosed_at DESC""",
-        (package_id,),
+        [tv_ref(package_id)],
     ).await?;
     let mut out: List<SecurityAdvisory> = List.new();
     let mut i: Int = 0;
@@ -70,12 +69,12 @@ public async fn lookup_advisory(
     repo: &AdvisoryRepository,
     id: &AdvisoryId,
 ) -> Result<Maybe<SecurityAdvisory>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"""SELECT id, package_id, affected_versions, fixed_versions,
+        """SELECT id, package_id, affected_versions, fixed_versions,
                     severity, cve_ids, summary, details, disclosed_at
               FROM security_advisories WHERE id = $1""",
-        (id,),
+        [tv_ref(id)],
     ).await?;
     match row_opt {
         Some(row) => Ok(Some(decode_advisory_row(&row)?)),
@@ -87,7 +86,7 @@ public async fn insert_advisory(
     repo: &AdvisoryRepository,
     advisory: &SecurityAdvisory,
 ) -> Result<(), DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let severity_text = match advisory.severity {
         SevLow      => "low".to_text(),
         SevMedium   => "medium".to_text(),
@@ -99,14 +98,22 @@ public async fn insert_advisory(
         Some(c) => Some(format_constraint(c)),
         None    => None,
     };
-    conn.execute(
-        sql#"""INSERT INTO security_advisories
+    conn.execute_with_params(
+        """INSERT INTO security_advisories
               (id, package_id, affected_versions, fixed_versions,
                severity, cve_ids, summary, details, disclosed_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
-        (&advisory.id, &advisory.package_id, &affected_text, &fixed_text,
-         &severity_text, &advisory.cve_ids, &advisory.summary,
-         &advisory.details, &advisory.disclosed_at),
+        [
+            tv_ref(&advisory.id),
+            tv_ref(&advisory.package_id),
+            tv(affected_text),
+            tv_text_opt(&fixed_text),
+            tv(severity_text),
+            tv_text_array(&advisory.cve_ids),
+            tv_ref(&advisory.summary),
+            tv_text_opt(&advisory.details),
+            tv_timestamp(&advisory.disclosed_at),
+        ],
     ).await?;
     Ok(())
 }
@@ -119,10 +126,10 @@ fn decode_advisory_row(row: &Row) -> Result<SecurityAdvisory, DbError> {
         "critical" => SevCritical,
         other => return Err(DbError.DecodeFailed { fault: f"severity: {other}" }),
     };
-    let affected = parse_constraint(&row.get_text("affected_versions")?)
+    let affected = parse(&row.get_text("affected_versions")?)
         .map_err(|e| DbError.DecodeFailed { fault: f"affected_versions: {e}" })?;
     let fixed = match row.get_text_opt("fixed_versions")? {
-        Some(t) => Some(parse_constraint(&t)
+        Some(t) => Some(parse(&t)
             .map_err(|e| DbError.DecodeFailed { fault: f"fixed_versions: {e}" })?),
         None => None,
     };

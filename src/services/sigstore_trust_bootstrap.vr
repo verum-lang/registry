@@ -54,6 +54,7 @@
 module verum_registry.services.sigstore_trust_bootstrap;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int, Bool};
 mount collections.{List, Map};
 mount encoding.hex.{encode as hex_encode, decode as hex_decode};

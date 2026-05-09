@@ -67,6 +67,14 @@ public fn render_error(
     Response.json(&envelope)
 }
 
+/// Convenience: render a plain error with no details or trace ID.
+/// Avoids `None` type-inference ambiguity at call sites.
+public fn render_simple_error(code: Text, message: Text) -> Response {
+    let details: Maybe<List<ErrorDetail>> = None;
+    let trace_id: Maybe<Text> = None;
+    render_error(code, message, details, trace_id)
+}
+
 /// Standard `code → HTTP status` mapping.  Domain modules emit `code`;
 /// this centralises the HTTP-status translation per spec §8.4.
 public fn error_status(code: &Text) -> StatusCode {

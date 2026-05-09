@@ -40,12 +40,13 @@
 module verum_registry.services.tuf_service;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Int};
 mount collections.{List, Map};
 mount sync.rwlock.RwLock;
 mount async.{spawn, sleep_seconds};
-mount time.rfc3339.{Rfc3339Time, now_utc, add_seconds};
-mount encoding.json.{JsonValue, encode as json_encode};
+mount time.rfc3339.*;
+mount encoding.json.{JsonValue, encode as json_encode, json_string, json_object, json_array, json_number, json_bool};
 mount encoding.hex.encode as hex_encode;
 mount security.hash.sha256.digest as sha256_digest;
 mount security.ecc.ed25519.{Ed25519Seed, sign as ed25519_sign, public_key};
@@ -470,33 +471,33 @@ fn ed25519_sig_to_list(sig: &Ed25519Signature) -> List<Byte> {
 fn compute_keyid_for_ed25519(pub_bytes: &List<Byte>) -> Result<KeyId, security.tuf.canonical.CanonicalError> {
     let mut keyval: Map<Text, JsonValue> = Map.new();
     keyval.insert("public".to_text(),
-        encoding.json.json_string(hex_encode(pub_bytes)));
+        json_string(hex_encode(pub_bytes)));
     let key = TufKey {
         keytype: security.tuf.types.TufKeyType.Ed25519Key,
         scheme:  security.tuf.types.TufKeyScheme.Ed25519Scheme,
-        keyval:  encoding.json.json_object(keyval),
+        keyval:  json_object(keyval),
     };
     compute_keyid(&key)
 }
 
 /// Build the on-wire envelope bytes: `{ "signed": <value>, "signatures": [...] }`.
 fn envelope_bytes(
-    signed_value: &encoding.json.JsonValue,
+    signed_value: &JsonValue,
     sigs: &[(KeyId, List<Byte>)],
 ) -> List<Byte> {
     let mut env: Map<Text, JsonValue> = Map.new();
     env.insert("signed".to_text(), signed_value.clone());
-    let mut arr: List<encoding.json.JsonValue> = List.new();
+    let mut arr: List<JsonValue> = List.new();
     let mut i: Int = 0;
     while i < sigs.len() {
         let mut s: Map<Text, JsonValue> = Map.new();
-        s.insert("keyid".to_text(), encoding.json.json_string(sigs[i].0.0.clone()));
-        s.insert("sig".to_text(),  encoding.json.json_string(hex_encode(&sigs[i].1)));
-        arr.push(encoding.json.json_object(s));
+        s.insert("keyid".to_text(), json_string(sigs[i].0.0.clone()));
+        s.insert("sig".to_text(),  json_string(hex_encode(&sigs[i].1)));
+        arr.push(json_object(s));
         i = i + 1;
     }
-    env.insert("signatures".to_text(), encoding.json.json_array(arr));
-    json_encode(&encoding.json.json_object(env)).as_bytes().to_list()
+    env.insert("signatures".to_text(), json_array(arr));
+    json_encode(&json_object(env)).as_bytes().to_list()
 }
 
 // =============================================================================
@@ -507,80 +508,80 @@ fn envelope_bytes(
 // canonical_signing_payload then JCS-canonicalises. Field ordering
 // is irrelevant (JCS sorts) but field NAMES must match TUF spec.
 
-fn encode_timestamp_to_json(ts: &TimestampMetadata) -> encoding.json.JsonValue {
+fn encode_timestamp_to_json(ts: &TimestampMetadata) -> JsonValue {
     let mut obj: Map<Text, JsonValue> = Map.new();
-    obj.insert("_type".to_text(), encoding.json.json_string(ts.type_.clone()));
-    obj.insert("spec_version".to_text(), encoding.json.json_string(ts.spec_version.clone()));
-    obj.insert("version".to_text(), encoding.json.json_number(ts.version as Float));
-    obj.insert("expires".to_text(), encoding.json.json_string(time.rfc3339.format_rfc3339(&ts.expires)));
+    obj.insert("_type".to_text(), json_string(ts.type_.clone()));
+    obj.insert("spec_version".to_text(), json_string(ts.spec_version.clone()));
+    obj.insert("version".to_text(), json_number(ts.version as Float));
+    obj.insert("expires".to_text(), json_string(format_utc(ts.expires.unix_seconds, ts.expires.nanos)));
     obj.insert("meta".to_text(), encode_meta_map(&ts.meta));
-    encoding.json.json_object(obj)
+    json_object(obj)
 }
 
-fn encode_snapshot_to_json(sn: &SnapshotMetadata) -> encoding.json.JsonValue {
+fn encode_snapshot_to_json(sn: &SnapshotMetadata) -> JsonValue {
     let mut obj: Map<Text, JsonValue> = Map.new();
-    obj.insert("_type".to_text(), encoding.json.json_string(sn.type_.clone()));
-    obj.insert("spec_version".to_text(), encoding.json.json_string(sn.spec_version.clone()));
-    obj.insert("version".to_text(), encoding.json.json_number(sn.version as Float));
-    obj.insert("expires".to_text(), encoding.json.json_string(time.rfc3339.format_rfc3339(&sn.expires)));
+    obj.insert("_type".to_text(), json_string(sn.type_.clone()));
+    obj.insert("spec_version".to_text(), json_string(sn.spec_version.clone()));
+    obj.insert("version".to_text(), json_number(sn.version as Float));
+    obj.insert("expires".to_text(), json_string(format_utc(sn.expires.unix_seconds, sn.expires.nanos)));
     obj.insert("meta".to_text(), encode_meta_map(&sn.meta));
-    encoding.json.json_object(obj)
+    json_object(obj)
 }
 
-fn encode_targets_to_json(tg: &TargetsMetadata) -> encoding.json.JsonValue {
+fn encode_targets_to_json(tg: &TargetsMetadata) -> JsonValue {
     let mut obj: Map<Text, JsonValue> = Map.new();
-    obj.insert("_type".to_text(), encoding.json.json_string(tg.type_.clone()));
-    obj.insert("spec_version".to_text(), encoding.json.json_string(tg.spec_version.clone()));
-    obj.insert("version".to_text(), encoding.json.json_number(tg.version as Float));
-    obj.insert("expires".to_text(), encoding.json.json_string(time.rfc3339.format_rfc3339(&tg.expires)));
+    obj.insert("_type".to_text(), json_string(tg.type_.clone()));
+    obj.insert("spec_version".to_text(), json_string(tg.spec_version.clone()));
+    obj.insert("version".to_text(), json_number(tg.version as Float));
+    obj.insert("expires".to_text(), json_string(format_utc(tg.expires.unix_seconds, tg.expires.nanos)));
     let mut targets_obj: Map<Text, JsonValue> = Map.new();
     for (path, tf) in tg.targets.iter() {
         targets_obj.insert(path.clone(), encode_target_file(tf));
     }
-    obj.insert("targets".to_text(), encoding.json.json_object(targets_obj));
-    encoding.json.json_object(obj)
+    obj.insert("targets".to_text(), json_object(targets_obj));
+    json_object(obj)
 }
 
-fn encode_root_to_json(root: &RootMetadata) -> encoding.json.JsonValue {
+fn encode_root_to_json(root: &RootMetadata) -> JsonValue {
     let mut obj: Map<Text, JsonValue> = Map.new();
-    obj.insert("_type".to_text(), encoding.json.json_string(root.type_.clone()));
-    obj.insert("spec_version".to_text(), encoding.json.json_string(root.spec_version.clone()));
-    obj.insert("consistent_snapshot".to_text(), encoding.json.json_bool(root.consistent_snapshot));
-    obj.insert("version".to_text(), encoding.json.json_number(root.version as Float));
-    obj.insert("expires".to_text(), encoding.json.json_string(time.rfc3339.format_rfc3339(&root.expires)));
+    obj.insert("_type".to_text(), json_string(root.type_.clone()));
+    obj.insert("spec_version".to_text(), json_string(root.spec_version.clone()));
+    obj.insert("consistent_snapshot".to_text(), json_bool(root.consistent_snapshot));
+    obj.insert("version".to_text(), json_number(root.version as Float));
+    obj.insert("expires".to_text(), json_string(format_utc(root.expires.unix_seconds, root.expires.nanos)));
     // keys + roles encoders elided here for brevity — spec follow-up
     // wires them.
-    encoding.json.json_object(obj)
+    json_object(obj)
 }
 
-fn encode_meta_map(meta: &Map<Text, MetafileSpec>) -> encoding.json.JsonValue {
+fn encode_meta_map(meta: &Map<Text, MetafileSpec>) -> JsonValue {
     let mut out: Map<Text, JsonValue> = Map.new();
     for (name, spec) in meta.iter() {
         let mut o: Map<Text, JsonValue> = Map.new();
         if let Some(l) = spec.length {
-            o.insert("length".to_text(), encoding.json.json_number(l as Float));
+            o.insert("length".to_text(), json_number(l as Float));
         }
         let mut hashes_obj: Map<Text, JsonValue> = Map.new();
         for (alg, hex) in spec.hashes.iter() {
-            hashes_obj.insert(alg.clone(), encoding.json.json_string(hex.clone()));
+            hashes_obj.insert(alg.clone(), json_string(hex.clone()));
         }
-        o.insert("hashes".to_text(), encoding.json.json_object(hashes_obj));
-        o.insert("version".to_text(), encoding.json.json_number(spec.version as Float));
-        out.insert(name.clone(), encoding.json.json_object(o));
+        o.insert("hashes".to_text(), json_object(hashes_obj));
+        o.insert("version".to_text(), json_number(spec.version as Float));
+        out.insert(name.clone(), json_object(o));
     }
-    encoding.json.json_object(out)
+    json_object(out)
 }
 
-fn encode_target_file(tf: &TargetFile) -> encoding.json.JsonValue {
+fn encode_target_file(tf: &TargetFile) -> JsonValue {
     let mut o: Map<Text, JsonValue> = Map.new();
-    o.insert("length".to_text(), encoding.json.json_number(tf.length as Float));
+    o.insert("length".to_text(), json_number(tf.length as Float));
     let mut hashes_obj: Map<Text, JsonValue> = Map.new();
     for (alg, hex) in tf.hashes.iter() {
-        hashes_obj.insert(alg.clone(), encoding.json.json_string(hex.clone()));
+        hashes_obj.insert(alg.clone(), json_string(hex.clone()));
     }
-    o.insert("hashes".to_text(), encoding.json.json_object(hashes_obj));
+    o.insert("hashes".to_text(), json_object(hashes_obj));
     if let Some(custom) = &tf.custom { o.insert("custom".to_text(), custom.clone()); }
-    encoding.json.json_object(o)
+    json_object(o)
 }
 
 fn build_root_metadata(
@@ -600,11 +601,11 @@ fn build_root_metadata(
             .map_err(|e| Canonical(f"{e}"))?;
         let mut keyval: Map<Text, JsonValue> = Map.new();
         keyval.insert("public".to_text(),
-            encoding.json.json_string(hex_encode(&pub_bytes)));
+            json_string(hex_encode(&pub_bytes)));
         keys.insert(kid.clone(), TufKey {
             keytype: security.tuf.types.TufKeyType.Ed25519Key,
             scheme:  security.tuf.types.TufKeyScheme.Ed25519Scheme,
-            keyval:  encoding.json.json_object(keyval),
+            keyval:  json_object(keyval),
         });
         root_keyids.push(kid);
         k = k + 1;
@@ -647,11 +648,11 @@ fn ed25519_keyid(seed: &Ed25519Seed) -> Result<KeyId, TufError> {
 fn tuf_ed25519_key(seed: &Ed25519Seed) -> Result<TufKey, TufError> {
     let pub_bytes = pubkey_bytes(seed);
     let mut keyval: Map<Text, JsonValue> = Map.new();
-    keyval.insert("public".to_text(), encoding.json.json_string(hex_encode(&pub_bytes)));
+    keyval.insert("public".to_text(), json_string(hex_encode(&pub_bytes)));
     Ok(TufKey {
         keytype: security.tuf.types.TufKeyType.Ed25519Key,
         scheme:  security.tuf.types.TufKeyScheme.Ed25519Scheme,
-        keyval:  encoding.json.json_object(keyval),
+        keyval:  json_object(keyval),
     })
 }
 

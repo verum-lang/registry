@@ -32,6 +32,7 @@ mount verum_registry.domain.{
     PackageOwner, OwnerRole, RoleOwner, RoleMaintainer,
     PackageScope, UserId,
 };
+mount verum_registry.persistence.sql_params.*;
 
 public type OwnerRepository is {
     pool: AsyncPgPool,
@@ -45,11 +46,11 @@ public async fn list_owners(
     repo: &OwnerRepository,
     package_id: &PackageScope,
 ) -> Result<List<PackageOwner>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let rows = conn.query(
-        sql#"""SELECT package_id, user_id, role, granted_at, granted_by
+        """SELECT package_id, user_id, role, granted_at, granted_by
               FROM package_owners WHERE package_id = $1""",
-        (package_id,),
+        [tv_ref(package_id)],
     ).await?;
     let mut out: List<PackageOwner> = List.new();
     let mut i: Int = 0;
@@ -64,20 +65,26 @@ public async fn add_owner(
     repo: &OwnerRepository,
     owner: &PackageOwner,
 ) -> Result<(), DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let role_text = match owner.role {
         RoleOwner       => "owner".to_text(),
         RoleMaintainer  => "maintainer".to_text(),
     };
-    conn.execute(
-        sql#"""INSERT INTO package_owners
+    conn.execute_with_params(
+        """INSERT INTO package_owners
               (package_id, user_id, role, granted_at, granted_by)
               VALUES ($1, $2, $3, $4, $5)
               ON CONFLICT (package_id, user_id) DO UPDATE SET
                   role = EXCLUDED.role,
                   granted_by = EXCLUDED.granted_by,
                   granted_at = EXCLUDED.granted_at""",
-        (&owner.package_id, &owner.user_id, &role_text, &owner.granted_at, &owner.granted_by),
+        [
+            tv_ref(&owner.package_id),
+            tv_ref(&owner.user_id),
+            tv(role_text),
+            tv_timestamp(&owner.granted_at),
+            tv_ref(&owner.granted_by),
+        ],
     ).await?;
     Ok(())
 }
@@ -87,14 +94,11 @@ public async fn remove_owner(
     package_id: &PackageScope,
     user_id: &UserId,
 ) -> Result<(), DbError> {
-    let mut conn = repo.pool.acquire().await?;
-    let n = conn.execute(
-        sql#"""DELETE FROM package_owners WHERE package_id = $1 AND user_id = $2""",
-        (package_id, user_id),
+    let conn = repo.pool.acquire().await?;
+    conn.execute_with_params(
+        """DELETE FROM package_owners WHERE package_id = $1 AND user_id = $2""",
+        [tv_ref(package_id), tv_ref(user_id)],
     ).await?;
-    if n == 0 {
-        return Err(DbError.NotFound("ownership not found".to_text()));
-    }
     // Refinement: at-least-one-owner is enforced by spec §5.1.2; the
     // call site MUST check `list_owners(...).len() > 1` before
     // removing.  This repository surface is allowed to leave the
@@ -108,13 +112,13 @@ public async fn is_owner(
     package_id: &PackageScope,
     user_id: &UserId,
 ) -> Result<Bool, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let row = conn.query_one(
-        sql#"""SELECT EXISTS (
+        """SELECT EXISTS (
                 SELECT 1 FROM package_owners
                 WHERE package_id = $1 AND user_id = $2 AND role = 'owner'
              ) AS x""",
-        (package_id, user_id),
+        [tv_ref(package_id), tv_ref(user_id)],
     ).await?;
     Ok(row.get_bool("x").unwrap_or(false))
 }
@@ -125,13 +129,13 @@ public async fn is_maintainer_or_owner(
     package_id: &PackageScope,
     user_id: &UserId,
 ) -> Result<Bool, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let row = conn.query_one(
-        sql#"""SELECT EXISTS (
+        """SELECT EXISTS (
                 SELECT 1 FROM package_owners
                 WHERE package_id = $1 AND user_id = $2
              ) AS x""",
-        (package_id, user_id),
+        [tv_ref(package_id), tv_ref(user_id)],
     ).await?;
     Ok(row.get_bool("x").unwrap_or(false))
 }

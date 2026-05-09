@@ -1,0 +1,126 @@
+// =============================================================================
+// verum_registry/contexts.vr — registry-specific context declarations
+// =============================================================================
+// Spec: §7 (DI surface)
+//
+// Declares the domain-specific contexts used throughout the registry.
+// Core contexts (Logger, Metrics, Cache, Database) come from
+// `context.standard`; these are the registry-level extensions that
+// wrap S3, MeiliSearch and other infrastructure the standard library
+// does not expose as injectable protocols.
+// =============================================================================
+
+@arch_module(
+    foundation:    Foundation.ZfcTwoInacc,
+    stratum:       MsfsStratum.LFnd,
+    lifecycle:     Lifecycle.Theorem("v1.0"),
+    declarations: ShapeDeclarations {
+        purpose: Some(Purpose {
+            role: "registry context declarations — Storage, Search, SearchService, Sumdb",
+            k_min: CveThresholdK.FullWitness,
+            v_min: CveThresholdV.NamedCertification,
+            e_min: CveThresholdE.StructurallyReady,
+        }),
+        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
+        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
+        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
+        self_reference: None,
+    },
+)
+module verum_registry.contexts;
+
+mount core.*;
+mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
+mount collections.List;
+mount database.common.error.DbError;
+mount database.postgres.row.Row;
+mount verum_registry.persistence.sql_params.{PgParam, PgParams};
+
+// =============================================================================
+// RegistryDb context — typed-params Postgres surface
+// =============================================================================
+
+/// Registry-side database context with the typed-params API the
+/// registry call sites need. The standard `Database` context exposes
+/// only stringly-typed parameters; this context layers in proper
+/// `PgParams` (`List<Maybe<TypedValue>>`) typing, transaction support
+/// and connection-health checks.
+///
+/// Implementations wrap an `AsyncPgPool` and acquire a guard per call.
+public context RegistryDb {
+    /// Run a parameterised SELECT and return every row.
+    async fn query(sql: &Text, params: PgParams) -> Result<List<Row>, DbError>;
+
+    /// Run a parameterised SELECT expecting exactly one row.
+    async fn query_one(sql: &Text, params: PgParams) -> Result<Row, DbError>;
+
+    /// Run a parameterised SELECT expecting zero or one row.
+    async fn query_one_opt(sql: &Text, params: PgParams) -> Result<Maybe<Row>, DbError>;
+
+    /// Run a parameterised INSERT/UPDATE/DELETE; returns the
+    /// `command_tag` text from CommandComplete.
+    async fn execute(sql: &Text, params: PgParams) -> Result<Text, DbError>;
+
+    /// Health probe — round-trips `SELECT 1`.
+    async fn ping() -> Result<(), DbError>;
+}
+
+// =============================================================================
+// Storage context — S3-compatible object store
+// =============================================================================
+
+/// S3-compatible object storage context. Injected into handlers and
+/// services that need to read or write source archives, SBOM files,
+/// and other blobs.
+public context Storage {
+    /// Upload bytes under the given key; overwrites silently.
+    async fn put(key: &Text, body: &List<Byte>) -> Result<(), Text>;
+
+    /// Download bytes for the given key.
+    async fn get(key: &Text) -> Result<List<Byte>, Text>;
+
+    /// Delete an object; idempotent — succeeds even if the key is absent.
+    async fn delete(key: &Text) -> Result<(), Text>;
+
+    /// Check whether the bucket is reachable (HEAD request).
+    async fn head_bucket() -> Result<(), Text>;
+}
+
+// =============================================================================
+// Search context — MeiliSearch-backed full-text index
+// =============================================================================
+
+/// Full-text search context, backed by MeiliSearch.
+public context Search {
+    /// Perform a full-text package search, returning a JSON payload
+    /// ready for the `/api/v3/packages/search` response body.
+    async fn search_packages(query: &Text) -> Result<Text, Text>;
+
+    /// Upsert a search document.
+    async fn upsert_indexed_document(doc: &Text) -> Result<(), Text>;
+
+    /// Connectivity / health probe — returns Ok if the MeiliSearch
+    /// instance is reachable and the index exists.
+    async fn health() -> Result<(), Text>;
+}
+
+// =============================================================================
+// SearchService context — higher-level search orchestration
+// =============================================================================
+
+/// Higher-level search context that wraps raw `Search` with registry
+/// domain semantics. Injected into the search HTTP handler.
+public context SearchService {
+    async fn search(query: &Text) -> Result<Text, Text>;
+    async fn index_package_version(doc: &Text) -> Result<(), Text>;
+}
+
+// =============================================================================
+// Sumdb context — Versum transparency log
+// =============================================================================
+
+/// Sumdb context for append-only transparency log operations.
+public context Sumdb {
+    async fn append(id: &Text, version: &Text, checksum: &Text) -> Result<Int, Text>;
+    async fn lookup(id: &Text, version: &Text) -> Result<Maybe<Text>, Text>;
+}

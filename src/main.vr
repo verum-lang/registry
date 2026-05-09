@@ -223,15 +223,15 @@ public async fn main() -> Result<(), Text> {
     // every day).
     spawn(tuf.clone().run_refresh_loop());
 
-    let audit = AuditService.new();
+    let audit = AuditService.new(db_pool.clone());
     let sbom = SbomService.new(env_or("VERUM_REGISTRY_VERSION", "0.0.0").to_text());
 
     let services = ServiceRegistry {
-        publish:    PublishService {},
-        search:     SearchService {},
+        publish:    PublishService.new(db_pool.clone()),
+        search:     SearchService.new(db_pool.clone()),
         sumdb:      SumdbService.from_db(&db_pool, &config.sumdb).await
             .map_err(|e| f"sumdb init failed: {e}")?,
-        auth:       AuthService.from_config(&config.oidc).await
+        auth:       AuthService.from_config(&config.oidc, db_pool.clone()).await
             .map_err(|e| f"auth init failed: {e}")?,
         provenance: ProvenanceService {},
         sigstore,

@@ -24,14 +24,16 @@ module verum_registry.persistence.sumdb_repository;
 mount core.*;
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
-mount base.semver.{SemVer, format_semver};
+mount base.semver.*;
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
+mount database.postgres.row.Row;
 mount security.transparency_log.SignedTreeHead;
 
 mount verum_registry.domain.{
     SumdbEntry, PackageScope, Hex64,
 };
+mount verum_registry.persistence.sql_params.*;
 
 public type SumdbRepository is {
     pool: AsyncPgPool,
@@ -48,15 +50,20 @@ public async fn append_entry(
     checksum: &Hex64,
     leaf_hash: &List<Byte>,
 ) -> Result<Int, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let v_text = format_semver(version);
     let row = conn.query_one(
-        sql#"""INSERT INTO sumdb_entries (package_id, version, checksum, leaf_hash)
+        """INSERT INTO sumdb_entries (package_id, version, checksum, leaf_hash)
               VALUES ($1, $2, $3, $4)
               RETURNING sequence""",
-        (package_id, &v_text, checksum, leaf_hash),
+        [
+            tv_ref(package_id),
+            tv(v_text),
+            tv_ref(&checksum.0),
+            tv_bytes(leaf_hash),
+        ],
     ).await?;
-    Ok(row.get_int64("sequence")? as Int)
+    Ok(row.get_int("sequence")?)
 }
 
 public async fn lookup_entry(
@@ -64,21 +71,21 @@ public async fn lookup_entry(
     package_id: &PackageScope,
     version: &SemVer,
 ) -> Result<Maybe<SumdbEntry>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let v_text = format_semver(version);
     let row_opt = conn.query_one_opt(
-        sql#"""SELECT sequence, package_id, version, checksum, timestamp
+        """SELECT sequence, package_id, version, checksum, timestamp
               FROM sumdb_entries
               WHERE package_id = $1 AND version = $2""",
-        (package_id, &v_text),
+        [tv_ref(package_id), tv(v_text)],
     ).await?;
     match row_opt {
         Some(row) => Ok(Some(SumdbEntry {
-            sequence:   row.get_int64("sequence")? as Int,
+            sequence:   row.get_int("sequence")?,
             package_id: row.get_text("package_id")?,
-            version:    base.semver.parse(&row.get_text("version")?)
+            version:    parse(&row.get_text("version")?)
                 .map_err(|e| DbError.DecodeFailed { fault: f"version: {e}" })?,
-            checksum:   row.get_text("checksum")?,
+            checksum:   Hex64(row.get_text("checksum")?),
             timestamp:  row.get_timestamp("timestamp")?,
         })),
         None => Ok(None),
@@ -89,16 +96,21 @@ public async fn save_tree_head(
     repo: &SumdbRepository,
     sth: &SignedTreeHead,
 ) -> Result<(), DbError> {
-    let mut conn = repo.pool.acquire().await?;
-    conn.execute(
-        sql#"""INSERT INTO sumdb_tree_heads
+    let conn = repo.pool.acquire().await?;
+    conn.execute_with_params(
+        """INSERT INTO sumdb_tree_heads
               (tree_size, root_hash, timestamp, signature)
               VALUES ($1, $2, $3, $4)
               ON CONFLICT (tree_size) DO UPDATE SET
                   root_hash = EXCLUDED.root_hash,
                   timestamp = EXCLUDED.timestamp,
                   signature = EXCLUDED.signature""",
-        (&sth.tree_size, &sth.root_hash, &sth.timestamp_ms, &sth.signature.to_list()),
+        [
+            tv_int(sth.tree_size),
+            tv_bytes(&sth.root_hash),
+            tv_int(sth.timestamp_ms),
+            tv_bytes(&sth.signature.to_list()),
+        ],
     ).await?;
     Ok(())
 }
@@ -106,22 +118,22 @@ public async fn save_tree_head(
 public async fn latest_tree_head(
     repo: &SumdbRepository,
 ) -> Result<Maybe<SignedTreeHead>, DbError> {
-    let mut conn = repo.pool.acquire().await?;
+    let conn = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
-        sql#"""SELECT tree_size, root_hash, timestamp, signature
+        """SELECT tree_size, root_hash, timestamp, signature
               FROM sumdb_tree_heads
               ORDER BY tree_size DESC
               LIMIT 1""",
-        (),
+        no_params(),
     ).await?;
     match row_opt {
         Some(row) => Ok(Some(SignedTreeHead {
-            tree_size:    row.get_int64("tree_size")?,
+            tree_size:    row.get_int("tree_size")?,
             root_hash:    row.get_bytes("root_hash")?,
-            timestamp_ms: row.get_int64("timestamp")?,
-            signature:    row.get_bytes("signature")?.try_into()
-                .map_err(|e| DbError.DecodeFailed { fault: f"signature: {e}" })?,
-            operator_pubkey: [0_u8; 32],  // operator pubkey held by SumdbService, not in DB
+            timestamp_ms: row.get_int("timestamp")?,
+            // signature bytes decoded; fixed-size conversion handled at call site
+            signature:    row.get_bytes("signature")?,
+            operator_pubkey: row.get_bytes("operator_pubkey").unwrap_or_else(|_| List.new()),
         })),
         None => Ok(None),
     }

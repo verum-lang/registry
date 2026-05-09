@@ -30,6 +30,7 @@
 module verum_registry.http.handlers.webauthn;
 
 mount core.*;
+mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text, Bool, Int};
 mount collections.List;
 mount base.ulid.Ulid;
@@ -44,10 +45,13 @@ mount verum_registry.services.webauthn_service.{WebAuthnService, WebAuthnService
 mount verum_registry.services.auth_service.{AuthService, AuthenticatedUser};
 mount verum_registry.domain.user.UserId;
 mount verum_registry.domain.passkey.Passkey;
-mount verum_registry.http.error_response.render_error;
+mount verum_registry.http.error_response.{render_error, render_simple_error};
 mount security.webauthn.types.{
     AuthenticatorAttestationResponse, AuthenticatorAssertionResponse,
+    attestation_format_to_text,
 };
+mount security.webauthn.register.RegistrationOptions;
+mount security.webauthn.authenticate.AuthenticationOptions;
 
 // =============================================================================
 // Begin / finish — registration
@@ -55,12 +59,13 @@ mount security.webauthn.types.{
 
 /// POST /api/v3/auth/webauthn/register/begin
 pub async fn register_begin(req: WeftRequest) -> Response
-    using [WebAuthnService, AuthService, Cache, Database, Logger]
+    using [WebAuthnService, AuthService, Cache, Logger]
 {
     let user = match AuthService.session_user(&req).await {
         Ok(u)  => u,
-        Err(_) => return render_error("auth_required".to_text(),
-            "session required".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "auth_required".to_text(),
+            "session required".to_text()
         ).status(StatusCode.Unauthorized),
     };
     match WebAuthnService.begin_registration(&user.user).await {
@@ -72,33 +77,37 @@ pub async fn register_begin(req: WeftRequest) -> Response
         }
         Err(e) => {
             Logger.log(Level.Warn, &f"webauthn register/begin: {e}");
-            render_error("internal_error".to_text(),
-                f"{e}", None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
 
 /// POST /api/v3/auth/webauthn/register/finish
 pub async fn register_finish(req: WeftRequest) -> Response
-    using [WebAuthnService, AuthService, Cache, Database, Logger]
+    using [WebAuthnService, AuthService, Cache, Logger]
 {
     let user = match AuthService.session_user(&req).await {
         Ok(u)  => u,
-        Err(_) => return render_error("auth_required".to_text(),
-            "session required".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "auth_required".to_text(),
+            "session required".to_text()
         ).status(StatusCode.Unauthorized),
     };
     let body: RegisterFinishBody = match req.json().await {
         Ok(b)  => b,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid JSON body".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid JSON body".to_text()
         ).status(StatusCode.BadRequest),
     };
     let resp = match decode_attestation_response(&body) {
         Ok(r)  => r,
-        Err(e) => return render_error("validation_failed".to_text(),
-            e, None, None,
+        Err(e) => return render_simple_error(
+            "validation_failed".to_text(),
+            e
         ).status(StatusCode.BadRequest),
     };
     match WebAuthnService.finish_registration(
@@ -111,16 +120,16 @@ pub async fn register_finish(req: WeftRequest) -> Response
                 json_string(encoding.hex.encode(&passkey.aaguid)));
             Response.json(&json_object(obj)).status(StatusCode.Created)
         }
-        Err(WebAuthnServiceError.WebAuthn(_)) => render_error(
+        Err(WebAuthnServiceError.WebAuthn(_)) => render_simple_error(
             "webauthn_verification_failed".to_text(),
-            "registration response verification failed".to_text(),
-            None, None,
+            "registration response verification failed".to_text()
         ).status(StatusCode.BadRequest),
         Err(e) => {
             Logger.log(Level.Warn, &f"webauthn register/finish: {e}");
-            render_error("internal_error".to_text(),
-                f"{e}", None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -131,7 +140,7 @@ pub async fn register_finish(req: WeftRequest) -> Response
 
 /// POST /api/v3/auth/webauthn/authenticate/begin
 pub async fn authenticate_begin(req: WeftRequest) -> Response
-    using [WebAuthnService, Cache, Database, Logger]
+    using [WebAuthnService, Cache, Logger]
 {
     // The body MAY include a username for non-discoverable login.
     let body: AuthBeginBody = req.json().await.unwrap_or_else(|_| AuthBeginBody { username: None });
@@ -149,33 +158,37 @@ pub async fn authenticate_begin(req: WeftRequest) -> Response
         }
         Err(e) => {
             Logger.log(Level.Warn, &f"webauthn auth/begin: {e}");
-            render_error("internal_error".to_text(),
-                f"{e}", None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
 
 /// POST /api/v3/auth/webauthn/authenticate/finish
 pub async fn authenticate_finish(req: WeftRequest) -> Response
-    using [WebAuthnService, AuthService, Cache, Database, Logger]
+    using [WebAuthnService, AuthService, Cache, Logger]
 {
     let body: AuthFinishBody = match req.json().await {
         Ok(b)  => b,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid JSON body".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid JSON body".to_text()
         ).status(StatusCode.BadRequest),
     };
     let credential_id = match b64url_decode(&body.credential_id_b64) {
         Ok(b) => b,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "credentialId not base64url".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "credentialId not base64url".to_text()
         ).status(StatusCode.BadRequest),
     };
     let assertion = match decode_assertion_response(&body) {
         Ok(r)  => r,
-        Err(e) => return render_error("validation_failed".to_text(),
-            e, None, None,
+        Err(e) => return render_simple_error(
+            "validation_failed".to_text(),
+            e
         ).status(StatusCode.BadRequest),
     };
 
@@ -191,16 +204,16 @@ pub async fn authenticate_finish(req: WeftRequest) -> Response
             Response.json(&json_object(obj))
         }
         Err(WebAuthnServiceError.WebAuthn(_)) | Err(WebAuthnServiceError.UnknownCredential)
-        | Err(WebAuthnServiceError.ChallengeMismatch) | Err(WebAuthnServiceError.InvalidChallenge) => render_error(
+        | Err(WebAuthnServiceError.ChallengeMismatch) | Err(WebAuthnServiceError.InvalidChallenge) => render_simple_error(
             "webauthn_verification_failed".to_text(),
-            "authentication failed".to_text(),
-            None, None,
+            "authentication failed".to_text()
         ).status(StatusCode.Unauthorized),
         Err(e) => {
             Logger.log(Level.Warn, &f"webauthn auth/finish: {e}");
-            render_error("internal_error".to_text(),
-                f"{e}", None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -211,12 +224,13 @@ pub async fn authenticate_finish(req: WeftRequest) -> Response
 
 /// GET /api/v3/auth/passkeys
 pub async fn list_passkeys(req: WeftRequest) -> Response
-    using [WebAuthnService, AuthService, Database, Logger]
+    using [WebAuthnService, AuthService, Logger]
 {
     let user = match AuthService.session_user(&req).await {
         Ok(u)  => u,
-        Err(_) => return render_error("auth_required".to_text(),
-            "session required".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "auth_required".to_text(),
+            "session required".to_text()
         ).status(StatusCode.Unauthorized),
     };
     match WebAuthnService.list_passkeys(&user.user.id).await {
@@ -231,41 +245,45 @@ pub async fn list_passkeys(req: WeftRequest) -> Response
         }
         Err(e) => {
             Logger.log(Level.Warn, &f"list_passkeys: {e}");
-            render_error("internal_error".to_text(),
-                f"{e}", None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
 
 /// DELETE /api/v3/auth/passkeys/:id
 pub async fn revoke_passkey(req: WeftRequest) -> Response
-    using [WebAuthnService, AuthService, Database, Logger]
+    using [WebAuthnService, AuthService, Logger]
 {
     let user = match AuthService.session_user(&req).await {
         Ok(u)  => u,
-        Err(_) => return render_error("auth_required".to_text(),
-            "session required".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "auth_required".to_text(),
+            "session required".to_text()
         ).status(StatusCode.Unauthorized),
     };
     let id_text = req.path_param("id").unwrap_or_else(|| "".to_text());
     let pk_id = match Ulid.parse(&id_text) {
         Ok(u)  => u,
-        Err(_) => return render_error("validation_failed".to_text(),
-            "invalid passkey id".to_text(), None, None,
+        Err(_) => return render_simple_error(
+            "validation_failed".to_text(),
+            "invalid passkey id".to_text()
         ).status(StatusCode.BadRequest),
     };
     match WebAuthnService.revoke_passkey(&user.user.id, &pk_id).await {
         Ok(())  => Response.text("revoked").status(StatusCode.NoContent),
-        Err(WebAuthnServiceError.UnknownCredential) => render_error(
+        Err(WebAuthnServiceError.UnknownCredential) => render_simple_error(
             "passkey_not_found".to_text(),
-            "no such passkey".to_text(), None, None,
+            "no such passkey".to_text()
         ).status(StatusCode.NotFound),
         Err(e) => {
             Logger.log(Level.Warn, &f"revoke_passkey: {e}");
-            render_error("internal_error".to_text(),
-                f"{e}", None, None,
-            ).status(StatusCode.InternalServerError)
+            render_simple_error(
+            "internal_error".to_text(),
+            f"{e}"
+        ).status(StatusCode.InternalServerError)
         }
     }
 }
@@ -332,7 +350,7 @@ fn decode_assertion_response(body: &AuthFinishBody) -> Result<AuthenticatorAsser
     })
 }
 
-fn registration_options_to_json(o: &security.webauthn.register.RegistrationOptions) -> JsonValue {
+fn registration_options_to_json(o: &RegistrationOptions) -> JsonValue {
     let mut obj = Map.new();
     obj.insert("challenge".to_text(), json_string(b64url_encode(&o.challenge)));
     obj.insert("rpId".to_text(),      json_string(o.rp.id.clone()));
@@ -355,7 +373,7 @@ fn registration_options_to_json(o: &security.webauthn.register.RegistrationOptio
     json_object(obj)
 }
 
-fn authentication_options_to_json(o: &security.webauthn.authenticate.AuthenticationOptions) -> JsonValue {
+fn authentication_options_to_json(o: &AuthenticationOptions) -> JsonValue {
     let mut obj = Map.new();
     obj.insert("challenge".to_text(), json_string(b64url_encode(&o.challenge)));
     obj.insert("rpId".to_text(),      json_string(o.rp_id.clone()));
@@ -382,14 +400,14 @@ fn passkey_summary_to_json(p: &Passkey) -> JsonValue {
             None    => encoding.json.json_null(),
         });
     obj.insert("attestationFormat".to_text(),
-        json_string(security.webauthn.types.attestation_format_to_text(&p.attestation_format)));
+        json_string(attestation_format_to_text(&p.attestation_format)));
     obj.insert("backupEligible".to_text(), json_bool(p.backup_eligible));
     obj.insert("backupState".to_text(),    json_bool(p.backup_state));
     obj.insert("createdAt".to_text(),
-        json_string(time.rfc3339.format_rfc3339(&p.created_at)));
+        json_string(time.rfc3339.format_utc(p.created_at.unix_seconds, p.created_at.nanos)));
     obj.insert("lastUsedAt".to_text(),
         match &p.last_used_at {
-            Some(t) => json_string(time.rfc3339.format_rfc3339(t)),
+            Some(t) => json_string(time.rfc3339.format_utc(t.unix_seconds, t.nanos)),
             None    => encoding.json.json_null(),
         });
     json_object(obj)
