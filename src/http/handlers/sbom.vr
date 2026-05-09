@@ -53,8 +53,8 @@ const MEDIA_CYCLONEDX_15: Text = "application/vnd.cyclonedx+json; version=1.5".t
 const MEDIA_SPDX_23:      Text = "application/spdx+json; version=2.3".to_text();
 const CACHE_IMMUTABLE:    Text = "public, max-age=31536000, immutable".to_text();
 
-#[derive(Clone, Copy, Debug)]
-enum SbomFormat { CycloneDx, Spdx }
+@derive(Clone, Copy, Debug)
+type SbomFormat is CycloneDx | Spdx;
 
 /// Combined entry — `?format=` query selects which form to return.
 /// Default: CycloneDX (the more widely-tooled format).
