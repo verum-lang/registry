@@ -39,7 +39,7 @@ mount core.*;
 mount base.{Result, Ok, Err, Text};
 mount net.weft.{Middleware, Next, WeftRequest, Response, StatusCode};
 mount time.system_time.now_unix_ns;
-mount base.ulid.{generate as gen_ulid};
+mount base.ulid.Ulid;
 mount context.standard.{Logger, Metrics, Cache, Database};
 mount context.standard.{ContextLogLevel as Level};
 
@@ -61,7 +61,7 @@ implement Middleware for LoggingMiddleware {
     {
         let start = now_unix_ns();
         let trace_id = req.header("X-Trace-Id")
-            .unwrap_or_else(|| gen_ulid().to_text());
+            .unwrap_or_else(|| Ulid.new().to_text());
         let method = req.method.clone();
         let path = req.path.clone();
 
