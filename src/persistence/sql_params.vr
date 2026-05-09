@@ -37,9 +37,6 @@ module verum_registry.persistence.sql_params;
 mount core.*;
 mount base.{Maybe, Some, None, Text, Bool, Int, Float};
 mount collections.List;
-mount base.semver.*;                // glob — brings format_semver into scope
-mount time.rfc3339.*;               // glob — brings format_utc, Rfc3339Time
-mount database.postgres.wire.typed.*;  // glob — brings TypedValue, TvNull, TvText, TvInt8, TvBool, TvBytea
 
 // =============================================================================
 // Core types

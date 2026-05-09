@@ -26,14 +26,10 @@
 module verum_registry.persistence.cog_audit_repository;
 
 mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
 mount database.common.error.DbError;
 mount database.postgres.async_pool.AsyncPgPool;
-mount database.postgres.row.Row;
 
-mount verum_registry.domain.cog_audit_record.CogAuditRecord;
-mount verum_registry.audit.{AntiPatternRoster, AntiPatternFinding};
 mount verum_registry.persistence.sql_params.*;
 
 public type CogAuditRepository is {
@@ -78,8 +74,8 @@ implement CogAuditRepository {
         cog_id: &Text,
     ) -> Result<Maybe<Text>, DbError>
     {
-        let conn = self.pool.acquire().await?;
-        let row_opt = conn.query_one_opt(
+        let conn2 = self.pool.acquire().await?;
+        let row_opt2 = conn.query_one_opt(
             """SELECT cve_bundle_json
                   FROM cog_audit_records
                   WHERE cog_id = $1

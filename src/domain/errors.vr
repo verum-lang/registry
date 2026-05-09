@@ -24,7 +24,6 @@
 module verum_registry.domain.errors;
 
 mount core.*;
-mount base.{Text, Maybe};
 mount collections.List;
 mount base.semver.SemVer;
 mount core.cog.manifest.{ManifestError};

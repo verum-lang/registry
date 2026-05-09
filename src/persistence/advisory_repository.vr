@@ -22,7 +22,6 @@
 module verum_registry.persistence.advisory_repository;
 
 mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount collections.List;
 mount base.semver_constraint.*;
 mount database.common.error.DbError;
@@ -69,7 +68,7 @@ public async fn lookup_advisory(
     repo: &AdvisoryRepository,
     id: &AdvisoryId,
 ) -> Result<Maybe<SecurityAdvisory>, DbError> {
-    let conn = repo.pool.acquire().await?;
+    let conn2 = repo.pool.acquire().await?;
     let row_opt = conn.query_one_opt(
         """SELECT id, package_id, affected_versions, fixed_versions,
                     severity, cve_ids, summary, details, disclosed_at
@@ -86,7 +85,7 @@ public async fn insert_advisory(
     repo: &AdvisoryRepository,
     advisory: &SecurityAdvisory,
 ) -> Result<(), DbError> {
-    let conn = repo.pool.acquire().await?;
+    let conn2 = repo.pool.acquire().await?;
     let severity_text = match advisory.severity {
         SevLow      => "low".to_text(),
         SevMedium   => "medium".to_text(),
@@ -119,7 +118,7 @@ public async fn insert_advisory(
 }
 
 fn decode_advisory_row(row: &Row) -> Result<SecurityAdvisory, DbError> {
-    let severity = match row.get_text("severity")?.as_str() {
+    let severity2 = match row.get_text("severity")?.as_str() {
         "low"      => SevLow,
         "medium"   => SevMedium,
         "high"     => SevHigh,

@@ -28,8 +28,6 @@
 module verum_registry.observability;
 
 mount core.*;
-mount base.{Result, Ok, Err, Text};
-mount tracing.{init_otlp as core_tracing_init_otlp, OtlpConfig};
 mount metrics.{
     init_registry as core_metrics_init_registry,
     register_counter as core_metrics_register_counter,

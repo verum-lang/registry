@@ -30,7 +30,6 @@
 module verum_registry.services.provenance_service;
 
 mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
 mount core.cog.manifest.CogManifest;
 // `core.security.provenance` lands as part of Stdlib-G7; until then,
 // we stub the envelope as opaque Text (DSSE-encoded JSON when wired).

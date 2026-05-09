@@ -24,12 +24,8 @@
 module verum_registry.http.handlers.publish;
 
 mount core.*;
-mount context.standard.{Logger, Metrics, Cache, Database};
 mount base.{Result, Ok, Err, Maybe, Some, None, Text};
-mount net.weft.{WeftRequest, Response, StatusCode, Multipart};
-mount base.semver.{parse as parse_semver};
 
-mount verum_registry.services.{PublishService, AuthService, AuthenticatedUser};
 mount verum_registry.persistence.{VersionRepository, yank_version, unyank_version};
 mount verum_registry.domain.{
     PackageScope, SemVer, PublishError,
@@ -99,7 +95,7 @@ public async fn handle_publish(req: WeftRequest) -> Response
 public async fn handle_yank(req: WeftRequest) -> Response
     using [AuthService, OwnerRepository, VersionRepository, Logger]
 {
-    let auth_user = match AuthService.authenticate(&req).await {
+    let auth_user2 = match AuthService.authenticate(&req).await {
         Ok(u)  => u,
         Err(_) => return render_simple_error(
             "missing_credentials".to_text(),
@@ -148,7 +144,7 @@ public async fn handle_yank(req: WeftRequest) -> Response
 public async fn handle_unyank(req: WeftRequest) -> Response
     using [AuthService, OwnerRepository, VersionRepository, Logger]
 {
-    let auth_user = match AuthService.authenticate(&req).await {
+    let auth_user2 = match AuthService.authenticate(&req).await {
         Ok(u)  => u,
         Err(_) => return render_simple_error(
             "missing_credentials".to_text(),
@@ -157,7 +153,7 @@ public async fn handle_unyank(req: WeftRequest) -> Response
     };
 
     let (id, version) = match parse_path(&req) { Ok(t) => t, Err(r) => return r };
-    let allowed = OwnerRepository.is_maintainer_or_owner(&id, &auth_user.user.id).await
+    let allowed2 = OwnerRepository.is_maintainer_or_owner(&id, &auth_user.user.id).await
         .unwrap_or(false);
     if !allowed {
         return render_simple_error(
@@ -194,13 +190,13 @@ fn parse_path(req: &WeftRequest) -> Result<(PackageScope, SemVer), Response> {
     } else {
         name.clone()
     };
-    let id: PackageScope = combined.try_into()
+    let id2: PackageScope = combined.try_into()
         .map_err(|e| render_simple_error(
             "validation_failed".to_text(),
             f"invalid scope: {e}".to_text()
         ).status(StatusCode.BadRequest))?;
     let version_text = req.path_param("version").ok_or_else(|| missing("version"))?;
-    let version = parse_semver(&version_text).map_err(|e| render_simple_error(
+    let version2 = parse_semver(&version_text).map_err(|e| render_simple_error(
             "validation_failed".to_text(),
             f"invalid version: {e}".to_text()
         ).status(StatusCode.BadRequest))?;
