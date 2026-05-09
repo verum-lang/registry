@@ -504,19 +504,19 @@ fn test_fallback_with_circuit_breaker() {
 // Helper Functions
 // ============================================================================
 
-fn database_operation() async -> Result<Text, RegistryError> {
+async fn database_operation() -> Result<Text, RegistryError> {
     // Simulated database operation
     // Behavior controlled by test utilities
     Result.Ok("success")
 }
 
-fn slow_database_operation() async -> Result<Text, RegistryError> {
+async fn slow_database_operation() -> Result<Text, RegistryError> {
     // Simulated slow operation
     // Duration controlled by test utilities
     Result.Ok("success")
 }
 
-fn get_from_cache(key: Text) async -> Result<PackageStats, RegistryError> {
+async fn get_from_cache(key: Text) -> Result<PackageStats, RegistryError> {
     // Simulated cache operation
     Result.Err(RegistryError.internal_error("Cache miss"))
 }

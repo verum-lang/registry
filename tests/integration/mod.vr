@@ -3,32 +3,36 @@
 // Exports all integration test modules for the verum-registry.
 // These tests verify end-to-end functionality across all API endpoints.
 
+module verum_registry.tests.integration;
+
+mount core.*;
+
 // Package lifecycle tests
-pub mod package_tests;
+public mount verum_registry.tests.integration.package_tests.*;
 
 // User authentication and profile tests
-pub mod user_tests;
+public mount verum_registry.tests.integration.user_tests.*;
 
 // Token-based authentication tests
-pub mod auth_tests;
+public mount verum_registry.tests.integration.auth_tests.*;
 
 // Package ownership management tests
-pub mod ownership_tests;
+public mount verum_registry.tests.integration.ownership_tests.*;
 
 // Admin operations tests
-pub mod admin_tests;
+public mount verum_registry.tests.integration.admin_tests.*;
 
 // Resilience patterns tests
-pub mod resilience_tests;
+public mount verum_registry.tests.integration.resilience_tests.*;
 
 // Input validation tests
-pub mod validation_tests;
+public mount verum_registry.tests.integration.validation_tests.*;
 
 // Publish flow end-to-end tests
-pub mod publish_flow_test;
+public mount verum_registry.tests.integration.publish_flow_test.*;
 
 // Security service tests
-pub mod security_test;
+public mount verum_registry.tests.integration.security_test.*;
 
 // Sumdb transparent log tests
-pub mod sumdb_test;
+public mount verum_registry.tests.integration.sumdb_test.*;

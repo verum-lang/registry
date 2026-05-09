@@ -27,7 +27,7 @@ mount super.src.handlers.packages.{publish_package};
 ///
 /// This should be called at the start of each test.
 /// Creates a fresh test database or clears existing one.
-pub fn setup_test_db() {
+public fn setup_test_db() {
     // In production, would:
     // 1. Create test database connection
     // 2. Run migrations
@@ -41,7 +41,7 @@ pub fn setup_test_db() {
 ///
 /// This should be called at the end of each test.
 /// Removes test data and closes connections.
-pub fn cleanup_test_db() {
+public fn cleanup_test_db() {
     // In production, would:
     // 1. Drop all test data
     // 2. Close database connections
@@ -60,7 +60,7 @@ pub fn cleanup_test_db() {
 /// ```
 /// let user = create_test_user("alice");
 /// ```
-pub fn create_test_user(username: Text) -> User {
+public fn create_test_user(username: Text) -> User {
     User {
         id: generate_test_id(),
         username: username,
@@ -76,7 +76,7 @@ pub fn create_test_user(username: Text) -> User {
 /// Create an admin user for testing
 ///
 /// Returns authentication token for the admin user.
-pub fn create_admin_user(username: Text, email: Text) -> Text {
+public fn create_admin_user(username: Text, email: Text) -> Text {
     // Register admin user
     register_user(RegisterRequestDto {
         username: username.clone(),
@@ -100,7 +100,7 @@ pub fn create_admin_user(username: Text, email: Text) -> Text {
 /// ```
 /// let token = login_test_user("alice", "password123");
 /// ```
-pub fn login_test_user(username: Text, password: Text) -> Text {
+public fn login_test_user(username: Text, password: Text) -> Text {
     let login_req = LoginRequestDto {
         username: username,
         password: password,
@@ -114,7 +114,7 @@ pub fn login_test_user(username: Text, password: Text) -> Text {
 // ============================================================================
 
 /// Create a test package with default values
-pub fn create_test_package(name: Text, owner: Text) -> Package {
+public fn create_test_package(name: Text, owner: Text) -> Package {
     Package {
         name: name,
         description: "Test package",
@@ -133,7 +133,7 @@ pub fn create_test_package(name: Text, owner: Text) -> Package {
 /// Publish a test package with minimal required fields
 ///
 /// Returns the published package version.
-pub async fn publish_test_package(
+public async fn publish_test_package(
     name: Text,
     version: Text,
     auth_token: Text
@@ -156,7 +156,7 @@ pub async fn publish_test_package(
 }
 
 /// Generate a test tarball (simulated binary data)
-pub fn generate_test_tarball() -> List<Int> {
+public fn generate_test_tarball() -> List<Int> {
     // In production, would generate actual tarball bytes
     // For now, return placeholder bytes
     let mut tarball = List.new();
@@ -176,7 +176,7 @@ pub fn generate_test_tarball() -> List<Int> {
 /// ```
 /// assert_ok(&result);
 /// ```
-pub fn assert_ok<T, E>(result: &Result<T, E>) {
+public fn assert_ok<T, E>(result: &Result<T, E>) {
     match result {
         Result.Ok(_) => {
             // Success
@@ -193,7 +193,7 @@ pub fn assert_ok<T, E>(result: &Result<T, E>) {
 /// ```
 /// assert_err(&result);
 /// ```
-pub fn assert_err<T, E>(result: &Result<T, E>) {
+public fn assert_err<T, E>(result: &Result<T, E>) {
     match result {
         Result.Ok(_) => {
             panic("Expected Err, got Ok");
@@ -210,7 +210,7 @@ pub fn assert_err<T, E>(result: &Result<T, E>) {
 /// ```
 /// assert_eq(&actual, &expected);
 /// ```
-pub fn assert_eq<T: Eq>(actual: &T, expected: &T) {
+public fn assert_eq<T: Eq>(actual: &T, expected: &T) {
     if actual != expected {
         panic(f"Assertion failed: {actual} != {expected}");
     }
@@ -222,7 +222,7 @@ pub fn assert_eq<T: Eq>(actual: &T, expected: &T) {
 /// ```
 /// assert_ne(&actual, &unexpected);
 /// ```
-pub fn assert_ne<T: Eq>(actual: &T, unexpected: &T) {
+public fn assert_ne<T: Eq>(actual: &T, unexpected: &T) {
     if actual == unexpected {
         panic(f"Assertion failed: {actual} == {unexpected}");
     }
@@ -234,14 +234,14 @@ pub fn assert_ne<T: Eq>(actual: &T, unexpected: &T) {
 /// ```
 /// assert(&condition);
 /// ```
-pub fn assert(condition: &Bool) {
+public fn assert(condition: &Bool) {
     if !condition {
         panic("Assertion failed: expected true, got false");
     }
 }
 
 /// Assert that a boolean is false
-pub fn assert_false(condition: &Bool) {
+public fn assert_false(condition: &Bool) {
     if condition {
         panic("Assertion failed: expected false, got true");
     }
@@ -271,19 +271,19 @@ fn test_timestamp() -> Int {
 }
 
 /// Generate random string of specified length
-pub fn random_string(length: Int) -> Text {
+public fn random_string(length: Int) -> Text {
     // In production, would generate cryptographically secure random string
     // For now, return placeholder
     "random" + f"{length}"
 }
 
 /// Generate random email
-pub fn random_email() -> Text {
+public fn random_email() -> Text {
     random_string(8) + "@test.example.com"
 }
 
 /// Generate random package name
-pub fn random_package_name() -> Text {
+public fn random_package_name() -> Text {
     "test-pkg-" + random_string(6)
 }
 
@@ -292,25 +292,25 @@ pub fn random_package_name() -> Text {
 // ============================================================================
 
 /// Simulate database failure for resilience testing
-pub fn simulate_database_failure(should_fail: Bool) {
+public fn simulate_database_failure(should_fail: Bool) {
     // In production, would set flag that makes DB operations fail
     print(f"[TEST] Simulating database failure: {should_fail}");
 }
 
 /// Simulate slow operation for timeout testing
-pub fn simulate_slow_operation(delay_ms: Int) {
+public fn simulate_slow_operation(delay_ms: Int) {
     // In production, would inject delay into operations
     print(f"[TEST] Simulating slow operation: {delay_ms}ms");
 }
 
 /// Reset failure simulations
-pub fn reset_failure_simulation() {
+public fn reset_failure_simulation() {
     // In production, would clear all failure flags
     print("[TEST] Resetting failure simulations");
 }
 
 /// Sleep for specified milliseconds (for testing)
-pub fn sleep(ms: Int) {
+public fn sleep(ms: Int) {
     // In production, would actually sleep
     // For now, no-op
     print(f"[TEST] Sleep {ms}ms");
@@ -350,7 +350,7 @@ implement TestContext {
 // ============================================================================
 
 /// Create test HTTP headers with authentication
-pub fn auth_headers(token: Text) -> List<(Text, Text)> {
+public fn auth_headers(token: Text) -> List<(Text, Text)> {
     let mut headers = List.new();
     headers.push(("Authorization", f"Bearer {token}"));
     headers.push(("Content-Type", "application/json"));
@@ -358,7 +358,7 @@ pub fn auth_headers(token: Text) -> List<(Text, Text)> {
 }
 
 /// Parse JSON response (simplified)
-pub fn parse_json_response(body: Text) -> Maybe<Text> {
+public fn parse_json_response(body: Text) -> Maybe<Text> {
     // In production, would parse JSON
     // For now, return body as-is
     Maybe.Some(body)
@@ -369,12 +369,12 @@ pub fn parse_json_response(body: Text) -> Maybe<Text> {
 // ============================================================================
 
 /// Check if string contains substring
-pub fn contains(text: &Text, substring: &Text) -> Bool {
+public fn contains(text: &Text, substring: &Text) -> Bool {
     text.contains(substring)
 }
 
 /// Check if list contains element
-pub fn list_contains<T: Eq>(list: &List<T>, element: &T) -> Bool {
+public fn list_contains<T: Eq>(list: &List<T>, element: &T) -> Bool {
     for item in list {
         if item == element {
             return true;
@@ -388,19 +388,19 @@ pub fn list_contains<T: Eq>(list: &List<T>, element: &T) -> Bool {
 // ============================================================================
 
 /// Print test separator
-pub fn print_test_separator() {
+public fn print_test_separator() {
     print("========================================");
 }
 
 /// Print test header
-pub fn print_test_header(name: Text) {
+public fn print_test_header(name: Text) {
     print_test_separator();
     print(f"TEST: {name}");
     print_test_separator();
 }
 
 /// Print test result
-pub fn print_test_result(name: Text, passed: Bool) {
+public fn print_test_result(name: Text, passed: Bool) {
     let status = if passed { "PASSED" } else { "FAILED" };
     print(f"[{status}] {name}");
 }
