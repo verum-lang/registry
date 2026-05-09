@@ -125,7 +125,7 @@ public type SevenLayers is {
 
 /// Compute the load-bearing verdict — true iff every check below
 /// passes. This is the canonical `[T]` Theorem witness.
-pub fn compute_load_bearing(
+public fn compute_load_bearing(
     constructive: &AxisVerdict,
     verifiable:   &AxisVerdict,
     executable:   &AxisVerdict,
@@ -161,7 +161,7 @@ fn is_passing(v: &LayerVerdict) -> Bool {
 // Bundle generation
 // =============================================================================
 
-pub async fn generate_cve_bundle(
+public async fn generate_cve_bundle(
     cog_id: Text,
     lifecycle: Lifecycle,
     constructive: AxisVerdict,
@@ -196,7 +196,7 @@ public type DeveloperSummary is {
     text: Text,
 }
 
-pub fn render_developer_summary(b: &CveBundle) -> DeveloperSummary {
+public fn render_developer_summary(b: &CveBundle) -> DeveloperSummary {
     let glyph = lifecycle_glyph(&b.lifecycle);
     let cve = f"{if is_closed(&b.cve_constructive) { "✓" } else { "✗" }} {if is_closed(&b.cve_verifiable)   { "✓" } else { "✗" }} {if is_closed(&b.cve_executable)   { "✓" } else { "✗" }}";
     let ap = f"{40 - b.anti_patterns.error_count - b.anti_patterns.warning_count}/40 ok";
@@ -241,7 +241,7 @@ public type AuditorJson is {
 
 const SCHEMA_VERSION: Text = "1.0";
 
-pub fn render_auditor_json(b: &CveBundle) -> AuditorJson {
+public fn render_auditor_json(b: &CveBundle) -> AuditorJson {
     let mut obj: Map<Text, JsonValue> = Map.new();
     obj.insert("schemaVersion".to_text(), json_string(SCHEMA_VERSION.to_text()));
     obj.insert("cog".to_text(),           json_string(b.cog.clone()));

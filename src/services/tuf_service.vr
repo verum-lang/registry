@@ -130,7 +130,7 @@ implement Debug for TufError {
 
 implement TufService {
     /// Boot — load latest known versions of each role from Postgres.
-    pub async fn new(keys: TufKeyMaterial) -> Result<TufService, TufError>
+    public async fn new(keys: TufKeyMaterial) -> Result<TufService, TufError>
         using [Database]
     {
         let repo = TufMetadataRepository {};
@@ -160,7 +160,7 @@ implement TufService {
     }
 
     /// Serve a root.json — version-prefixed (consistent_snapshot mode).
-    pub async fn serve_root(&self, version: Int) -> Result<List<Byte>, TufError>
+    public async fn serve_root(&self, version: Int) -> Result<List<Byte>, TufError>
         using [Database, Cache]
     {
         let repo = TufMetadataRepository {};
@@ -171,7 +171,7 @@ implement TufService {
     }
 
     /// Serve the latest timestamp.json — unversioned URL.
-    pub async fn serve_timestamp(&self) -> Result<List<Byte>, TufError>
+    public async fn serve_timestamp(&self) -> Result<List<Byte>, TufError>
         using [Database, Cache]
     {
         let repo = TufMetadataRepository {};
@@ -181,7 +181,7 @@ implement TufService {
         Ok(m.content_bytes)
     }
 
-    pub async fn serve_snapshot(&self, version: Int) -> Result<List<Byte>, TufError>
+    public async fn serve_snapshot(&self, version: Int) -> Result<List<Byte>, TufError>
         using [Database, Cache]
     {
         let repo = TufMetadataRepository {};
@@ -191,7 +191,7 @@ implement TufService {
         Ok(m.content_bytes)
     }
 
-    pub async fn serve_targets(&self, version: Int) -> Result<List<Byte>, TufError>
+    public async fn serve_targets(&self, version: Int) -> Result<List<Byte>, TufError>
         using [Database, Cache]
     {
         let repo = TufMetadataRepository {};
@@ -203,7 +203,7 @@ implement TufService {
 
     /// Re-sign targets.json. Called by PublishService Phase 8 after
     /// each successful publish.
-    pub async fn resign_targets(&self) -> Result<Int, TufError>
+    public async fn resign_targets(&self) -> Result<Int, TufError>
         using [Database]
     {
         let repo = TufMetadataRepository {};
@@ -242,7 +242,7 @@ implement TufService {
 
     /// Background ticker: refresh timestamp every hour, snapshot every
     /// day. Spawned at server bootstrap.
-    pub async fn run_refresh_loop(self) -> Result<(), TufError>
+    public async fn run_refresh_loop(self) -> Result<(), TufError>
         using [Database, Logger]
     {
         let mut tick: Int = 0;
@@ -346,7 +346,7 @@ implement TufService {
     /// Quarterly root rotation. Rotates root threshold keys + writes
     /// a new tuf_root_history row signed by BOTH the previous root
     /// keys AND the new root keys (TUF spec §5.1 cross-signing).
-    pub async fn rotate_root(
+    public async fn rotate_root(
         &self,
         new_keys: TufKeyMaterial,
     ) -> Result<Int, TufError>

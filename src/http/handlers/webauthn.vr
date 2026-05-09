@@ -58,7 +58,7 @@ mount security.webauthn.authenticate.AuthenticationOptions;
 // =============================================================================
 
 /// POST /api/v3/auth/webauthn/register/begin
-pub async fn register_begin(req: WeftRequest) -> Response
+public async fn register_begin(req: WeftRequest) -> Response
     using [WebAuthnService, AuthService, Cache, Logger]
 {
     let user = match AuthService.session_user(&req).await {
@@ -86,7 +86,7 @@ pub async fn register_begin(req: WeftRequest) -> Response
 }
 
 /// POST /api/v3/auth/webauthn/register/finish
-pub async fn register_finish(req: WeftRequest) -> Response
+public async fn register_finish(req: WeftRequest) -> Response
     using [WebAuthnService, AuthService, Cache, Logger]
 {
     let user = match AuthService.session_user(&req).await {
@@ -139,7 +139,7 @@ pub async fn register_finish(req: WeftRequest) -> Response
 // =============================================================================
 
 /// POST /api/v3/auth/webauthn/authenticate/begin
-pub async fn authenticate_begin(req: WeftRequest) -> Response
+public async fn authenticate_begin(req: WeftRequest) -> Response
     using [WebAuthnService, Cache, Logger]
 {
     // The body MAY include a username for non-discoverable login.
@@ -167,7 +167,7 @@ pub async fn authenticate_begin(req: WeftRequest) -> Response
 }
 
 /// POST /api/v3/auth/webauthn/authenticate/finish
-pub async fn authenticate_finish(req: WeftRequest) -> Response
+public async fn authenticate_finish(req: WeftRequest) -> Response
     using [WebAuthnService, AuthService, Cache, Logger]
 {
     let body: AuthFinishBody = match req.json().await {
@@ -223,7 +223,7 @@ pub async fn authenticate_finish(req: WeftRequest) -> Response
 // =============================================================================
 
 /// GET /api/v3/auth/passkeys
-pub async fn list_passkeys(req: WeftRequest) -> Response
+public async fn list_passkeys(req: WeftRequest) -> Response
     using [WebAuthnService, AuthService, Logger]
 {
     let user = match AuthService.session_user(&req).await {
@@ -254,7 +254,7 @@ pub async fn list_passkeys(req: WeftRequest) -> Response
 }
 
 /// DELETE /api/v3/auth/passkeys/:id
-pub async fn revoke_passkey(req: WeftRequest) -> Response
+public async fn revoke_passkey(req: WeftRequest) -> Response
     using [WebAuthnService, AuthService, Logger]
 {
     let user = match AuthService.session_user(&req).await {

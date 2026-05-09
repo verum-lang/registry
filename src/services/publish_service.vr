@@ -228,10 +228,7 @@ implement PublishService {
     ) -> Result<AnalyzedArchive, PublishError> using [Logger, Metrics] {
         // 5a. SHA-256 of the archive bytes.
         let source_sha256_bytes = sha256_digest(archive_bytes);
-        let source_sha256 = match Hex64::try_from(hex_encode(&source_sha256_bytes)) {
-            Ok(h)  => h,
-            Err(e) => return Err(InternalError(f"hex format: {e}")),
-        };
+        let source_sha256 = Hex64(hex_encode(&source_sha256_bytes));
 
         // 5b. Decompress (zstd) + unpack (tar).
         let tar_bytes = match zstd.decode(archive_bytes) {
@@ -269,12 +266,9 @@ implement PublishService {
 
         // 5e. Extract CVE-shape signals.
         let cve_lifecycle = compile_report.shape.lifecycle.clone();
-        let shape_declarations_digest = match Hex64::try_from(
+        let shape_declarations_digest = Hex64(
             hex_encode(&hash_canonical_shape(&compile_report.shape.declarations))
-        ) {
-            Ok(h)  => h,
-            Err(e) => return Err(InternalError(f"hex format: {e}")),
-        };
+        );
         let verification_level = render_verification_level(&compile_report.verification_level);
 
         Ok(AnalyzedArchive {
@@ -763,10 +757,9 @@ fn language_profile_to_text(p: &LanguageProfile) -> Text {
 }
 
 fn render_verification_level(l: &verify.level.VerificationLevel) -> VerificationLevel {
-    let text = verify.level.to_annotation(*l);
-    VerificationLevel::try_from(text).unwrap_or_else(|_| {
-        VerificationLevel::try_from("runtime".to_text()).unwrap()
-    })
+    // VerificationLevel is a Text newtype; the runtime annotation is the
+    // canonical persisted form.
+    verify.level.to_annotation(*l)
 }
 
 fn dependencies_to_jsonb(deps: &Map<Text, DependencySpec>) -> Text {

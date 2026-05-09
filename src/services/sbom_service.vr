@@ -457,5 +457,5 @@ fn json_array_of(values: List<JsonValue>) -> JsonValue {
 
 fn sha256_to_hex64(bytes: &List<Byte>) -> Result<Hex64, SbomError> {
     let hex = hex_encode(&sha256_digest(bytes));
-    Hex64::try_from(hex).map_err(|e| EncodingFailed(f"hex: {e}"))
+    Ok(Hex64(hex))
 }

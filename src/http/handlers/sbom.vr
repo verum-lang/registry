@@ -59,20 +59,20 @@ type SbomFormat is CycloneDx | Spdx;
 
 /// Combined entry — `?format=` query selects which form to return.
 /// Default: CycloneDX (the more widely-tooled format).
-pub async fn handle_sbom(req: WeftRequest) -> Response
+public async fn handle_sbom(req: WeftRequest) -> Response
     using [Storage, Cache, Logger]
 {
     let fmt = parse_format_query(&req).unwrap_or(SbomFormat.CycloneDx);
     serve_sbom(req, fmt).await
 }
 
-pub async fn handle_sbom_cyclonedx(req: WeftRequest) -> Response
+public async fn handle_sbom_cyclonedx(req: WeftRequest) -> Response
     using [Storage, Cache, Logger]
 {
     serve_sbom(req, SbomFormat.CycloneDx).await
 }
 
-pub async fn handle_sbom_spdx(req: WeftRequest) -> Response
+public async fn handle_sbom_spdx(req: WeftRequest) -> Response
     using [Storage, Cache, Logger]
 {
     serve_sbom(req, SbomFormat.Spdx).await

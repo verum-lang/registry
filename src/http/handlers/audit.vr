@@ -59,7 +59,7 @@ const POSET_MAX_DEPTH: Int = 8;
 // GET /api/audit/lifecycle
 // =============================================================================
 
-pub async fn lifecycle(_req: WeftRequest) -> Response
+public async fn lifecycle(_req: WeftRequest) -> Response
     using [AuditService, Logger]
 {
     let dist = match AuditService.lifecycle_distribution().await {
@@ -108,7 +108,7 @@ pub async fn lifecycle(_req: WeftRequest) -> Response
 // GET /api/audit/anti-patterns/:scope/:name/:version  — per-cog
 // =============================================================================
 
-pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
+public async fn corpus_anti_patterns(_req: WeftRequest) -> Response
     using [AuditService, Logger]
 {
     let summary = match AuditService.corpus_anti_patterns().await {
@@ -139,7 +139,7 @@ pub async fn corpus_anti_patterns(_req: WeftRequest) -> Response
     Response.json(&json_object(obj))
 }
 
-pub async fn cog_anti_patterns(req: WeftRequest) -> Response
+public async fn cog_anti_patterns(req: WeftRequest) -> Response
     using [CogAuditRepository, Logger]
 {
     let cog_id = match cog_id_from_req(&req) {
@@ -195,7 +195,7 @@ fn finding_to_json(f: &AntiPatternFinding) -> JsonValue {
 // GET /api/audit/cve-bundle/:scope/:name/:version
 // =============================================================================
 
-pub async fn cog_cve_bundle(req: WeftRequest) -> Response
+public async fn cog_cve_bundle(req: WeftRequest) -> Response
     using [CogAuditRepository, Logger]
 {
     let cog_id = match cog_id_from_req(&req) {
@@ -226,7 +226,7 @@ pub async fn cog_cve_bundle(req: WeftRequest) -> Response
 // GET /api/audit/self  — registry's own bundle
 // =============================================================================
 
-pub async fn self_audit(req: WeftRequest) -> Response
+public async fn self_audit(req: WeftRequest) -> Response
     using [Logger]
 {
     let result = match run_self_audit().await {

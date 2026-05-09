@@ -80,7 +80,7 @@ public type SelfAuditResult is {
 /// The compiled-shape blob is supplied at boot time (the build
 /// pipeline embeds it via `include_bytes!`); we read it fresh on
 /// each call so a hot-reloaded registry sees its current state.
-pub async fn run_self_audit() -> Result<SelfAuditResult, AuditError>
+public async fn run_self_audit() -> Result<SelfAuditResult, AuditError>
     using [Logger]
 {
     // The registry's own compiled Shape — embedded at build time.

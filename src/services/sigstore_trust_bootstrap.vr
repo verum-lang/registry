@@ -180,7 +180,7 @@ implement TufService {
     /// trust root.  Self-audit at `/api/audit/self` reports the
     /// last-successful refresh timestamp on the supply-chain
     /// invariant card.
-    pub async fn fetch_sigstore_trust_root<C: HttpClient>(
+    public async fn fetch_sigstore_trust_root<C: HttpClient>(
         &self,
         http:   &C,
         config: &TufConfig,

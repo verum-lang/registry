@@ -111,7 +111,7 @@ implement SigstoreService {
     /// Verify a publisher-supplied bundle at PublishService Phase 1b.
     /// `expected` comes from the package's `[publish.trusted_publishers]`
     /// config (or first-publish default).
-    pub async fn verify_publish_bundle<C: HttpClient>(
+    public async fn verify_publish_bundle<C: HttpClient>(
         &self,
         http: &C,
         bundle: &SigstoreBundle,
@@ -171,7 +171,7 @@ implement SigstoreService {
 
     /// Audit query — list bundles published under a given OIDC
     /// identity. Drives the "audit by publisher" UX.
-    pub async fn list_by_identity(
+    public async fn list_by_identity(
         &self,
         issuer: &Text,
         subject: &Text,

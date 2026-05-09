@@ -50,7 +50,7 @@ mount security.sigstore.verify.{IdentityMatcher, ExpectedIdentity};
 const BUNDLE_CONTENT_TYPE: Text = SIGSTORE_BUNDLE_MEDIA_TYPE;
 
 /// GET /api/v3/packages/:scope/:name/:version/bundle
-pub async fn get_bundle(req: WeftRequest) -> Response
+public async fn get_bundle(req: WeftRequest) -> Response
     using [SigstoreService, VersionRepository, Cache, Logger]
 {
     let scope_text = req.path_param("scope").unwrap_or_else(|| "".to_text());
@@ -119,7 +119,7 @@ pub async fn get_bundle(req: WeftRequest) -> Response
 ///   }
 /// }
 /// ```
-pub async fn verify_bundle(req: WeftRequest) -> Response
+public async fn verify_bundle(req: WeftRequest) -> Response
     using [SigstoreService, HttpClient, Logger]
 {
     let body: VerifyBody = match req.json().await {

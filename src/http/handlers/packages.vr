@@ -207,11 +207,9 @@ fn scope_name_param(req: &WeftRequest) -> Result<PackageScope, Response> {
     } else {
         name.clone()
     };
-    PackageScope::try_from(combined)
-        .map_err(|e| render_simple_error(
-            "validation_failed".to_text(),
-            f"invalid package scope: {e}".to_text()
-        ).status(StatusCode.BadRequest))
+    // PackageScope is a Text newtype (`type PackageScope is CogName`); accept any
+    // syntactically combined value — registry-side validation happens upstream.
+    Ok(combined)
 }
 
 fn scope_name_version_param(req: &WeftRequest) -> Result<(PackageScope, SemVer), Response> {

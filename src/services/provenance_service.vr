@@ -51,7 +51,7 @@ implement ProvenanceService {
     /// from a trusted-publishing flow.  When G7 lands, this returns a
     /// fully-signed DSSE envelope; until then, returns `None` (publish
     /// proceeds without an attestation).
-    pub async fn build_provenance(
+    public async fn build_provenance(
         &self,
         manifest: &CogManifest,
         source_sha256: &Hex64,
@@ -63,7 +63,7 @@ implement ProvenanceService {
     }
 
     /// Verify a publisher-uploaded provenance attestation.
-    pub async fn verify(
+    public async fn verify(
         &self,
         envelope: &Text,
         package: &PackageScope,

@@ -42,7 +42,7 @@ mount verum_registry.http.error_response.render_error;
 const TUF_CONTENT_TYPE: Text = "application/json";
 
 /// GET /tuf/<n>.root.json
-pub async fn root(req: WeftRequest) -> Response
+public async fn root(req: WeftRequest) -> Response
     using [TufService, Cache, Logger]
 {
     let version = match parse_version_param(&req) {
@@ -68,7 +68,7 @@ pub async fn root(req: WeftRequest) -> Response
 }
 
 /// GET /tuf/timestamp.json
-pub async fn timestamp(_req: WeftRequest) -> Response
+public async fn timestamp(_req: WeftRequest) -> Response
     using [TufService, Cache, Logger]
 {
     match TufService.serve_timestamp().await {
@@ -91,7 +91,7 @@ pub async fn timestamp(_req: WeftRequest) -> Response
 }
 
 /// GET /tuf/<n>.snapshot.json
-pub async fn snapshot(req: WeftRequest) -> Response
+public async fn snapshot(req: WeftRequest) -> Response
     using [TufService, Cache, Logger]
 {
     let version = match parse_version_param(&req) {
@@ -117,7 +117,7 @@ pub async fn snapshot(req: WeftRequest) -> Response
 }
 
 /// GET /tuf/<n>.targets.json
-pub async fn targets(req: WeftRequest) -> Response
+public async fn targets(req: WeftRequest) -> Response
     using [TufService, Cache, Logger]
 {
     let version = match parse_version_param(&req) {

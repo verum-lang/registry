@@ -276,7 +276,7 @@ public type AntiPatternRoster is {
 /// the cog's compiled Shape.  The kernel surface returns a
 /// flat `List<KernelFinding>`; we lift each finding to our typed
 /// `AntiPatternFinding` and densify the missing entries to `Ok`.
-pub async fn anti_pattern_roster_for_cog(
+public async fn anti_pattern_roster_for_cog(
     cog_id: &Text,
     compiled_shape_blob: &List<Byte>,
 ) -> Result<AntiPatternRoster, AuditError>
