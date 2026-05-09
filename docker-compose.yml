@@ -1,5 +1,28 @@
 version: '3.8'
 
+# Verum Registry — full-fidelity local stack.
+#
+# Spins up every dependency the v3.0 registry uses:
+#   * postgres-17     — primary persistence (packages, versions, owners,
+#                       tokens, sumdb_entries, sumdb_tree_heads,
+#                       cog_audit_records, sigstore_bundles, passkeys,
+#                       tuf_root_history, tuf_signed_metadata)
+#   * redis-7         — cache + sliding-window rate-limit counters
+#   * meilisearch     — package full-text search
+#   * minio           — S3-compatible object store for source archives
+#                       and SBOM artefacts
+#   * registry        — the application itself
+#
+# Sigstore (Rekor v2 + Fulcio) and TUF do NOT run as containers — the
+# registry talks to the Sigstore-staging hosted services
+# (rekor.sigstage.dev / fulcio.sigstage.dev) and serves TUF metadata
+# itself from /tuf/ endpoints.  WebAuthn is protocol-only with no
+# external service dependency.
+#
+# Bring everything up: `docker compose up -d`
+# Run smoke tests:     `./scripts/run-integration-tests.sh`
+# Tear down:           `docker compose down -v`
+
 services:
   registry:
     build: .
@@ -10,8 +33,25 @@ services:
       STORAGE_PATH: /data/packages
       REDIS_URL: redis://redis:6379
       SEARCH_URL: http://meilisearch:7700
-      REGISTRY_HOST: 0.0.0.0:8080
-      RUST_LOG: info
+      MEILI_MASTER_KEY: verum-search-key
+      # S3 — minio in dev, swap endpoint for prod AWS S3 / R2 / etc.
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: verum-registry-packages
+      AWS_ACCESS_KEY_ID: verumregistry
+      AWS_SECRET_ACCESS_KEY: verumregistry-dev-secret
+      # Sigstore — point at staging by default; production deployments
+      # override these to the production Sigstore endpoints.
+      SIGSTORE_REKOR_URL:    https://rekor.sigstage.dev
+      SIGSTORE_FULCIO_URL:   https://fulcio.sigstage.dev
+      SIGSTORE_OIDC_ISSUER:  https://oauth2.sigstage.dev/auth
+      # TUF — registry-served from /tuf/ endpoints; no external service.
+      # WebAuthn — protocol-only.
+      WEBAUTHN_RP_ID:    localhost
+      WEBAUTHN_RP_NAME:  Verum Registry (dev)
+      WEBAUTHN_ORIGIN:   http://localhost:8080
+      REGISTRY_HOST:     0.0.0.0:8080
+      RUST_LOG:          info
     depends_on:
       postgres:
         condition: service_healthy
@@ -19,6 +59,10 @@ services:
         condition: service_started
       meilisearch:
         condition: service_started
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     volumes:
       - package-data:/data/packages
     restart: unless-stopped
@@ -42,6 +86,11 @@ services:
     image: redis:7-alpine
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
   meilisearch:
@@ -51,10 +100,50 @@ services:
       MEILI_ENV: production
     volumes:
       - search-data:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    environment:
+      MINIO_ROOT_USER:     verumregistry
+      MINIO_ROOT_PASSWORD: verumregistry-dev-secret
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot bucket bootstrap. Creates the registry bucket on first run
+  # and exits cleanly. Required before the registry container starts so
+  # source-archive uploads don't fail with NoSuchBucket.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 verumregistry verumregistry-dev-secret;
+      mc mb -p local/verum-registry-packages;
+      mc anonymous set download local/verum-registry-packages;
+      "
+    restart: "no"
 
 volumes:
   pg-data:
   package-data:
   redis-data:
   search-data:
+  minio-data:
