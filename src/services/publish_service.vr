@@ -85,10 +85,17 @@ mount verum_registry.services.sbom_service.{
 
 public type PublishService is {
     pool: AsyncPgPool,
+    /// Cog-signing seed loaded at startup from the operator-provided
+    /// signing-key file (same path used by SumdbService for the
+    /// transparency-log STH signing).  Both services use the
+    /// registry's single signing identity.
+    signing_seed: Ed25519Seed,
 };
 
 implement PublishService {
-    public fn new(pool: AsyncPgPool) -> PublishService { PublishService { pool } }
+    public fn new(pool: AsyncPgPool, signing_seed: Ed25519Seed) -> PublishService {
+        PublishService { pool, signing_seed }
+    }
 
     /// Eight-phase publish.  Returns the persisted `PackageVersion`
     /// on success; otherwise the structured `PublishError`.
@@ -567,11 +574,10 @@ implement PublishService {
     }
 
     fn signing_seed(&self) -> Ed25519Seed {
-        // The signing seed is provisioned at deploy time; the registry
-        // process loads it from the configured path.  In a real impl
-        // this would be cached on the service struct; here we route
-        // through the Storage context which holds the singleton.
-        unreachable()  // wired up by the Config-driven initialiser
+        // Loaded at startup from the operator-provided signing-key
+        // path (config.sumdb.signing_key_path).  Wired through main.vr
+        // via PublishService.new(pool, seed).
+        self.signing_seed
     }
 
     async fn upsert_package_with_conn(

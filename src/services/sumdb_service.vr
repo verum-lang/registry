@@ -195,7 +195,11 @@ implement SumdbService {
 // Helpers
 // =============================================================================
 
-fn load_or_init_signing_seed(path: &Text) -> Result<security.ecc.ed25519.Ed25519Seed, Text> {
+/// Load the registry's single signing identity from disk, or generate
+/// + persist a fresh one on first run (mode 0600).  Used by both
+/// SumdbService (signs transparency-log STH) and PublishService
+/// (signs cog manifests in phase6_generate_artefacts).
+public fn load_or_init_signing_seed(path: &Text) -> Result<security.ecc.ed25519.Ed25519Seed, Text> {
     match io.fs.read(path) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut seed: [Byte; 32] = [0_u8; 32];

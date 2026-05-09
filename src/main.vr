@@ -226,8 +226,16 @@ public async fn main() -> Result<(), Text> {
     let audit = AuditService.new(db_pool.clone());
     let sbom = SbomService.new(env_or("VERUM_REGISTRY_VERSION", "0.0.0").to_text());
 
+    // Load the registry's single signing identity.  The same Ed25519
+    // seed signs sumdb tree-heads (transparency log) and cog manifests
+    // (PublishService phase 6); persisted at the configured path so
+    // restarts retain the operator-provisioned identity.
+    let signing_seed = verum_registry.services.sumdb_service.load_or_init_signing_seed(
+        &config.sumdb.signing_key_path
+    ).map_err(|e| f"signing key load failed: {e}")?;
+
     let services = ServiceRegistry {
-        publish:    PublishService.new(db_pool.clone()),
+        publish:    PublishService.new(db_pool.clone(), signing_seed),
         search:     SearchService.new(db_pool.clone()),
         sumdb:      SumdbService.from_db(&db_pool, &config.sumdb).await
             .map_err(|e| f"sumdb init failed: {e}")?,
