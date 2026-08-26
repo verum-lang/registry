@@ -19,6 +19,10 @@ mount verum_registry.protocol.authority.{
     Authority, AuthorityRole, NamePattern, PackageName,
     ResolutionError, resolve_authority,
 };
+mount verum_registry.protocol.evidence.{
+    Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
+    digest_of, verify,
+};
 
 /// The configuration a mirror runs with: an upstream, and nothing owned.
 /// A node that owns nothing cannot publish, which is what a mirror is.
@@ -77,6 +81,44 @@ fn describe(label: &Text, authorities: &List<Authority>, name: &Text) {
     }
 }
 
+/// A manifest and evidence that genuinely belong together.
+fn sample_manifest() -> Manifest {
+    Manifest {
+        name: PackageName("@acme/widgets"),
+        version: "1.4.2",
+        artefact: Digest("blake3:c0ffee"),
+        published_at: 1756200000,
+    }
+}
+
+fn check_evidence(
+    label: &Text,
+    manifest: Manifest,
+    sig_digest: Digest,
+    proof_digest: Digest,
+    log_id: Text,
+    tree_size: Int,
+    expected_log: &Text,
+) {
+    let sig = SignatureBundle { manifest_digest: sig_digest, signer: "acme-ci" };
+    let proof = InclusionProof {
+        manifest_digest: proof_digest,
+        log_id: log_id,
+        tree_size: tree_size,
+    };
+    match verify(manifest, &sig, &proof, "upstream", AuthorityRole.Upstream, expected_log) {
+        Ok(v) => print(f"{label}: accepted, log={v.log_id}"),
+        Err(EvidenceError.SignatureCoversOtherManifest) =>
+            print(f"{label}: refused, signature covers another manifest"),
+        Err(EvidenceError.ProofCoversOtherManifest) =>
+            print(f"{label}: refused, proof covers another manifest"),
+        Err(EvidenceError.ProofFromWrongLog(which)) =>
+            print(f"{label}: refused, proof is from log {which}"),
+        Err(EvidenceError.EmptyLog) =>
+            print(f"{label}: refused, empty log"),
+    }
+}
+
 fn main() {
     // A mirror attributes everything upstream — including names nobody
     // configured, which is the ordinary case.
@@ -90,4 +132,25 @@ fn main() {
     // Two claimants are REFUSED rather than ranked. This is the rule the
     // whole design turns on: precedence is how a substitution hides.
     describe(&"shadowing", &shadowing_node(), &"serde");
+
+    // --- the verification chain (protocol spec §2) ---
+    let upstream_log = "upstream-log";
+    let good = digest_of(&sample_manifest());
+
+    check_evidence(&"complete", sample_manifest(), good.clone(), good.clone(),
+                   "upstream-log", 42, &upstream_log);
+
+    // A signature over something else must not carry this manifest.
+    check_evidence(&"wrong-signature", sample_manifest(), Digest("blake3:beef"),
+                   good.clone(), "upstream-log", 42, &upstream_log);
+
+    // The misattribution case: a node offering ITS OWN log as proof for
+    // a coordinate attributed upstream. Detectable because the proof
+    // says which log it belongs to.
+    check_evidence(&"relogged", sample_manifest(), good.clone(), good.clone(),
+                   "local-log", 42, &upstream_log);
+
+    // A log with no entries cannot include anything.
+    check_evidence(&"empty-log", sample_manifest(), good.clone(), good.clone(),
+                   "upstream-log", 0, &upstream_log);
 }

@@ -1,0 +1,143 @@
+// =============================================================================
+// verum_registry.protocol.evidence — what a client checks before believing
+// =============================================================================
+// Spec: registry-federation-protocol §2
+//
+// The rule this module carries: an artefact reaches storage only with ALL
+// THREE pieces of evidence, checked HERE, against the log belonging to
+// the authority that answered.
+//
+// It is carried by construction, not by discipline. `Verified` has no
+// constructor a caller can reach — the only way to obtain one is
+// `verify`, which returns it or a typed refusal. So "we checked" is not
+// a claim a code path can make about itself; it is a value it either
+// holds or does not.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.evidence;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+
+// -----------------------------------------------------------------------------
+// The pieces
+// -----------------------------------------------------------------------------
+
+/// A content digest, as bytes rendered hex. A newtype because a digest
+/// and a name are both text, and the compiler should be the one that
+/// notices when they are swapped.
+public type Digest is (Text);
+
+/// The canonical serialisation a signature covers: the coordinate, the
+/// artefact digest, and when it was published. Artefact bytes are
+/// covered transitively through their digest, so signing this signs the
+/// release.
+public type Manifest is {
+    name: PackageName,
+    version: Text,
+    artefact: Digest,
+    published_at: Int,
+};
+
+/// A signature over a manifest digest, and the identity that made it.
+public type SignatureBundle is {
+    manifest_digest: Digest,
+    signer: Text,
+};
+
+/// An inclusion proof placing a manifest digest in an append-only log.
+///
+/// `log_id` is what makes misattribution DETECTABLE: a node that re-logs
+/// upstream publications into its own log and offers that as proof is
+/// telling the client the wrong provenance, and the client can see it
+/// because the proof says which log it belongs to.
+public type InclusionProof is {
+    manifest_digest: Digest,
+    log_id: Text,
+    tree_size: Int,
+};
+
+// -----------------------------------------------------------------------------
+// The verdict
+// -----------------------------------------------------------------------------
+
+/// A manifest whose evidence was checked. Unreachable except through
+/// `verify` — see the module note.
+public type Verified is {
+    manifest: Manifest,
+    /// Which authority answered, so a stored artefact keeps its
+    /// provenance rather than becoming anonymous once it is on disk.
+    authority_id: Text,
+    role: AuthorityRole,
+    /// The log the inclusion proof belonged to, kept for the same reason.
+    log_id: Text,
+};
+
+/// Why evidence was refused. Each case names something an operator or a
+/// client can act on; none of them is "verification failed".
+public type EvidenceError is
+    /// The signature covers a different manifest than the one supplied.
+    | SignatureCoversOtherManifest
+    /// The inclusion proof is for a different manifest.
+    | ProofCoversOtherManifest
+    /// The proof belongs to a log other than the answering authority's —
+    /// the misattribution case (spec §2.3).
+    | ProofFromWrongLog(Text)
+    /// A log with no entries cannot include anything.
+    | EmptyLog;
+
+// -----------------------------------------------------------------------------
+// The check (spec §2.2, §2.3)
+// -----------------------------------------------------------------------------
+
+/// Check the three pieces against each other and against the authority
+/// that answered, and return a `Verified` or a typed refusal.
+///
+/// `expected_log` is the log the ANSWERING AUTHORITY owns — for an
+/// upstream-attributed coordinate that is the upstream's log, and a
+/// local node forwarding the upstream proof unchanged is what makes the
+/// two agree.
+public fn verify(
+    manifest: Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    authority_id: Text,
+    role: AuthorityRole,
+    expected_log: &Text,
+) -> Result<Verified, EvidenceError> {
+    let manifest_digest = digest_of(&manifest);
+
+    if signature.manifest_digest.0 != manifest_digest.0 {
+        return Result.Err(EvidenceError.SignatureCoversOtherManifest);
+    }
+    if proof.manifest_digest.0 != manifest_digest.0 {
+        return Result.Err(EvidenceError.ProofCoversOtherManifest);
+    }
+    if proof.tree_size <= 0 {
+        return Result.Err(EvidenceError.EmptyLog);
+    }
+    if proof.log_id != expected_log.clone() {
+        return Result.Err(EvidenceError.ProofFromWrongLog(proof.log_id.clone()));
+    }
+
+    Result.Ok(Verified {
+        manifest: manifest,
+        authority_id: authority_id,
+        role: role,
+        log_id: proof.log_id.clone(),
+    })
+}
+
+/// The manifest digest — the canonical serialisation, hashed.
+///
+/// Placeholder while the slice is about the RULES: a stable rendering
+/// stands in for the hash, so the shape of the evidence chain can be
+/// exercised before the hash function is wired. The rendering is
+/// canonical (fixed field order, no optional whitespace), which is the
+/// property the real digest needs too.
+public fn digest_of(m: &Manifest) -> Digest {
+    Digest(f"{m.name.0}@{m.version}:{m.artefact.0}:{m.published_at}")
+}
