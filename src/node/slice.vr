@@ -35,6 +35,7 @@ mount verum_registry.protocol.evidence.{
 };
 mount verum_registry.node.cache.{Cache};
 mount verum_registry.node.ambient.{Clock};
+mount core.async.{spawn};
 
 // -----------------------------------------------------------------------------
 // What travels
@@ -121,31 +122,64 @@ public fn import_slice(
     }
 
     // Pass 1 — verify everything, store nothing.
-    let mut verified: List<Verified> = List.new();
+    //
+    // FANNED OUT, and the two rules are the same rule. Structured
+    // concurrency says a parent does not finish before its children;
+    // all-or-nothing says nothing is stored until everything is
+    // verified. Spawning one verification per item and joining them all
+    // before the storing loop makes the second a consequence of the
+    // first rather than a discipline someone has to keep — there is no
+    // arrangement of this code in which a store runs while a
+    // verification is outstanding.
+    //
+    // It is also the shape that scales: a slice carries as many
+    // coordinates as an air-gapped site needs, and their verifications
+    // are independent by construction — each reads one item and shares
+    // nothing.
+    let mut pending: List<Future<Result<Verified, EvidenceError>>> = List.new();
+    let mut names: List<Text> = List.new();
     for item in slice.items.iter() {
-        let expected = item.log_id.clone();
         let m = Manifest {
             name: PackageName(item.manifest.name.0.clone()),
             version: item.manifest.version.clone(),
             artefact: Digest(item.manifest.artefact.0.clone()),
             published_at: item.manifest.published_at,
         };
-        match verify(
-            m,
-            &item.signature,
-            &item.proof,
-            item.authority_id.clone(),
-            item.role.clone(),
-            &expected,
-        ) {
+        let sig = SignatureBundle {
+            manifest_digest: Digest(item.signature.manifest_digest.0.clone()),
+            signer: item.signature.signer.clone(),
+        };
+        let prf = InclusionProof {
+            manifest_digest: Digest(item.proof.manifest_digest.0.clone()),
+            log_id: item.proof.log_id.clone(),
+            tree_size: item.proof.tree_size,
+        };
+        let who = item.authority_id.clone();
+        let role = item.role.clone();
+        let expected = item.log_id.clone();
+        names.push(item.manifest.name.0.clone());
+        pending.push(spawn(async {
+            verify(m, &sig, &prf, who, role, &expected)
+        }));
+    }
+
+    // The join. Every child has finished by the time this loop ends,
+    // which is what makes the refusal below total: a slice is refused
+    // for the FIRST item whose evidence did not check out, and no item
+    // has been stored.
+    let mut verified: List<Verified> = List.new();
+    let mut idx = 0;
+    for h in pending {
+        match h.await {
             Ok(v) => verified.push(v),
             Err(e) => {
                 return Result.Err(ImportError.ItemRefused(
-                    item.manifest.name.0.clone(),
+                    names[idx].clone(),
                     e,
                 ));
             }
         }
+        idx = idx + 1;
     }
 
     // Pass 2 — store, keeping the attribution each item arrived with.
