@@ -1,0 +1,14 @@
+// =============================================================================
+// verum_registry.node — the node itself: what it holds and what it serves
+// =============================================================================
+// Spec: docs/architecture/registry-federated-design.md §2
+//
+// One programme, two roles. Nothing here branches on "official" versus
+// "private" — a role selects policy, never a different code path.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node;

@@ -1,0 +1,105 @@
+// =============================================================================
+// verum_registry.node.cache — what a node keeps, and what it says offline
+// =============================================================================
+// Spec: registry-federation-protocol §2.4 (consistency), §4.1 (offline)
+//
+// Two rules live here, and both are about honesty rather than speed:
+//
+//   * A cached answer KEEPS THE ATTRIBUTION it was fetched with. A cache
+//     that forgets where an answer came from turns an upstream package
+//     into a local one on the way to disk, which is the same
+//     misrepresentation §2.3 refuses at the proof level.
+//
+//   * An unreachable upstream answers `UpstreamUnreachable`, never
+//     `NotFound`. "I cannot see" and "it does not exist" are different
+//     facts, and a build system that conflates them either fails a build
+//     that should have used the cache, or hides a typo as an outage.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.cache;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.protocol.evidence.{Manifest, Verified};
+
+// -----------------------------------------------------------------------------
+// What a cache holds
+// -----------------------------------------------------------------------------
+
+/// One cached coordinate, with everything needed to answer for it later
+/// WITHOUT contacting anyone — including who answered originally.
+public type CachedEntry is {
+    verified: Verified,
+    /// When this node fetched it, so a consistency answer can be dated.
+    fetched_at: Int,
+};
+
+/// Whether the upstream can be reached right now.
+public type Link is
+    | Online
+    | Offline;
+
+/// A node's local cache.
+public type Cache is {
+    entries: List<CachedEntry>,
+};
+
+/// What a lookup can answer. Note what is NOT here: there is no variant
+/// meaning "absent, probably" — the two absences are named separately.
+public type Answer is
+    /// Served from cache, with the attribution it was fetched with.
+    | Hit(CachedEntry)
+    /// The upstream is unreachable and this node has never seen the name.
+    | UpstreamUnreachable
+    /// The upstream was reachable and does not have it.
+    | NotFound;
+
+// -----------------------------------------------------------------------------
+// Lookup (spec §4.1)
+// -----------------------------------------------------------------------------
+
+implement Cache {
+    public fn empty() -> Cache {
+        Cache { entries: List.new() }
+    }
+
+    /// Store a verified coordinate. The attribution rides along inside
+    /// `Verified`; there is no path that stores an artefact and forgets
+    /// it, because there is no way to build a `CachedEntry` without one.
+    public fn store(&mut self, verified: Verified, fetched_at: Int) {
+        self.entries.push(CachedEntry {
+            verified: verified,
+            fetched_at: fetched_at,
+        });
+    }
+
+    /// Answer for `name` given the current link state.
+    ///
+    /// A cached entry is served in BOTH link states — that is the point
+    /// of §4.1: an office with a broken uplink keeps building. Only a
+    /// name this node has never seen depends on the link, and then the
+    /// two absences are told apart.
+    public fn lookup(&self, name: &PackageName, link: &Link) -> Answer {
+        for e in self.entries.iter() {
+            if e.verified.manifest.name.0 == name.0 {
+                return Answer.Hit(CachedEntry {
+                    verified: e.verified.clone(),
+                    fetched_at: e.fetched_at,
+                });
+            }
+        }
+        match link {
+            Offline => Answer.UpstreamUnreachable,
+            Online  => Answer.NotFound,
+        }
+    }
+
+    /// How many entries this node holds — the figure a consistency
+    /// answer is dated against.
+    public fn len(&self) -> Int {
+        self.entries.len()
+    }
+}

@@ -19,9 +19,10 @@ mount verum_registry.protocol.authority.{
     Authority, AuthorityRole, NamePattern, PackageName,
     ResolutionError, resolve_authority,
 };
+mount verum_registry.node.cache.{Answer, Cache, Link};
 mount verum_registry.protocol.evidence.{
     Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
-    digest_of, verify,
+    Verified, digest_of, verify,
 };
 
 /// The configuration a mirror runs with: an upstream, and nothing owned.
@@ -119,6 +120,35 @@ fn check_evidence(
     }
 }
 
+/// Build a verified coordinate the way a fetch would, so the cache is
+/// exercised with the real shape rather than a stub.
+fn verified_sample() -> Maybe<Verified> {
+    let m = sample_manifest();
+    let d = digest_of(&m);
+    let sig = SignatureBundle { manifest_digest: d.clone(), signer: "acme-ci" };
+    let proof = InclusionProof {
+        manifest_digest: d.clone(),
+        log_id: "upstream-log",
+        tree_size: 42,
+    };
+    let expected = "upstream-log";
+    match verify(m, &sig, &proof, "upstream", AuthorityRole.Upstream, &expected) {
+        Ok(v)  => Maybe.Some(v),
+        Err(_) => Maybe.None,
+    }
+}
+
+fn say(label: &Text, answer: Answer) {
+    match answer {
+        Answer.Hit(e) =>
+            print(f"{label}: hit, attributed to {e.verified.authority_id}"),
+        Answer.UpstreamUnreachable =>
+            print(f"{label}: upstream unreachable"),
+        Answer.NotFound =>
+            print(f"{label}: not found"),
+    }
+}
+
 fn main() {
     // A mirror attributes everything upstream — including names nobody
     // configured, which is the ordinary case.
@@ -153,4 +183,26 @@ fn main() {
     // A log with no entries cannot include anything.
     check_evidence(&"empty-log", sample_manifest(), good.clone(), good.clone(),
                    "upstream-log", 0, &upstream_log);
+
+    // --- the cache (protocol spec §4.1) ---
+    let mut cache = Cache.empty();
+    match verified_sample() {
+        Maybe.Some(v) => cache.store(v, 1756200100),
+        Maybe.None    => print("cache: sample failed to verify"),
+    }
+
+    let held = PackageName("@acme/widgets");
+    let never_seen = PackageName("@acme/unknown");
+
+    // A cached name is served in BOTH link states — the office with a
+    // broken uplink keeps building — and keeps its attribution.
+    say(&"cached/online", cache.lookup(&held, &Link.Online));
+    say(&"cached/offline", cache.lookup(&held, &Link.Offline));
+
+    // Only an unseen name depends on the link, and the two absences are
+    // told apart rather than collapsed into one.
+    say(&"unseen/online", cache.lookup(&never_seen, &Link.Online));
+    say(&"unseen/offline", cache.lookup(&never_seen, &Link.Offline));
+
+    print(f"cache: {cache.len()} entry");
 }
