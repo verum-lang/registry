@@ -20,6 +20,9 @@ mount verum_registry.protocol.authority.{
     ResolutionError, resolve_authority,
 };
 mount verum_registry.node.cache.{Answer, Cache, Link};
+mount verum_registry.node.handshake.{
+    HandshakeError, PeerIdentity, PeerSession, PinnedAnchor, meet,
+};
 mount verum_registry.protocol.evidence.{
     Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
     Verified, digest_of, verify,
@@ -149,6 +152,30 @@ fn say(label: &Text, answer: Answer) {
     }
 }
 
+fn peer(version: Int, key: Text) -> PeerIdentity {
+    let mut caps: List<Text> = List.new();
+    caps.push("slices");
+    caps.push("quantum-teleport");   // a name this build does not know
+    PeerIdentity {
+        protocol_version: version,
+        log_public_key: key,
+        tree_size: 42,
+        capabilities: caps,
+    }
+}
+
+fn greet(label: &Text, identity: &PeerIdentity, pinned: &PinnedAnchor) {
+    match meet(identity, pinned) {
+        Ok(s) => print(f"{label}: session, {s.capabilities.len()} capability kept"),
+        Err(HandshakeError.VersionMismatch(ours, theirs)) =>
+            print(f"{label}: refused, we speak {ours} and they speak {theirs}"),
+        Err(HandshakeError.TrustAnchorChanged(known, seen)) =>
+            print(f"{label}: refused, anchor was {known} and is now {seen}"),
+        Err(HandshakeError.EmptyIdentity) =>
+            print(f"{label}: refused, empty identity"),
+    }
+}
+
 fn main() {
     // A mirror attributes everything upstream — including names nobody
     // configured, which is the ordinary case.
@@ -205,4 +232,23 @@ fn main() {
     say(&"unseen/offline", cache.lookup(&never_seen, &Link.Offline));
 
     print(f"cache: {cache.len()} entry");
+
+    // --- the handshake (protocol spec §3) ---
+    let known = "ed25519:AAAA";
+    let first = PinnedAnchor.FirstMeeting;
+    let pinned = PinnedAnchor.Pinned(known);
+
+    // A first meeting adopts the key it is given, and drops the one
+    // capability this build does not understand.
+    greet(&"first-meeting", &peer(1, "ed25519:AAAA"), &first);
+
+    // A later meeting with the same key is an ordinary session.
+    greet(&"same-anchor", &peer(1, "ed25519:AAAA"), &pinned);
+
+    // A CHANGED key is refused, loudly, naming both. A silently rotated
+    // trust anchor is indistinguishable from a takeover.
+    greet(&"rotated-anchor", &peer(1, "ed25519:BBBB"), &pinned);
+
+    // A version mismatch names both numbers rather than degrading.
+    greet(&"version-skew", &peer(2, "ed25519:AAAA"), &pinned);
 }

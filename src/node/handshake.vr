@@ -1,0 +1,122 @@
+// =============================================================================
+// verum_registry.node.handshake — meeting an upstream, once per session
+// =============================================================================
+// Spec: registry-federation-protocol §3
+//
+// Three facts are established, and each refusal below exists because the
+// alternative is a silent takeover or a silent divergence:
+//
+//   * PROTOCOL VERSION — a single integer, refused if unequal. No
+//     negotiation matrix: a mismatch is an operator problem and deserves
+//     a message naming both numbers, not a degraded mode nobody chose.
+//
+//   * UPSTREAM IDENTITY — the log's public key. A CHANGE is refused and
+//     requires explicit operator action, because a silently rotated
+//     trust anchor is indistinguishable from a takeover. This is the
+//     rule the whole handshake exists for.
+//
+//   * CAPABILITIES — a set of names. Unknown names are IGNORED, which is
+//     how the protocol extends without a version bump. Ignoring is the
+//     deliberate opposite of the version rule: identity must be exact,
+//     capability must be tolerant.
+//
+// An upstream is learned from CONFIGURATION only, never discovered.
+// Discovery of trust anchors is how a network becomes attackable, so
+// there is no code path here that accepts a peer it was not told about.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.handshake;
+
+/// The protocol version this node speaks.
+public const PROTOCOL_VERSION: Int = 1;
+
+/// What an upstream tells us about itself.
+public type PeerIdentity is {
+    protocol_version: Int,
+    log_public_key: Text,
+    tree_size: Int,
+    capabilities: List<Text>,
+};
+
+/// What this node already believes about that upstream, from the last
+/// time it met it. Absent on a first meeting — and a first meeting is
+/// the ONLY time a key may be adopted without an operator saying so.
+public type PinnedAnchor is
+    | FirstMeeting
+    | Pinned(Text);
+
+/// A handshake that succeeded, and what it established.
+///
+/// `PeerSession` rather than `Session`: the standard library exports a
+/// `Session` of its own, and every public stdlib name is visible without
+/// a mount, so the short name is not this module's to take. The longer
+/// name also says whose session it is.
+public type PeerSession is {
+    log_public_key: Text,
+    tree_size: Int,
+    /// Only the capabilities this node understands. Unknown names were
+    /// dropped here rather than carried as strings nobody interprets.
+    capabilities: List<Text>,
+};
+
+/// Why a handshake was refused. Each names both sides where both matter,
+/// because an operator resolving this needs to see what changed.
+public type HandshakeError is
+    | VersionMismatch(Int, Int)
+    /// The upstream's log key differs from the pinned one. Both are
+    /// named: the first is what we trusted, the second what answered.
+    | TrustAnchorChanged(Text, Text)
+    | EmptyIdentity;
+
+/// The capability names this build understands. A name outside this list
+/// is ignored rather than refused — see the module note.
+fn understood(name: &Text) -> Bool {
+    name.clone() == "slices" || name.clone() == "consistency-proofs"
+}
+
+/// Meet an upstream.
+///
+/// `pinned` is what this node believed before the call; a `FirstMeeting`
+/// adopts the key it is given, and every later meeting must match it.
+public fn meet(
+    identity: &PeerIdentity,
+    pinned: &PinnedAnchor,
+) -> Result<PeerSession, HandshakeError> {
+    if identity.log_public_key.len() == 0 {
+        return Result.Err(HandshakeError.EmptyIdentity);
+    }
+    if identity.protocol_version != PROTOCOL_VERSION {
+        return Result.Err(HandshakeError.VersionMismatch(
+            PROTOCOL_VERSION,
+            identity.protocol_version,
+        ));
+    }
+    match pinned {
+        Pinned(known) => {
+            if known.clone() != identity.log_public_key.clone() {
+                return Result.Err(HandshakeError.TrustAnchorChanged(
+                    known.clone(),
+                    identity.log_public_key.clone(),
+                ));
+            }
+        }
+        FirstMeeting => {}
+    }
+
+    let mut kept: List<Text> = List.new();
+    for c in identity.capabilities.iter() {
+        if understood(c) {
+            kept.push(c.clone());
+        }
+    }
+
+    Result.Ok(PeerSession {
+        log_public_key: identity.log_public_key.clone(),
+        tree_size: identity.tree_size,
+        capabilities: kept,
+    })
+}
