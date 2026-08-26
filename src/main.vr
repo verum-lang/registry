@@ -20,6 +20,9 @@ mount verum_registry.protocol.authority.{
     ResolutionError, resolve_authority,
 };
 mount verum_registry.node.cache.{Answer, Cache, Link};
+mount verum_registry.node.publish.{
+    PublishError, PublishRequest, Published, publish,
+};
 mount verum_registry.node.consistency.{
     Audit, ConsistencyError, HeadLog, TreeHead,
 };
@@ -84,8 +87,6 @@ fn describe(label: &Text, authorities: &List<Authority>, name: &Text) {
         Ok(r) => print(f"{label}: {name} -> {r.authority_id}"),
         Err(ResolutionError.AmbiguousAuthority(who)) =>
             print(f"{label}: {name} -> refused, claimed by {who.len()}"),
-        Err(ResolutionError.UpstreamUnreachable) =>
-            print(f"{label}: {name} -> upstream unreachable"),
         Err(ResolutionError.NoAuthority) =>
             print(f"{label}: {name} -> no authority"),
     }
@@ -183,6 +184,54 @@ fn greet(label: &Text, identity: &PeerIdentity, pinned: &PinnedAnchor) {
 }
 
 /// Export what a node holds into a slice, with a stated dependency.
+/// Offer a release to a node and report what it decided.
+fn offer(
+    label: &Text,
+    authorities: &List<Authority>,
+    cache: &mut Cache,
+    name: &Text,
+    version: &Text,
+    artefact: &Text,
+    as_authority: &Text,
+) {
+    let manifest = Manifest {
+        name: PackageName(name.clone()),
+        version: version.clone(),
+        artefact: Digest(artefact.clone()),
+        published_at: 1756300000,
+    };
+    let d = digest_of(&manifest);
+    let request = PublishRequest {
+        manifest: manifest,
+        signature: SignatureBundle {
+            manifest_digest: Digest(d.0.clone()),
+            signer: as_authority.clone(),
+        },
+        proof: InclusionProof {
+            manifest_digest: Digest(d.0.clone()),
+            log_id: "local-log",
+            tree_size: 3,
+        },
+        as_authority: as_authority.clone(),
+    };
+    match publish(authorities, cache, &request, &"local-log", 1756300500) {
+        Ok(Published.Accepted(v)) =>
+            print(f"{label}: published {v.manifest.version} as {v.authority_id}"),
+        Ok(Published.AlreadyIdentical(v)) =>
+            print(f"{label}: already held, identical at {v.manifest.version}"),
+        Err(PublishError.NotOurName(claimed, owner)) =>
+            print(f"{label}: refused, {claimed} does not own it — {owner} does"),
+        Err(PublishError.VersionAlreadyPublished(ver)) =>
+            print(f"{label}: refused, {ver} is already published with other content"),
+        Err(PublishError.ContestedName(who)) =>
+            print(f"{label}: refused, claimed by {who.len()}"),
+        Err(PublishError.EvidenceRefused(_)) =>
+            print(f"{label}: refused, evidence did not check out"),
+        Err(PublishError.NoSuchName) =>
+            print(f"{label}: refused, no authority owns it"),
+    }
+}
+
 fn build_slice(v: &Verified, requires: List<Text>) -> Slice {
     let mut items: List<SliceItem> = List.new();
     items.push(export_item(v, requires));
@@ -318,6 +367,30 @@ fn main() {
 
     // A version mismatch names both numbers rather than degrading.
     greet(&"version-skew", &peer(2, "ed25519:AAAA"), &pinned);
+
+    // --- the write path (protocol spec §5, row 2) ---
+    let enterprise = enterprise_node();
+    let mut store = Cache.empty();
+
+    // A name this node owns: accepted.
+    offer(&"own-name", &enterprise, &mut store,
+          &"@acme/internal", &"1.0.0", &"blob-a", &"local");
+
+    // The SAME release again. A retried upload is the network being
+    // unreliable, not a publisher misbehaving.
+    offer(&"retry", &enterprise, &mut store,
+          &"@acme/internal", &"1.0.0", &"blob-a", &"local");
+
+    // The same version with DIFFERENT content: refused. Replacing a
+    // published version rewrites history for everyone who resolved it.
+    offer(&"rewrite", &enterprise, &mut store,
+          &"@acme/internal", &"1.0.0", &"blob-b", &"local");
+
+    // An upstream-owned name. The node holds a perfectly good artefact
+    // and still may not publish it — that is the substitution this
+    // refusal exists to prevent.
+    offer(&"upstream-name", &enterprise, &mut store,
+          &"serde", &"1.0.0", &"blob-c", &"local");
 
     // --- auditing a cache (protocol spec §2.4) ---
     let mut growing: List<TreeHead> = List.new();

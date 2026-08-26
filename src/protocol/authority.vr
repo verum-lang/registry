@@ -72,14 +72,20 @@ public type Resolved is {
 };
 
 /// Why a resolution did not produce exactly one answer.
+///
+/// There is deliberately no "upstream unreachable" here. Resolution asks
+/// WHO answers for a name, and that is decided by configuration alone —
+/// it gives the same answer with the network unplugged. Whether the
+/// authority actually answered is a different question, asked at fetch
+/// time, and `Answer` in the cache module is where the two absences are
+/// told apart. A variant here would have been a second, unreachable copy
+/// of that distinction: nothing in `resolve_authority` could ever
+/// produce it, and its presence invited callers to handle a case the
+/// function cannot return.
 public type ResolutionError is
     /// More than one authority owns the name. Both are named, because an
     /// operator resolving this needs to know which two.
     | AmbiguousAuthority(List<Text>)
-    /// No local authority owns it and the upstream could not be reached.
-    /// Deliberately NOT `NotFound`: a build system should treat "I cannot
-    /// see" differently from "it does not exist".
-    | UpstreamUnreachable
     /// No authority owns it and there is no upstream configured.
     | NoAuthority;
 

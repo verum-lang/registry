@@ -69,7 +69,11 @@ public type ConsistencyError is
 /// What an audit can conclude.
 public type Audit is
     /// Every pair of heads is consistent, over this many heads.
-    | Consistent(Int)
+    ///
+    /// The count is one the node computed about its own record, so it
+    /// carries a refinement; the HEADS themselves come from a peer and
+    /// are therefore checked into typed refusals, never asserted.
+    | Consistent(Int{it >= 0})
     /// The record contradicts itself, with the reason.
     | Contradicts(ConsistencyError);
 

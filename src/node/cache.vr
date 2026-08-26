@@ -99,7 +99,15 @@ implement Cache {
 
     /// How many entries this node holds — the figure a consistency
     /// answer is dated against.
-    public fn len(&self) -> Int {
+    ///
+    /// The refinement is deliberate and the line between it and a typed
+    /// refusal is the design rule this codebase follows: a REFINEMENT
+    /// states an invariant of a value the node computes itself, so a
+    /// violation is this node's own bug and halting is right. Anything
+    /// arriving from a peer is checked by a function that RETURNS a
+    /// refusal instead — asserting on a malformed message from an
+    /// untrusted party would let that party halt the node.
+    public fn len(&self) -> Int{it >= 0} {
         self.entries.len()
     }
 }

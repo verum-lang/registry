@@ -114,7 +114,7 @@ public fn import_slice(
     cache: &mut Cache,
     slice: &Slice,
     imported_at: Int,
-) -> Result<Int, ImportError> {
+) -> Result<Int{it >= 0}, ImportError> {
     match slice.closure_gap() {
         Maybe.Some(e) => return Result.Err(e),
         Maybe.None    => {}
