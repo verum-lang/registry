@@ -184,7 +184,7 @@ implement Source for GitSource {
 /// implementations: adding a third source must not require editing this
 /// function, which is what "an extension point, not an axis of the
 /// design" has to mean in code.
-public fn locate_through<S: Source>(
+public pure fn locate_through<S: Source>(
     source: &S,
     name: &PackageName,
 ) -> Result<Located, SourceError> {
@@ -196,7 +196,7 @@ public fn locate_through<S: Source>(
 /// Asked of the SOURCE rather than of a fetched coordinate, so a
 /// configuration can be refused before it is used rather than after it
 /// has already served a build.
-public fn satisfies_audit_policy<S: Source>(source: &S) -> Bool {
+public pure fn satisfies_audit_policy<S: Source>(source: &S) -> Bool {
     match source.assurance_offered() {
         Auditable(_) => true,
         Attributable(_) => false,

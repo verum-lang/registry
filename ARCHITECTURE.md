@@ -28,6 +28,19 @@ The direction of knowledge is one-way and worth stating positively:
 `protocol/` does not know that nodes exist, `node/` does not know which
 clock it runs against, and `main.vr` is the only file that knows both.
 
+### The rule layer is `pure`, and that is checked
+
+Every free function in `protocol/` is declared `pure`. It is not a
+label: `pure` is compiler-verified, and a pure function may not perform
+I/O or call an impure one, so the layering is a fact the compiler holds
+rather than a convention a reviewer has to notice.
+
+The claim was confirmed by breaking it — a `print` added to
+`digest_of` is refused with `error<E503>: pure function has side
+effects: IO`. Worth knowing while reading this: `verum check` enforces
+it and `verum run` currently does not in project mode, which is filed;
+the annotations are honest under the command that verifies them.
+
 ### Why `protocol/` takes no contexts
 
 Everything in `protocol/` is a function from stated inputs to a stated

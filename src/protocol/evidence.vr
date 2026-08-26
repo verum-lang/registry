@@ -100,7 +100,7 @@ public type EvidenceError is
 /// upstream-attributed coordinate that is the upstream's log, and a
 /// local node forwarding the upstream proof unchanged is what makes the
 /// two agree.
-public fn verify(
+public pure fn verify(
     manifest: Manifest,
     signature: &SignatureBundle,
     proof: &InclusionProof,
@@ -138,7 +138,7 @@ public fn verify(
 /// exercised before the hash function is wired. The rendering is
 /// canonical (fixed field order, no optional whitespace), which is the
 /// property the real digest needs too.
-public fn digest_of(m: &Manifest) -> Digest {
+public pure fn digest_of(m: &Manifest) -> Digest {
     Digest(f"{m.name.0}@{m.version}:{m.artefact.0}:{m.published_at}")
 }
 
@@ -162,7 +162,7 @@ public fn digest_of(m: &Manifest) -> Digest {
 /// output, because the claim is about what `verify` may accept — a
 /// property read off the result could be satisfied by a `verify` that
 /// accepts everything and reports what it accepted.
-public fn evidence_agrees(
+public pure fn evidence_agrees(
     manifest: &Manifest,
     signature: &SignatureBundle,
     proof: &InclusionProof,
@@ -182,7 +182,7 @@ public fn evidence_agrees(
 /// when it agrees looks like caution and is not: a check that also
 /// refuses valid evidence teaches operators to route around it, and a
 /// check that is routinely bypassed protects nothing.
-public fn verify_accepts_exactly_agreeing_evidence(
+public pure fn verify_accepts_exactly_agreeing_evidence(
     manifest: Manifest,
     signature: &SignatureBundle,
     proof: &InclusionProof,

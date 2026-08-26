@@ -135,7 +135,7 @@ implement Authority {
 ///   * one claimant  → that authority answers;
 ///   * many claimants → refused, both named;
 ///   * none          → the upstream answers, if there is one.
-public fn resolve_authority(
+public pure fn resolve_authority(
     authorities: &List<Authority>,
     name: &PackageName,
 ) -> Result<Resolved, ResolutionError> {
@@ -202,7 +202,7 @@ public fn resolve_authority(
 /// The failure it excludes is a resolution naming an authority nobody
 /// configured — a fabricated provenance, which is worse than no answer
 /// because it looks like one.
-public fn attributed_to_a_configured_authority(
+public pure fn attributed_to_a_configured_authority(
     authorities: &List<Authority>,
     r: &Resolved,
 ) -> Bool {
@@ -217,7 +217,7 @@ public fn attributed_to_a_configured_authority(
 /// Every successful resolution is attributed; every other outcome is a
 /// typed refusal. There is no third possibility, which is what makes the
 /// attribution unforgettable rather than merely conventional.
-public fn resolution_attributes_or_refuses(
+public pure fn resolution_attributes_or_refuses(
     authorities: &List<Authority>,
     name: &PackageName,
 ) -> Bool {
