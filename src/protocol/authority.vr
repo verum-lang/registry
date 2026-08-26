@@ -1,0 +1,172 @@
+// =============================================================================
+// registry.protocol.authority — who may answer for a name
+// =============================================================================
+// Spec: registry-federation-protocol §1
+//
+// The rule this module carries: a name resolves to EXACTLY ONE authority,
+// and the answer says which. Two authorities claiming a name is refused,
+// not ranked — precedence is how a supply-chain substitution becomes
+// invisible.
+//
+// The attribution is carried by the TYPE. There is no way to obtain a
+// resolved coordinate without also obtaining the authority that answered
+// for it, because `Resolved` has no constructor that omits one.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.authority;
+
+// -----------------------------------------------------------------------------
+// Names
+// -----------------------------------------------------------------------------
+
+/// A package name, `[@scope/]name`.
+///
+/// A newtype rather than a bare `Text`: a name and a version string are
+/// both text, and mixing them is the kind of mistake a type system exists
+/// to make impossible.
+public type PackageName is (Text);
+
+/// A name pattern an authority may own: an exact name, or a scope
+/// wildcard (`@acme/*`).
+public type NamePattern is
+    | Exact(Text)
+    | Scope(Text);
+
+// -----------------------------------------------------------------------------
+// Authorities
+// -----------------------------------------------------------------------------
+
+/// What kind of answer an authority gives.
+public type AuthorityRole is
+    | Upstream
+    | Local;
+
+/// One authority this node knows about.
+///
+/// `owns` is EXPLICIT and has no default. A node that lists nothing owns
+/// nothing and therefore cannot publish — which is exactly right for a
+/// pure mirror, and is the safe direction to be wrong in.
+public type Authority is {
+    id: Text,
+    role: AuthorityRole,
+    owns: List<NamePattern>,
+};
+
+// -----------------------------------------------------------------------------
+// The result of a resolution
+// -----------------------------------------------------------------------------
+
+/// A name, together with the authority that answered for it.
+///
+/// Every field is required. There is no `Resolved` without an authority,
+/// so a code path cannot lose the attribution by forgetting to carry it —
+/// it would have nothing to construct.
+public type Resolved is {
+    name: PackageName,
+    authority_id: Text,
+    role: AuthorityRole,
+};
+
+/// Why a resolution did not produce exactly one answer.
+public type ResolutionError is
+    /// More than one authority owns the name. Both are named, because an
+    /// operator resolving this needs to know which two.
+    | AmbiguousAuthority(List<Text>)
+    /// No local authority owns it and the upstream could not be reached.
+    /// Deliberately NOT `NotFound`: a build system should treat "I cannot
+    /// see" differently from "it does not exist".
+    | UpstreamUnreachable
+    /// No authority owns it and there is no upstream configured.
+    | NoAuthority;
+
+// -----------------------------------------------------------------------------
+// Matching
+// -----------------------------------------------------------------------------
+
+implement NamePattern {
+    /// Does this pattern claim `name`?
+    public fn claims(&self, name: &PackageName) -> Bool {
+        match self {
+            Exact(e) => e == name.0,
+            Scope(s) => {
+                // `@acme/*` claims `@acme/anything`, and nothing else.
+                let prefix = f"{s}/";
+                name.0.starts_with(&prefix)
+            }
+        }
+    }
+}
+
+implement Authority {
+    /// Does this authority claim `name`?
+    public fn claims(&self, name: &PackageName) -> Bool {
+        for p in self.owns.iter() {
+            if p.claims(name) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The resolution rule (spec §1.3)
+// -----------------------------------------------------------------------------
+
+/// Resolve `name` against `authorities`.
+///
+/// NOT named `resolve`: the standard library has a two-argument
+/// `resolve` of its own, and an explicit mount of a same-arity namesake
+/// currently binds to it (filed, with the exact site). `resolve_authority`
+/// also says more — what is resolved is the AUTHORITY, and the name is
+/// only the question.
+///
+/// Exactly three outcomes, and the middle one is the point:
+///   * one claimant  → that authority answers;
+///   * many claimants → refused, both named;
+///   * none          → the upstream answers, if there is one.
+public fn resolve_authority(
+    authorities: &List<Authority>,
+    name: &PackageName,
+) -> Result<Resolved, ResolutionError> {
+    let mut claimants: List<Text> = List.new();
+    let mut winner_id = "";
+    let mut winner_role = AuthorityRole.Local;
+
+    for a in authorities.iter() {
+        if a.claims(name) {
+            claimants.push(a.id.clone());
+            winner_id = a.id.clone();
+            winner_role = a.role.clone();
+        }
+    }
+
+    if claimants.len() > 1 {
+        return Result.Err(ResolutionError.AmbiguousAuthority(claimants));
+    }
+
+    if claimants.len() == 1 {
+        return Result.Ok(Resolved {
+            name: PackageName(name.0.clone()),
+            authority_id: winner_id,
+            role: winner_role,
+        });
+    }
+
+    // Unclaimed: the upstream answers, and the answer is attributed to it.
+    for a in authorities.iter() {
+        if a.role is Upstream {
+            return Result.Ok(Resolved {
+                name: PackageName(name.0.clone()),
+                authority_id: a.id.clone(),
+                role: AuthorityRole.Upstream,
+            });
+        }
+    }
+
+    Result.Err(ResolutionError.NoAuthority)
+}

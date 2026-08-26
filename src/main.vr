@@ -1,0 +1,93 @@
+// =============================================================================
+// registry — node entry point
+// =============================================================================
+// Spec: registry-federated-design.md §2 (one node, two roles)
+//
+// While the vertical slice is being built this entry point exercises the
+// rules that exist, so that "it compiles" is never mistaken for "it
+// works". Each check prints what it concluded; a rule that stops holding
+// changes the output rather than staying quiet.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.main;
+
+mount verum_registry.protocol.authority.{
+    Authority, AuthorityRole, NamePattern, PackageName,
+    ResolutionError, resolve_authority,
+};
+
+/// The configuration a mirror runs with: an upstream, and nothing owned.
+/// A node that owns nothing cannot publish, which is what a mirror is.
+fn mirror_node() -> List<Authority> {
+    let mut out: List<Authority> = List.new();
+    out.push(Authority {
+        id: "upstream",
+        role: AuthorityRole.Upstream,
+        owns: List.new(),
+    });
+    out
+}
+
+/// An enterprise node: the same upstream, plus a scope it owns.
+fn enterprise_node() -> List<Authority> {
+    let mut owned: List<NamePattern> = List.new();
+    owned.push(NamePattern.Scope("@acme"));
+
+    let mut out: List<Authority> = List.new();
+    out.push(Authority {
+        id: "upstream",
+        role: AuthorityRole.Upstream,
+        owns: List.new(),
+    });
+    out.push(Authority {
+        id: "local",
+        role: AuthorityRole.Local,
+        owns: owned,
+    });
+    out
+}
+
+/// A misconfiguration: a local authority claiming a name upstream serves.
+fn shadowing_node() -> List<Authority> {
+    let mut a_owns: List<NamePattern> = List.new();
+    a_owns.push(NamePattern.Exact("serde"));
+    let mut b_owns: List<NamePattern> = List.new();
+    b_owns.push(NamePattern.Exact("serde"));
+
+    let mut out: List<Authority> = List.new();
+    out.push(Authority { id: "local-a", role: AuthorityRole.Local, owns: a_owns });
+    out.push(Authority { id: "local-b", role: AuthorityRole.Local, owns: b_owns });
+    out
+}
+
+fn describe(label: &Text, authorities: &List<Authority>, name: &Text) {
+    let n = PackageName(name.clone());
+    match resolve_authority(authorities, &n) {
+        Ok(r) => print(f"{label}: {name} -> {r.authority_id}"),
+        Err(ResolutionError.AmbiguousAuthority(who)) =>
+            print(f"{label}: {name} -> refused, claimed by {who.len()}"),
+        Err(ResolutionError.UpstreamUnreachable) =>
+            print(f"{label}: {name} -> upstream unreachable"),
+        Err(ResolutionError.NoAuthority) =>
+            print(f"{label}: {name} -> no authority"),
+    }
+}
+
+fn main() {
+    // A mirror attributes everything upstream — including names nobody
+    // configured, which is the ordinary case.
+    describe(&"mirror", &mirror_node(), &"serde");
+
+    // An enterprise node answers for what it owns and forwards the rest.
+    let ent = enterprise_node();
+    describe(&"enterprise", &ent, &"@acme/internal");
+    describe(&"enterprise", &ent, &"serde");
+
+    // Two claimants are REFUSED rather than ranked. This is the rule the
+    // whole design turns on: precedence is how a substitution hides.
+    describe(&"shadowing", &shadowing_node(), &"serde");
+}
