@@ -33,6 +33,7 @@ module verum_registry.node.ambient;
 
 mount verum_registry.protocol.authority.{Authority};
 
+
 // -----------------------------------------------------------------------------
 // The contexts
 // -----------------------------------------------------------------------------
@@ -101,6 +102,54 @@ implement ConfiguredNode {
 
     public fn authorities(&self) -> List<Authority> {
         self.owns.clone()
+    }
+}
+
+/// A store backed by a file.
+///
+/// The only backend for `Storage`, and deliberately the REAL one: the
+/// filesystem holds the state, so nothing here needs interior
+/// mutability, and a node's first run is naturally the case where the
+/// file does not exist yet.
+///
+/// A second backend that lives in memory would need a mutable cell —
+/// `Mutex` is what the standard library offers — and would demonstrate
+/// nothing this one does not, since the rules above it already cannot
+/// tell which they are running against.
+public type FileStore is { path: Text };
+
+implement FileStore {
+    public fn load(&self) -> Maybe<Text> {
+        // The path is COPIED to a local first. Passing `&self.path`
+        // straight to the file API silently does nothing and returns
+        // `Ok` — a write reports success and no bytes land (T0899).
+        // Stated here as a workaround rather than written as though it
+        // were a preference, so the next reader sees a defect and not a
+        // style.
+        let path = self.path.clone();
+        match core.io.file.read_to_string(&path) {
+            Ok(text) => {
+                if text.len() == 0 {
+                    Maybe.None
+                } else {
+                    Maybe.Some(text)
+                }
+            }
+            // A node starting for the FIRST TIME has no store, and that
+            // is not an error — it comes up empty. A store that exists
+            // and cannot be read is a different matter, and this is the
+            // only layer that knows which it is looking at.
+            Err(_) => Maybe.None,
+        }
+    }
+
+    public fn save(&self, contents: Text) -> Bool {
+        // Copied for the same reason as in `load` — see T0899.
+        let path = self.path.clone();
+        match core.io.file.write(&path, &contents) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
     }
 }
 

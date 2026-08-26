@@ -21,8 +21,10 @@ mount verum_registry.protocol.authority.{
 };
 mount verum_registry.node.cache.{Answer, Cache};
 mount verum_registry.node.ambient.{
-    Clock, ConfiguredNode, FrozenClock, NodeIdentity, StatedLink, Uplink,
+    Clock, ConfiguredNode, FileStore, FrozenClock, NodeIdentity, StatedLink,
+    Uplink,
 };
+mount verum_registry.node.durable.{RestoreError, Storage, persist, restore};
 mount verum_registry.node.publish.{
     PublishError, PublishRequest, Published, publish,
 };
@@ -336,6 +338,7 @@ fn main() {
         owns: enterprise_node(),
     };
     provide Uplink = StatedLink { up: true };
+    provide Storage = FileStore { path: "/tmp/verum-registry-store" };
     dated_note(&"ambient");
 
     // A mirror attributes everything upstream — including names nobody
@@ -463,6 +466,65 @@ fn main() {
     // refusal exists to prevent.
     offer(&"upstream-name", &mut store,
           &"serde", &"1.0.0", &"blob-c", &"local");
+
+    // --- surviving a restart (protocol spec §4.2, in time) ---
+    match verified_sample() {
+        Maybe.Some(v) => {
+            let no_deps: List<Text> = List.new();
+            let held = build_slice(&v, no_deps);
+
+            // Write what this node holds, then come back up from it as
+            // a cold node would.
+            print(f"persist: {persist(&held)}");
+            let mut revived = Cache.empty();
+            match restore(&mut revived) {
+                Ok(n) => print(f"restore: {n} re-verified, {revived.len()} held"),
+                Err(RestoreError.Unreadable(line)) =>
+                    print(f"restore: refused, line {line} is not readable"),
+                Err(RestoreError.Refused(_)) =>
+                    print("restore: refused, the stored evidence did not check out"),
+            }
+
+            // Now TAMPER, the way a bad disk or an attacker would: the
+            // stored artefact digest is changed while the signature and
+            // the proof are left alone. Nothing about the record looks
+            // damaged — it is a well-formed line with a plausible
+            // digest.
+            //
+            // The node refuses it, because the evidence is RE-VERIFIED
+            // on load rather than restored: `verify` recomputes the
+            // manifest digest and the signature no longer covers it.
+            // A registry that trusted its own store would have served
+            // these bytes under a name their publisher never signed.
+            let bad_path = "/tmp/verum-registry-store-bad";
+            provide Storage = FileStore { path: bad_path } in {
+                let _ = persist(&held);
+            };
+            let corrupted = match core.io.file.read_to_string(&bad_path) {
+                // Only the ARTEFACT field, delimited, so the signature
+                // and proof digests keep covering the OLD manifest.
+                // Replacing the digest everywhere would have made the
+                // record self-consistent again, which is a forgery
+                // nobody can perform without the signing key — and the
+                // test would have proved nothing.
+                Ok(text) => text.replace("|blake3:c0ffee|", "|blake3:dec0de|"),
+                Err(_) => "",
+            };
+            let _ = core.io.file.write(&bad_path, &corrupted);
+
+            provide Storage = FileStore { path: bad_path } in {
+                let mut cold = Cache.empty();
+                match restore(&mut cold) {
+                    Ok(n) => print(f"tampered: accepted {n} — THE RULE FAILED"),
+                    Err(RestoreError.Unreadable(line)) =>
+                        print(f"tampered: refused, line {line} is not readable"),
+                    Err(RestoreError.Refused(_)) =>
+                        print("tampered: refused, the stored evidence did not check out"),
+                }
+            };
+        }
+        Maybe.None => print("durable: sample failed to verify"),
+    }
 
     // --- auditing a cache (protocol spec §2.4) ---
     let mut growing: List<TreeHead> = List.new();
