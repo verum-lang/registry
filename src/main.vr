@@ -19,7 +19,10 @@ mount verum_registry.protocol.authority.{
     Authority, AuthorityRole, NamePattern, PackageName,
     ResolutionError, resolve_authority,
 };
-mount verum_registry.node.cache.{Answer, Cache, Link};
+mount verum_registry.node.cache.{Answer, Cache};
+mount verum_registry.node.ambient.{
+    Clock, ConfiguredNode, FrozenClock, NodeIdentity, StatedLink, Uplink,
+};
 mount verum_registry.node.publish.{
     PublishError, PublishRequest, Published, publish,
 };
@@ -187,7 +190,6 @@ fn greet(label: &Text, identity: &PeerIdentity, pinned: &PinnedAnchor) {
 /// Offer a release to a node and report what it decided.
 fn offer(
     label: &Text,
-    authorities: &List<Authority>,
     cache: &mut Cache,
     name: &Text,
     version: &Text,
@@ -214,7 +216,7 @@ fn offer(
         },
         as_authority: as_authority.clone(),
     };
-    match publish(authorities, cache, &request, &"local-log", 1756300500) {
+    match publish(cache, &request) {
         Ok(Published.Accepted(v)) =>
             print(f"{label}: published {v.manifest.version} as {v.authority_id}"),
         Ok(Published.AlreadyIdentical(v)) =>
@@ -240,10 +242,10 @@ fn build_slice(v: &Verified, requires: List<Text>) -> Slice {
 
 fn carry(label: &Text, slice: &Slice) {
     let mut far_side = Cache.empty();
-    match import_slice(&mut far_side, slice, 1756300000) {
+    match import_slice(&mut far_side, slice) {
         Ok(n) => {
             let held = PackageName("@acme/widgets");
-            match far_side.lookup(&held, &Link.Offline) {
+            match far_side.lookup(&held) {
                 Answer.Hit(e) => print(
                     f"{label}: imported {n}, still attributed to {e.verified.authority_id}"
                 ),
@@ -292,7 +294,26 @@ fn head(log_id: &Text, size: Int, root: &Text, seen_at: Int) -> TreeHead {
     }
 }
 
+/// A first use of the ambient facts: dated, attributed, and stated in
+/// the signature rather than threaded through it.
+fn dated_note(label: &Text) using [Clock, NodeIdentity] {
+    print(f"{label}: at {Clock.now()} on log {NodeIdentity.log_id()}");
+}
+
 fn main() {
+    // --- the composition root ---
+    // The ONLY place in the program that names a concrete backend.
+    // Everything below runs against the CONTEXTS, so the same rules
+    // execute under a frozen clock here and a system clock in
+    // production without a line of them changing.
+    provide Clock = FrozenClock { at: 1756300000 };
+    provide NodeIdentity = ConfiguredNode {
+        log: "local-log",
+        owns: enterprise_node(),
+    };
+    provide Uplink = StatedLink { up: true };
+    dated_note(&"ambient");
+
     // A mirror attributes everything upstream — including names nobody
     // configured, which is the ordinary case.
     describe(&"mirror", &mirror_node(), &"serde");
@@ -330,22 +351,29 @@ fn main() {
     // --- the cache (protocol spec §4.1) ---
     let mut cache = Cache.empty();
     match verified_sample() {
-        Maybe.Some(v) => cache.store(v, 1756200100),
+        Maybe.Some(v) => cache.store(v),
         Maybe.None    => print("cache: sample failed to verify"),
     }
 
     let held = PackageName("@acme/widgets");
     let never_seen = PackageName("@acme/unknown");
 
-    // A cached name is served in BOTH link states — the office with a
-    // broken uplink keeps building — and keeps its attribution.
-    say(&"cached/online", cache.lookup(&held, &Link.Online));
-    say(&"cached/offline", cache.lookup(&held, &Link.Offline));
+    // The link state is AMBIENT, so exercising both is a scoped
+    // `provide` rather than an argument threaded to every call. The
+    // lookups below are the same lookups; what changed is the world
+    // they run in — which is the distinction the parameter form
+    // could not express, since a value passed down is a fact about
+    // the moment it was captured.
+    say(&"cached/online", cache.lookup(&held));
+    say(&"unseen/online", cache.lookup(&never_seen));
 
-    // Only an unseen name depends on the link, and the two absences are
-    // told apart rather than collapsed into one.
-    say(&"unseen/online", cache.lookup(&never_seen, &Link.Online));
-    say(&"unseen/offline", cache.lookup(&never_seen, &Link.Offline));
+    provide Uplink = StatedLink { up: false } in {
+        // A cached name is served with the uplink DOWN — the office
+        // with a broken link keeps building — and keeps its
+        // attribution. Only an unseen name notices the difference.
+        say(&"cached/offline", cache.lookup(&held));
+        say(&"unseen/offline", cache.lookup(&never_seen));
+    };
 
     print(f"cache: {cache.len()} entry");
 
@@ -369,27 +397,26 @@ fn main() {
     greet(&"version-skew", &peer(2, "ed25519:AAAA"), &pinned);
 
     // --- the write path (protocol spec §5, row 2) ---
-    let enterprise = enterprise_node();
     let mut store = Cache.empty();
 
     // A name this node owns: accepted.
-    offer(&"own-name", &enterprise, &mut store,
+    offer(&"own-name", &mut store,
           &"@acme/internal", &"1.0.0", &"blob-a", &"local");
 
     // The SAME release again. A retried upload is the network being
     // unreliable, not a publisher misbehaving.
-    offer(&"retry", &enterprise, &mut store,
+    offer(&"retry", &mut store,
           &"@acme/internal", &"1.0.0", &"blob-a", &"local");
 
     // The same version with DIFFERENT content: refused. Replacing a
     // published version rewrites history for everyone who resolved it.
-    offer(&"rewrite", &enterprise, &mut store,
+    offer(&"rewrite", &mut store,
           &"@acme/internal", &"1.0.0", &"blob-b", &"local");
 
     // An upstream-owned name. The node holds a perfectly good artefact
     // and still may not publish it — that is the substitution this
     // refusal exists to prevent.
-    offer(&"upstream-name", &enterprise, &mut store,
+    offer(&"upstream-name", &mut store,
           &"serde", &"1.0.0", &"blob-c", &"local");
 
     // --- auditing a cache (protocol spec §2.4) ---

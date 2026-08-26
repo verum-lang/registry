@@ -1,0 +1,115 @@
+// =============================================================================
+// verum_registry.node.ambient — what a node knows without being told
+// =============================================================================
+// Spec: registry-federation-protocol §3 (configuration), §2.4 (dating)
+//
+// Three facts are true of every decision this node makes, and none of
+// them is an ARGUMENT to the decision:
+//
+//   * WHAT TIME IT IS. Every stored answer is dated, and a consistency
+//     proof is only meaningful against a date.
+//   * WHO THIS NODE IS. Its log, and the authorities it was configured
+//     with. Configured, never discovered — see the handshake module.
+//   * WHETHER THE UPSTREAM CAN BE REACHED. Which changes between two
+//     calls and is not a property of either.
+//
+// Threading them as parameters is what this module exists to stop. It
+// is not about typing less: a date threaded by hand is a date some path
+// forgets, and the forgetting is invisible because the type still
+// checks — `0` is a perfectly good `Int`. A CONTEXT cannot be forgotten,
+// because a function that needs one says so in its signature and will
+// not compile where none is provided.
+//
+// The same property is what makes the rules testable. A frozen clock is
+// not a mock threaded through five call sites; it is one `provide` at
+// the top of a test, and every decision underneath is dated by it.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.ambient;
+
+mount verum_registry.protocol.authority.{Authority};
+
+// -----------------------------------------------------------------------------
+// The contexts
+// -----------------------------------------------------------------------------
+
+/// When it is, as seconds since the epoch.
+///
+/// A context rather than a parameter because EVERY dated decision needs
+/// it and none of them takes it as input. Under test it is frozen; in
+/// production it reads the system clock. Neither the rules nor their
+/// call sites change between those two worlds.
+public context Clock {
+    fn now() -> Int;
+}
+
+/// Who this node is: its log, and the authorities it was configured
+/// with.
+///
+/// `authorities` is here rather than passed because it is CONFIGURATION
+/// — the same set for every decision the node makes in a run, and a
+/// decision made against a different set than the one the node runs
+/// with is not a decision anybody asked for.
+public context NodeIdentity {
+    fn log_id() -> Text;
+    fn authorities() -> List<Authority>;
+}
+
+/// Whether the upstream can be reached RIGHT NOW.
+///
+/// Deliberately a context and deliberately not a field: reachability
+/// changes between two calls, so a value captured once and passed down
+/// is a fact about the past presented as a fact about the present. That
+/// is exactly the confusion §4.1 refuses at the answer level, arriving
+/// through the parameter list instead.
+public context Uplink {
+    fn reachable() -> Bool;
+}
+
+// -----------------------------------------------------------------------------
+// The backends
+// -----------------------------------------------------------------------------
+//
+// Nothing marks these as special. Any type carrying the methods can be
+// provided for a context, which is why a test's frozen clock and a
+// production clock are the same KIND of thing — one is not a weakened
+// version of the other.
+
+/// A clock stopped at a stated moment. What a test provides.
+public type FrozenClock is { at: Int };
+
+implement FrozenClock {
+    public fn now(&self) -> Int {
+        self.at
+    }
+}
+
+/// A node's configured identity.
+public type ConfiguredNode is {
+    log: Text,
+    owns: List<Authority>,
+};
+
+implement ConfiguredNode {
+    public fn log_id(&self) -> Text {
+        self.log.clone()
+    }
+
+    public fn authorities(&self) -> List<Authority> {
+        self.owns.clone()
+    }
+}
+
+/// A stated link state. Production replaces this with something that
+/// asks the network; the rules above it do not change.
+public type StatedLink is { up: Bool };
+
+implement StatedLink {
+    public fn reachable(&self) -> Bool {
+        self.up
+    }
+}

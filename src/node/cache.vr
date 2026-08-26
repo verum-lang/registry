@@ -14,6 +14,25 @@
 //     `NotFound`. "I cannot see" and "it does not exist" are different
 //     facts, and a build system that conflates them either fails a build
 //     that should have used the cache, or hides a typo as an outage.
+//
+// TWO THINGS ARE NOT PARAMETERS HERE, and both are deliberate.
+//
+// WHEN it is comes from the `Clock` context. Every stored answer is
+// dated, and a date threaded by hand is a date some path forgets — the
+// forgetting is invisible because the type still checks, `0` being a
+// perfectly good `Int`.
+//
+// WHETHER THE UPSTREAM IS REACHABLE comes from the `Uplink` context.
+// Reachability changes between two calls, so a value captured once and
+// passed down is a fact about the past presented as a fact about the
+// present — exactly the confusion §4.1 refuses at the answer level,
+// arriving through the parameter list instead.
+//
+// SHAPE: the entries are a `Map` keyed by package name, not a list. A
+// registry holds millions of coordinates, and a linear scan is not a
+// smaller version of an index — it is a different asymptote, and one
+// that only shows up at the scale where it is expensive to change. The
+// lookup below is one probe whatever the node holds.
 
 @arch_module(
     foundation: Foundation.ZfcTwoInacc,
@@ -24,6 +43,7 @@ module verum_registry.node.cache;
 
 mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
 mount verum_registry.protocol.evidence.{Manifest, Verified};
+mount verum_registry.node.ambient.{Clock, Uplink};
 
 // -----------------------------------------------------------------------------
 // What a cache holds
@@ -34,17 +54,13 @@ mount verum_registry.protocol.evidence.{Manifest, Verified};
 public type CachedEntry is {
     verified: Verified,
     /// When this node fetched it, so a consistency answer can be dated.
+    /// Read from the clock at store time, never supplied by a caller.
     fetched_at: Int,
 };
 
-/// Whether the upstream can be reached right now.
-public type Link is
-    | Online
-    | Offline;
-
-/// A node's local cache.
+/// A node's local cache, indexed by the name a lookup asks for.
 public type Cache is {
-    entries: List<CachedEntry>,
+    entries: Map<Text, CachedEntry>,
 };
 
 /// What a lookup can answer. Note what is NOT here: there is no variant
@@ -63,37 +79,41 @@ public type Answer is
 
 implement Cache {
     public fn empty() -> Cache {
-        Cache { entries: List.new() }
+        Cache { entries: Map.new() }
     }
 
-    /// Store a verified coordinate. The attribution rides along inside
-    /// `Verified`; there is no path that stores an artefact and forgets
-    /// it, because there is no way to build a `CachedEntry` without one.
-    public fn store(&mut self, verified: Verified, fetched_at: Int) {
-        self.entries.push(CachedEntry {
+    /// Store a verified coordinate, dated by the clock.
+    ///
+    /// The attribution rides along inside `Verified`; there is no path
+    /// that stores an artefact and forgets it, because there is no way
+    /// to build a `CachedEntry` without one.
+    public fn store(&mut self, verified: Verified) using [Clock] {
+        let key = verified.manifest.name.0.clone();
+        self.entries.insert(key, CachedEntry {
             verified: verified,
-            fetched_at: fetched_at,
+            fetched_at: Clock.now(),
         });
     }
 
-    /// Answer for `name` given the current link state.
+    /// Answer for `name`.
     ///
-    /// A cached entry is served in BOTH link states — that is the point
-    /// of §4.1: an office with a broken uplink keeps building. Only a
-    /// name this node has never seen depends on the link, and then the
-    /// two absences are told apart.
-    public fn lookup(&self, name: &PackageName, link: &Link) -> Answer {
-        for e in self.entries.iter() {
-            if e.verified.manifest.name.0 == name.0 {
-                return Answer.Hit(CachedEntry {
-                    verified: e.verified.clone(),
-                    fetched_at: e.fetched_at,
-                });
+    /// A cached entry is served whether or not the upstream is up — that
+    /// is the point of §4.1: an office with a broken uplink keeps
+    /// building. Only a name this node has never seen depends on the
+    /// link, and then the two absences are told apart.
+    public fn lookup(&self, name: &PackageName) -> Answer using [Uplink] {
+        match self.entries.get(name.0.clone()) {
+            Some(e) => Answer.Hit(CachedEntry {
+                verified: e.verified.clone(),
+                fetched_at: e.fetched_at,
+            }),
+            None => {
+                if Uplink.reachable() {
+                    Answer.NotFound
+                } else {
+                    Answer.UpstreamUnreachable
+                }
             }
-        }
-        match link {
-            Offline => Answer.UpstreamUnreachable,
-            Online  => Answer.NotFound,
         }
     }
 
@@ -144,22 +164,21 @@ public fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -> Boo
 }
 
 /// Storing then looking a name up answers with the attribution it was
-/// stored with — in BOTH link states, since serving from cache while
+/// stored with — whatever the link state, since serving from cache while
 /// offline is the point of having one.
 public fn store_then_lookup_keeps_attribution(
     verified: Verified,
-    link: &Link,
-) -> Bool {
+) -> Bool using [Clock, Uplink] {
     let expected = verified.authority_id.clone();
     let wanted = PackageName(verified.manifest.name.0.clone());
     let mut c = Cache.empty();
-    c.store(verified, 0);
-    answer_keeps_attribution(&c.lookup(&wanted, link), &expected)
+    c.store(verified);
+    answer_keeps_attribution(&c.lookup(&wanted), &expected)
 }
 
 @verify(formal)
-public theorem cache_keeps_attribution(verified: Verified, link: &Link)
-    ensures store_then_lookup_keeps_attribution(verified, link)
+public theorem cache_keeps_attribution(verified: Verified)
+    ensures store_then_lookup_keeps_attribution(verified)
     // `CachedEntry` has no field for an authority of its own: the
     // attribution lives inside the `Verified` it holds, so there is
     // nothing for `store` to drop and nothing for `lookup` to re-derive.

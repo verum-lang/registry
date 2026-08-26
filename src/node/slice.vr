@@ -34,6 +34,7 @@ mount verum_registry.protocol.evidence.{
     Verified, digest_of, verify,
 };
 mount verum_registry.node.cache.{Cache};
+mount verum_registry.node.ambient.{Clock};
 
 // -----------------------------------------------------------------------------
 // What travels
@@ -113,8 +114,7 @@ implement Slice {
 public fn import_slice(
     cache: &mut Cache,
     slice: &Slice,
-    imported_at: Int,
-) -> Result<Int{it >= 0}, ImportError> {
+) -> Result<Int{it >= 0}, ImportError> using [Clock] {
     match slice.closure_gap() {
         Maybe.Some(e) => return Result.Err(e),
         Maybe.None    => {}
@@ -151,7 +151,7 @@ public fn import_slice(
     // Pass 2 — store, keeping the attribution each item arrived with.
     let mut stored = 0;
     for v in verified.iter() {
-        cache.store(v.clone(), imported_at);
+        cache.store(v.clone());
         stored = stored + 1;
     }
     Result.Ok(stored)

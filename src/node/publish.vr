@@ -41,7 +41,8 @@ mount verum_registry.protocol.authority.{
 mount verum_registry.protocol.evidence.{
     EvidenceError, InclusionProof, Manifest, SignatureBundle, Verified, verify,
 };
-mount verum_registry.node.cache.{Answer, Cache, Link};
+mount verum_registry.node.cache.{Answer, Cache};
+mount verum_registry.node.ambient.{Clock, NodeIdentity, Uplink};
 
 // -----------------------------------------------------------------------------
 // What a publisher offers
@@ -95,17 +96,20 @@ public type Published is
 /// evidence before ownership would tell a publisher whether their
 /// signature is valid for a name they have no right to — a small oracle,
 /// and one with no reason to exist.
+///
+/// The authorities and the node's own log are AMBIENT: they are the
+/// configuration this node runs with, identical for every decision it
+/// makes, and a publication judged against a different set than the one
+/// the node runs with is not a judgement anybody asked for.
 public fn publish(
-    authorities: &List<Authority>,
     cache: &mut Cache,
     request: &PublishRequest,
-    our_log: &Text,
-    published_at: Int,
-) -> Result<Published, PublishError> {
+) -> Result<Published, PublishError> using [Clock, NodeIdentity, Uplink] {
+    let authorities = NodeIdentity.authorities();
     let name = PackageName(request.manifest.name.0.clone());
 
     // 1. Is this name ours, and is the publisher who they say they are?
-    match resolve_authority(authorities, &name) {
+    match resolve_authority(&authorities, &name) {
         Err(ResolutionError.AmbiguousAuthority(who)) => {
             return Result.Err(PublishError.ContestedName(who));
         }
@@ -144,7 +148,7 @@ public fn publish(
         &request.proof,
         request.as_authority.clone(),
         AuthorityRole.Local,
-        our_log,
+        &NodeIdentity.log_id(),
     ) {
         Ok(v) => v,
         Err(e) => return Result.Err(PublishError.EvidenceRefused(e)),
@@ -154,11 +158,10 @@ public fn publish(
     //    release arriving twice — which is the network, not a fault — or
     //    an attempt to rewrite one, which is refused.
     //
-    //    The link state is `Offline` on purpose: this question is about
-    //    what THIS NODE holds, and asking it in a way that could depend
-    //    on reachability would make publication succeed or fail with the
-    //    weather.
-    match cache.lookup(&name, &Link.Offline) {
+    //    The lookup is about what THIS NODE holds; the link state only
+    //    decides which ABSENCE is reported, and an absence takes the
+    //    store path either way.
+    match cache.lookup(&name) {
         Answer.Hit(existing) => {
             if existing.verified.manifest.version == verified.manifest.version {
                 if existing.verified.manifest.artefact.0
@@ -175,6 +178,6 @@ public fn publish(
         Answer.NotFound => {}
     }
 
-    cache.store(verified.clone(), published_at);
+    cache.store(verified.clone());
     Result.Ok(Published.Accepted(verified))
 }
