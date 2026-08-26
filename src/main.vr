@@ -35,6 +35,10 @@ mount verum_registry.node.slice.{
 mount verum_registry.node.handshake.{
     HandshakeError, PeerIdentity, PeerSession, PinnedAnchor, meet,
 };
+mount verum_registry.protocol.source.{
+    Assurance, GitSource, Located, RegistrySource, Source, SourceError,
+    locate_through, satisfies_audit_policy,
+};
 mount verum_registry.protocol.evidence.{
     Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
     Verified, digest_of, verify,
@@ -234,6 +238,26 @@ fn offer(
     }
 }
 
+/// Locate a name through a source, and report both the answer and the
+/// assurance it came with — never one without the other.
+fn locate<S: Source>(label: &Text, source: &S, name: &Text) {
+    let n = PackageName(name.clone());
+    match locate_through(source, &n) {
+        Ok(l) => {
+            match l.assurance {
+                Assurance.Auditable(log) =>
+                    print(f"{label}: {l.revision} — auditable against {log}"),
+                Assurance.Attributable(remote) =>
+                    print(f"{label}: {l.revision} — attributable to {remote}, no log"),
+            }
+        }
+        Err(SourceError.NoSuchCoordinate(who)) =>
+            print(f"{label}: {who} is not in {source.describe()}"),
+        Err(SourceError.Unreachable(where_)) =>
+            print(f"{label}: {where_} unreachable"),
+    }
+}
+
 fn build_slice(v: &Verified, requires: List<Text>) -> Slice {
     let mut items: List<SliceItem> = List.new();
     items.push(export_item(v, requires));
@@ -395,6 +419,27 @@ fn main() {
 
     // A version mismatch names both numbers rather than degrading.
     greet(&"version-skew", &peer(2, "ed25519:AAAA"), &pinned);
+
+    // --- where bytes come from (protocol spec §7) ---
+    let mut versions: Map<Text, Text> = Map.new();
+    versions.insert("serde", "1.0.0");
+    let reg = RegistrySource { log_id: "upstream-log", versions: versions };
+
+    let mut revs: Map<Text, Text> = Map.new();
+    revs.insert("vendored-tool", "9a1f2c");
+    let git = GitSource { remote: "git@example:tools", revisions: revs, reachable: true };
+    let dark = GitSource { remote: "git@example:dark", revisions: Map.new(), reachable: false };
+
+    // The same call site, two implementations. It is generic over the
+    // protocol, so a third source needs no edit here.
+    locate(&"from-registry", &reg, &"serde");
+    locate(&"from-git", &git, &"vendored-tool");
+    locate(&"missing", &reg, &"nowhere");
+    locate(&"unreachable", &dark, &"anything");
+
+    // The difference the design refuses to hide: a policy that needs an
+    // audit trail can refuse a source BEFORE it serves a build.
+    print(f"audit-policy: registry={satisfies_audit_policy(&reg)} git={satisfies_audit_policy(&git)}");
 
     // --- the write path (protocol spec §5, row 2) ---
     let mut store = Cache.empty();
