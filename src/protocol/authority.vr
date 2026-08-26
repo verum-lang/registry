@@ -170,3 +170,68 @@ public fn resolve_authority(
 
     Result.Err(ResolutionError.NoAuthority)
 }
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+//
+// STATE: these obligations are STATED and NOT YET DISCHARGED. The prover
+// currently proves a goal only when the predicate is a single expression
+// over primitive parameters — a `let` binding, a field access or a method
+// call defeats it regardless of how easy the claim is (`b.n == b.n` over a
+// struct fails). That is a limit of the prover's reach, not a doubt about
+// these properties, and it is filed with the ladder that measures it. The
+// theorems stay: an obligation nobody has discharged is an audit finding,
+// which is the honest record, and it becomes a proof the day the reach
+// covers it — without anyone having to remember to come back and add one.
+//
+// The module note above says the attribution is carried by the type. That
+// is a claim about every path through `resolve_authority`, and a claim of
+// that shape is worth exactly as much as its enforcement: a comment stops
+// being true silently, a theorem stops compiling.
+
+/// Is this resolution attributed to an authority that was actually
+/// offered?
+///
+/// The failure it excludes is a resolution naming an authority nobody
+/// configured — a fabricated provenance, which is worse than no answer
+/// because it looks like one.
+public fn attributed_to_a_configured_authority(
+    authorities: &List<Authority>,
+    r: &Resolved,
+) -> Bool {
+    for a in authorities.iter() {
+        if a.id == r.authority_id {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every successful resolution is attributed; every other outcome is a
+/// typed refusal. There is no third possibility, which is what makes the
+/// attribution unforgettable rather than merely conventional.
+public fn resolution_attributes_or_refuses(
+    authorities: &List<Authority>,
+    name: &PackageName,
+) -> Bool {
+    match resolve_authority(authorities, name) {
+        Ok(r)  => attributed_to_a_configured_authority(authorities, &r),
+        Err(_) => true,
+    }
+}
+
+@verify(formal)
+public theorem resolution_is_attributed(
+    authorities: &List<Authority>,
+    name: &PackageName,
+)
+    ensures resolution_attributes_or_refuses(authorities, name)
+    // By construction, and the construction is the whole argument:
+    // `Resolved` has three required fields and no constructor that omits
+    // `authority_id`, so an Ok can only be built inside
+    // `resolve_authority`. There are exactly two such sites, and each
+    // copies the id from an element of `authorities` — the claimant in
+    // the single-claimant branch, the upstream in the unclaimed branch.
+    // No path fabricates an id, because no path has one to fabricate.
+    proof by auto;

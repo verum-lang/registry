@@ -1,0 +1,199 @@
+// =============================================================================
+// verum_registry.node.consistency — a cache you can audit, not just trust
+// =============================================================================
+// Spec: registry-federation-protocol §2.4
+//
+// A node that answers for upstream content is repeating someone else's
+// claims. What stops it from repeating them SELECTIVELY — showing one
+// client a release and another client a world where that release never
+// happened — is that every view it has served is anchored to a signed
+// tree head, and any two heads it has seen must be consistent.
+//
+//   * TREE HEADS ONLY GROW. A log is append-only, so a later head has a
+//     size no smaller than an earlier one. A node offering a head that
+//     shrank is either serving a fork or has been rewound; both are the
+//     same refusal, because a client cannot tell them apart and should
+//     not have to.
+//
+//   * A SIZE THAT REPEATS MUST REPEAT ITS ROOT. Two heads of equal size
+//     with different roots are two different histories of the same
+//     length — the clearest possible evidence of a fork, and the case a
+//     size-only check waves through.
+//
+// The point of keeping heads is that a client can ask a question the
+// node cannot dodge: "show me that the view you gave me last week is a
+// prefix of the view you are giving me now."
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.consistency;
+
+// -----------------------------------------------------------------------------
+// What is anchored
+// -----------------------------------------------------------------------------
+
+/// A signed statement by a log about its own contents at one moment.
+///
+/// `log_id` rides along for the same reason it does on an inclusion
+/// proof: two heads are only comparable when they describe the SAME log,
+/// and a node holding heads from several upstreams must not compare
+/// across them.
+public type TreeHead is {
+    log_id: Text,
+    tree_size: Int,
+    root: Text,
+    /// When this node saw it. Not part of the comparison — kept so a
+    /// refusal can say WHEN the divergence entered the record.
+    seen_at: Int,
+};
+
+/// Heads this node has seen, in the order it saw them.
+public type HeadLog is {
+    heads: List<TreeHead>,
+};
+
+/// Why two heads cannot both be true of one log.
+public type ConsistencyError is
+    /// A later head is SMALLER than an earlier one: the log was rewound
+    /// or forked. Names both sizes.
+    | TreeShrank(Int, Int)
+    /// Two heads claim the same size with different roots: two histories
+    /// of equal length. Names the size and both roots.
+    | ForkAtSize(Int, Text, Text)
+    /// The two heads describe different logs and are not comparable.
+    | DifferentLogs(Text, Text);
+
+/// What an audit can conclude.
+public type Audit is
+    /// Every pair of heads is consistent, over this many heads.
+    | Consistent(Int)
+    /// The record contradicts itself, with the reason.
+    | Contradicts(ConsistencyError);
+
+// -----------------------------------------------------------------------------
+// The check (spec §2.4)
+// -----------------------------------------------------------------------------
+
+/// Are these two heads of one log both believable?
+///
+/// The pair is ordered by WHEN THIS NODE SAW THEM, not by the sizes the
+/// heads claim — using the sizes to decide which is later would make the
+/// growth rule circular, and a node that rewinds its view is exactly
+/// what the rule is looking for. Heads seen at the same moment are
+/// unordered, and only the equal-size rule applies to them.
+public fn compatible(a: &TreeHead, b: &TreeHead) -> Maybe<ConsistencyError> {
+    if a.log_id != b.log_id {
+        return Maybe.Some(ConsistencyError.DifferentLogs(
+            a.log_id.clone(),
+            b.log_id.clone(),
+        ));
+    }
+    if a.tree_size == b.tree_size {
+        if a.root != b.root {
+            return Maybe.Some(ConsistencyError.ForkAtSize(
+                a.tree_size,
+                a.root.clone(),
+                b.root.clone(),
+            ));
+        }
+        return Maybe.None;
+    }
+    // Different sizes. A log is append-only, so the head seen LATER
+    // cannot be the smaller one.
+    if a.seen_at < b.seen_at {
+        if b.tree_size < a.tree_size {
+            return Maybe.Some(ConsistencyError.TreeShrank(
+                a.tree_size,
+                b.tree_size,
+            ));
+        }
+        return Maybe.None;
+    }
+    if b.seen_at < a.seen_at {
+        if a.tree_size < b.tree_size {
+            return Maybe.Some(ConsistencyError.TreeShrank(
+                b.tree_size,
+                a.tree_size,
+            ));
+        }
+        return Maybe.None;
+    }
+    // Same moment, different sizes: nothing to conclude. The prefix
+    // obligation — that the smaller tree's root is reachable inside the
+    // larger — is stated in the spec and belongs with the digest
+    // function, which is a placeholder in this slice for the same
+    // reason. Saying "consistent" here would be a claim this code does
+    // not check; it says "no contradiction found", which is weaker and
+    // true.
+    Maybe.None
+}
+
+implement HeadLog {
+    public fn empty() -> HeadLog {
+        HeadLog { heads: List.new() }
+    }
+
+    /// Record a head. Recording is unconditional — a head that
+    /// contradicts the record is exactly what an audit needs to FIND,
+    /// so refusing to store it would erase the evidence.
+    public fn observe(&mut self, head: TreeHead) {
+        self.heads.push(head);
+    }
+
+    /// Check every head against every other.
+    ///
+    /// All pairs, not just consecutive ones: a node that serves an old
+    /// view, then a newer one, then the old one again produces a
+    /// consecutive-pairs check that passes twice while the record as a
+    /// whole is a fork.
+    public fn audit(&self) -> Audit {
+        let mut count = 0;
+        for a in self.heads.iter() {
+            count = count + 1;
+            for b in self.heads.iter() {
+                match compatible(a, b) {
+                    Maybe.Some(e) => return Audit.Contradicts(e),
+                    Maybe.None    => {}
+                }
+            }
+        }
+        Audit.Consistent(count)
+    }
+
+    /// The largest head seen for a log — the view this node would serve
+    /// now. Absent when it has never seen that log, which is a different
+    /// answer from "size zero".
+    public fn current(&self, log_id: &Text) -> Maybe<TreeHead> {
+        let mut best: Maybe<TreeHead> = Maybe.None;
+        for h in self.heads.iter() {
+            if h.log_id == log_id.clone() {
+                match best {
+                    Maybe.None => {
+                        best = Maybe.Some(TreeHead {
+                            log_id: h.log_id.clone(),
+                            tree_size: h.tree_size,
+                            root: h.root.clone(),
+                            seen_at: h.seen_at,
+                        });
+                    }
+                    Maybe.Some(b) => {
+                        if h.tree_size > b.tree_size {
+                            best = Maybe.Some(TreeHead {
+                                log_id: h.log_id.clone(),
+                                tree_size: h.tree_size,
+                                root: h.root.clone(),
+                                seen_at: h.seen_at,
+                            });
+                        } else {
+                            best = Maybe.Some(b);
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+}

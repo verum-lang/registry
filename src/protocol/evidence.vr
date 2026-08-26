@@ -141,3 +141,81 @@ public fn verify(
 public fn digest_of(m: &Manifest) -> Digest {
     Digest(f"{m.name.0}@{m.version}:{m.artefact.0}:{m.published_at}")
 }
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+//
+// STATE: these obligations are STATED and NOT YET DISCHARGED. The prover
+// currently proves a goal only when the predicate is a single expression
+// over primitive parameters — a `let` binding, a field access or a method
+// call defeats it regardless of how easy the claim is (`b.n == b.n` over a
+// struct fails). That is a limit of the prover's reach, not a doubt about
+// these properties, and it is filed with the ladder that measures it. The
+// theorems stay: an obligation nobody has discharged is an audit finding,
+// which is the honest record, and it becomes a proof the day the reach
+// covers it — without anyone having to remember to come back and add one.
+
+/// Do all three pieces describe the SAME manifest, in the SAME log?
+///
+/// Written as a predicate over the inputs rather than a property of the
+/// output, because the claim is about what `verify` may accept — a
+/// property read off the result could be satisfied by a `verify` that
+/// accepts everything and reports what it accepted.
+public fn evidence_agrees(
+    manifest: &Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    expected_log: &Text,
+) -> Bool {
+    let d = digest_of(manifest);
+    signature.manifest_digest.0 == d.0
+        && proof.manifest_digest.0 == d.0
+        && proof.tree_size > 0
+        && proof.log_id == expected_log.clone()
+}
+
+/// `verify` succeeds exactly when the evidence agrees.
+///
+/// Both directions matter and they fail differently. Accepting when the
+/// evidence disagrees admits an artefact nobody vouched for. REFUSING
+/// when it agrees looks like caution and is not: a check that also
+/// refuses valid evidence teaches operators to route around it, and a
+/// check that is routinely bypassed protects nothing.
+public fn verify_accepts_exactly_agreeing_evidence(
+    manifest: Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    authority_id: Text,
+    role: AuthorityRole,
+    expected_log: &Text,
+) -> Bool {
+    let agrees = evidence_agrees(&manifest, signature, proof, expected_log);
+    match verify(manifest, signature, proof, authority_id, role, expected_log) {
+        Ok(_)  => agrees,
+        Err(_) => !agrees,
+    }
+}
+
+@verify(formal)
+public theorem verified_implies_evidence(
+    manifest: Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    authority_id: Text,
+    role: AuthorityRole,
+    expected_log: &Text,
+)
+    ensures verify_accepts_exactly_agreeing_evidence(
+        manifest, signature, proof, authority_id, role, expected_log
+    )
+    // `verify` refuses on the negation of each conjunct of
+    // `evidence_agrees`, in the same order, and constructs the only
+    // reachable `Verified` after the last of them. So its Ok path is
+    // guarded by precisely that conjunction — one direction — and every
+    // Err arises from one conjunct being false — the other.
+    //
+    // The equivalence is what makes `Verified` mean something: a value of
+    // that type cannot exist without the evidence having agreed, and no
+    // code path can claim it did.
+    proof by auto;

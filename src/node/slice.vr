@@ -1,0 +1,188 @@
+// =============================================================================
+// verum_registry.node.slice — carrying a registry across an air gap
+// =============================================================================
+// Spec: registry-federation-protocol §4.2
+//
+// A slice is a self-contained, verifiable export. Two rules decide
+// whether it is trustworthy on the far side, and both are easy to break
+// without noticing:
+//
+//   * A SLICE DOES NOT GRANT ITS BEARER AUTHORITY. Imported coordinates
+//     keep the authority they were EXPORTED with, so a disconnected node
+//     cannot launder an upstream package into looking locally published
+//     by carrying it in on a disk. The attribution rides inside
+//     `Verified`, so keeping it is not a step an importer can forget.
+//
+//   * IMPORT IS ALL-OR-NOTHING. Every artefact is verified BEFORE
+//     anything is stored. A partial import leaves a node whose cache
+//     disagrees with its own manifest, and the disagreement surfaces
+//     later, somewhere else, as a missing dependency.
+//
+// Slices are closed under dependencies by default, because the
+// alternative is discovering the gap on the side with no network.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.slice;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.protocol.evidence.{
+    Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
+    Verified, digest_of, verify,
+};
+mount verum_registry.node.cache.{Cache};
+
+// -----------------------------------------------------------------------------
+// What travels
+// -----------------------------------------------------------------------------
+
+/// One coordinate and everything needed to believe it on the far side.
+/// There is no field for "already checked": the far side checks again,
+/// because the exporter is a party the importer did not choose.
+public type SliceItem is {
+    manifest: Manifest,
+    signature: SignatureBundle,
+    proof: InclusionProof,
+    /// The authority that answered when this was fetched — carried, not
+    /// re-derived on import.
+    authority_id: Text,
+    role: AuthorityRole,
+    /// The log the proof belongs to, so the far side can check the same
+    /// thing this side did.
+    log_id: Text,
+    /// What this coordinate needs. Used to decide closure.
+    requires: List<Text>,
+};
+
+public type Slice is {
+    items: List<SliceItem>,
+};
+
+/// Why an import was refused. Every case names the coordinate, because
+/// an operator on a disconnected machine cannot ask anyone.
+public type ImportError is
+    /// One item's evidence did not check out. Nothing was stored.
+    | ItemRefused(Text, EvidenceError)
+    /// The slice is not closed: an item needs something the slice does
+    /// not carry. Named so the exporter can be told what to add.
+    | NotClosed(Text, Text);
+
+// -----------------------------------------------------------------------------
+// Closure (spec §4.2)
+// -----------------------------------------------------------------------------
+
+implement Slice {
+    /// Is every requirement of every item carried by this slice?
+    ///
+    /// Checked BEFORE verification, so the answer to "will this work on
+    /// the far side" does not depend on how far the import got.
+    public fn closure_gap(&self) -> Maybe<ImportError> {
+        for item in self.items.iter() {
+            for need in item.requires.iter() {
+                let mut found = false;
+                for other in self.items.iter() {
+                    if other.manifest.name.0 == need.clone() {
+                        found = true;
+                    }
+                }
+                if !found {
+                    return Maybe.Some(ImportError.NotClosed(
+                        item.manifest.name.0.clone(),
+                        need.clone(),
+                    ));
+                }
+            }
+        }
+        Maybe.None
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Import (spec §4.2)
+// -----------------------------------------------------------------------------
+
+/// Verify every item, then store every item — in that order.
+///
+/// The two loops are not an accident of style. Verifying inside the
+/// storing loop would leave a partially-populated node when the third
+/// item fails, and a node whose contents disagree with its own manifest
+/// reports the disagreement later, somewhere unrelated.
+public fn import_slice(
+    cache: &mut Cache,
+    slice: &Slice,
+    imported_at: Int,
+) -> Result<Int, ImportError> {
+    match slice.closure_gap() {
+        Maybe.Some(e) => return Result.Err(e),
+        Maybe.None    => {}
+    }
+
+    // Pass 1 — verify everything, store nothing.
+    let mut verified: List<Verified> = List.new();
+    for item in slice.items.iter() {
+        let expected = item.log_id.clone();
+        let m = Manifest {
+            name: PackageName(item.manifest.name.0.clone()),
+            version: item.manifest.version.clone(),
+            artefact: Digest(item.manifest.artefact.0.clone()),
+            published_at: item.manifest.published_at,
+        };
+        match verify(
+            m,
+            &item.signature,
+            &item.proof,
+            item.authority_id.clone(),
+            item.role.clone(),
+            &expected,
+        ) {
+            Ok(v) => verified.push(v),
+            Err(e) => {
+                return Result.Err(ImportError.ItemRefused(
+                    item.manifest.name.0.clone(),
+                    e,
+                ));
+            }
+        }
+    }
+
+    // Pass 2 — store, keeping the attribution each item arrived with.
+    let mut stored = 0;
+    for v in verified.iter() {
+        cache.store(v.clone(), imported_at);
+        stored = stored + 1;
+    }
+    Result.Ok(stored)
+}
+
+/// Build a slice item from a coordinate this node holds.
+///
+/// The authority and log ride along; an exporter that re-stamped them
+/// with its own identity would be the laundering this rule exists to
+/// prevent, and there is no parameter here that would let it.
+public fn export_item(v: &Verified, requires: List<Text>) -> SliceItem {
+    let d = digest_of(&v.manifest);
+    SliceItem {
+        manifest: Manifest {
+            name: PackageName(v.manifest.name.0.clone()),
+            version: v.manifest.version.clone(),
+            artefact: Digest(v.manifest.artefact.0.clone()),
+            published_at: v.manifest.published_at,
+        },
+        signature: SignatureBundle {
+            manifest_digest: Digest(d.0.clone()),
+            signer: "exported",
+        },
+        proof: InclusionProof {
+            manifest_digest: Digest(d.0.clone()),
+            log_id: v.log_id.clone(),
+            tree_size: 1,
+        },
+        authority_id: v.authority_id.clone(),
+        role: v.role.clone(),
+        log_id: v.log_id.clone(),
+        requires: requires,
+    }
+}
