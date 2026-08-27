@@ -10,14 +10,19 @@ not as a set of rules invented in advance.
 protocol/       the rules.        Pure. No contexts. No I/O.
   authority     who may answer for a name
   evidence      what a client checks before believing
+  hash          a digest carries its width in its type
+  query         what a question means, and what it costs
   source        where bytes come from (a protocol + two implementations)
+  version       which version a constraint means
 
 node/           the policy.       Uses contexts. Still no I/O.
   ambient       the contexts themselves, and backends for them
   cache         what a node keeps and what it says offline
   consistency   auditing a cache against the heads it has seen
+  durable       surviving a restart
   handshake     meeting an upstream, once per session
   publish       the write path
+  search        one question, three answers
   slice         carrying a registry across an air gap
 
 main.vr         the composition root.
@@ -89,6 +94,31 @@ or `StatedLink`. Everything under it runs against the contexts, so the
 same rules execute under a frozen clock here and a system clock in
 production with no line of them changing — and a test's frozen clock is
 one `provide`, not a mock threaded through five call sites.
+
+## Where to look for each part of the language
+
+This programme is also the language's proving ground, so it is worth
+saying where each thing it leans on actually lives. Nothing here is
+decoration: every entry is load-bearing for the domain, and several of
+them found defects in the language while being written.
+
+| what | where | why the domain wants it |
+|---|---|---|
+| refinement types | `cache.len`, `query.clause_cost`, `version.Version` | invariants a node computes about ITSELF, so a violation is our bug and halting is right |
+| theorems beside the rules | every `protocol/` module | a comment claiming a property stops being true silently; a theorem stops compiling |
+| contexts (DI) | `node/ambient`, every `node/` module | what time it is, who this node is, whether the upstream is up — true of every decision, argument to none |
+| scoped `provide … in { }` | `main.vr` | exercising both states of the world without a mock threaded through five call sites |
+| `pure`, compiler-verified | all of `protocol/` | the layering is a fact the compiler holds, not a convention a reviewer notices |
+| structured concurrency | `node/slice` | all-or-nothing import becomes a CONSEQUENCE of the parent-outlives-child law, not a comment |
+| protocols with associated types | `protocol/source` | two sources with different reference shapes, one rule over both |
+| rank-2 transducers | `protocol/query`, `node/search` | one query definition, three consumers, no filter chain free to drift |
+| meta parameters with refinements | `protocol/hash` | a digest width is part of the type, and SHA-1's width is not a type at all |
+| the CBGR tier dial | `protocol/hash` | one place, with the proof and the measurement written beside it |
+| architectural obligations | every module's `@arch_module` | the audit gates on them |
+
+Two are deliberately ABSENT and say so where they would go: `&unsafe`
+anywhere (`protocol/hash` states why), and disjunction in a query
+(`protocol/query` states why).
 
 ## Choices that keep coming up
 
