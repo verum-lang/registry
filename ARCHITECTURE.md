@@ -108,7 +108,7 @@ them found defects in the language while being written.
 | theorems beside the rules | every `protocol/` module | a comment claiming a property stops being true silently; a theorem stops compiling |
 | contexts (DI) | `node/ambient`, every `node/` module | what time it is, who this node is, whether the upstream is up — true of every decision, argument to none |
 | scoped `provide … in { }` | `main.vr` | exercising both states of the world without a mock threaded through five call sites |
-| `pure`, compiler-verified | all of `protocol/` | the layering is a fact the compiler holds, not a convention a reviewer notices |
+| `pure`, compiler-verified | all of `protocol/` | the layering is a fact the compiler holds, not a convention a reviewer notices — **checked by breaking it**, see below |
 | structured concurrency | `node/slice` | all-or-nothing import becomes a CONSEQUENCE of the parent-outlives-child law, not a comment |
 | `async` as an inherited fact | `node/slice` → `node/durable` → `main` | one function fans out and waits; every caller up the chain says so, because `.await` outside an async context is a refusal and not a silent block |
 | protocols with associated types | `protocol/source` | two sources with different reference shapes, one rule over both |
@@ -147,6 +147,25 @@ but using it here would have let every caller keep a synchronous
 signature while a fan-out ran underneath — and the all-or-nothing
 guarantee `node/slice` claims would have become a comment again. The
 chain says `async` all the way to `main` instead.
+
+### The purity claim, checked rather than asserted
+
+Every function in `protocol/` is `pure`, and the table above says the
+layering is the compiler's fact rather than a convention. A claim like
+that is worth exactly as much as the last time somebody tried to
+falsify it, so: adding one `print` to `query.clause_cost` gives
+
+```text
+error<E503>: pure function `clause_cost` has side effects: IO
+```
+
+and removing it returns the project to zero errors. The check is
+transitive — a `pure` function calling an impure one is refused the same
+way — which is what makes it a LAYER rather than a per-function label.
+
+Re-run it whenever the claim starts feeling like decoration. It costs
+two edits and one `verum check`, and a demonstration nobody has tried to
+break is a demonstration of nothing.
 
 ## Choices that keep coming up
 
