@@ -1,0 +1,130 @@
+// =============================================================================
+// verum_registry.protocol.hash — a digest carries its width in its type
+// =============================================================================
+// Spec: registry-federation-protocol §2.1 (artefact identity)
+//
+// The wire form of a digest is text (`blake3:c0ffee…`) because that is
+// what crosses a network. The COMPARED form is bytes, and comparing
+// bytes is where a registry gets it wrong in a way nobody notices:
+//
+//   * a 32-byte digest against the first 32 bytes of a 64-byte one —
+//     equal for as long as anyone looks, and an artefact nobody signed;
+//   * a truncated read that yields fewer bytes than the algorithm
+//     produces, compared against a full one and reported as a mismatch;
+//   * two algorithms of the same width, mixed.
+//
+// The first two are LENGTH errors, and a length is exactly the kind of
+// thing a type can hold.
+//
+// THE RULE: A HASH OF ONE WIDTH IS NOT A HASH OF ANOTHER.
+//
+//     public type Hash<N: meta USize {it == 32 || it == 64}> is
+//         { bytes: [Byte; N] };
+//
+// Two things are happening in that line and both are checked at COMPILE
+// TIME.
+//
+// `N` is part of the type's IDENTITY, so `Hash<32>` and `Hash<64>` are
+// different types and no comparison between them exists to be got
+// wrong. Not a length check someone can forget — there is no function
+// to call.
+//
+// And the REFINEMENT `{it == 32 || it == 64}` says which widths this
+// protocol admits at all. `Hash<20>` — SHA-1, which this protocol does
+// not accept — is not a type either:
+//
+//     E506: meta argument 1 of `Hash` violates its refinement:
+//           `20` does not satisfy `it == 32 || it == 64`
+//
+// A predicate on a compile-time parameter, decided by the compiler. The
+// alternative everywhere else is a runtime assertion in a constructor,
+// which is a check that runs after the value exists and can be bypassed
+// by any other constructor anyone adds later.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.hash;
+
+// -----------------------------------------------------------------------------
+// The type
+// -----------------------------------------------------------------------------
+
+/// A raw hash of exactly `N` bytes, where `N` is one of the widths this
+/// protocol admits.
+public type Hash<N: meta USize {it == 32 || it == 64}> is {
+    bytes: [Byte; N],
+};
+
+/// The two widths, named, so a signature reads as what it means rather
+/// than as a number.
+public type Wide is (Hash<64>);
+public type Narrow is (Hash<32>);
+
+// -----------------------------------------------------------------------------
+// Comparison
+// -----------------------------------------------------------------------------
+
+/// Constant-time equality of two 32-byte hashes.
+///
+/// TWO PROPERTIES, and the type carries one of them so the code only has
+/// to carry the other.
+///
+/// The WIDTH is the type's business: this function cannot be handed a
+/// 64-byte hash, so there is no prefix comparison to write incorrectly
+/// and no length check to forget.
+///
+/// The TIMING is this function's business: it accumulates a difference
+/// over every byte rather than returning at the first mismatch, because
+/// a comparison that returns early tells a caller how many leading bytes
+/// they guessed right, and that is enough to forge a digest one byte at
+/// a time.
+public pure fn equal_narrow(a: &Narrow, b: &Narrow) -> Bool {
+    let mut diff = 0;
+    let mut i = 0;
+    while i < 32 {
+        diff = diff | ((a.0.bytes[i] as Int) ^ (b.0.bytes[i] as Int));
+        i = i + 1;
+    }
+    diff == 0
+}
+
+/// The same, for 64-byte hashes. Deliberately a SEPARATE function
+/// rather than one generic over `N`: the loop bound is the width, and
+/// writing it once for both would mean reading the width at runtime —
+/// which is the length check this design exists to remove.
+public pure fn equal_wide(a: &Wide, b: &Wide) -> Bool {
+    let mut diff = 0;
+    let mut i = 0;
+    while i < 64 {
+        diff = diff | ((a.0.bytes[i] as Int) ^ (b.0.bytes[i] as Int));
+        i = i + 1;
+    }
+    diff == 0
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+
+/// A hash equals itself.
+///
+/// Small, and the one a verification leans on: if a digest could fail to
+/// match itself, every artefact would be refused. It is also the claim
+/// that catches a comparison written with the wrong loop bound — a loop
+/// to 31 would still return true here, but a loop to 33 would read past
+/// the array and the property would fail.
+public pure fn narrow_equals_itself(h: &Narrow) -> Bool {
+    equal_narrow(h, h)
+}
+
+@verify(formal)
+public theorem a_hash_matches_itself(h: &Narrow)
+    ensures narrow_equals_itself(h)
+    // STATED, NOT YET DISCHARGED, and for the reason recorded on the
+    // other two obligations of this shape: the body is a LOOP, and the
+    // prover does not unfold one. Everything else it needs — the record,
+    // the field, the refinement — is inside the reach.
+    proof by auto;

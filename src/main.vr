@@ -23,6 +23,7 @@ mount verum_registry.node.cache.{Answer, Cache};
 mount verum_registry.node.search.{any, count, find};
 mount verum_registry.protocol.query.{Clause, Query};
 mount verum_registry.protocol.version.{Constraint, Version};
+mount verum_registry.protocol.hash.{Hash, Narrow, equal_narrow};
 mount verum_registry.node.ambient.{
     Clock, ConfiguredNode, FileStore, FrozenClock, NodeIdentity, StatedLink,
     Uplink,
@@ -348,6 +349,31 @@ fn search_scene(label: &Text, cache: &Cache, q: &Query) {
     print(f"{label}: found {listed.len()}, counted {counted}, any {present}");
 }
 
+/// A WIDTH IN THE TYPE.
+///
+/// `equal_narrow` takes two 32-byte hashes and there is no way to hand
+/// it a 64-byte one — the comparison across widths that silently
+/// matches an artefact nobody signed is not a bug this program can
+/// have, because it is not an expression that type-checks.
+///
+/// The line that would be a bug is worth writing down even though it
+/// cannot be compiled:
+///
+///     equal_narrow(&narrow, &wide)   // expected 32, found 64
+///     let bad: Hash<20> = …;         // E506: 20 does not satisfy
+///                                    //       it == 32 || it == 64
+///
+/// The second is the refinement on the compile-time parameter: SHA-1 is
+/// not a width this protocol admits, so `Hash<20>` is not a type. Both
+/// are the compiler doing what would otherwise be a runtime assertion
+/// in one constructor and absent from the next one someone adds.
+fn hash_scene(label: &Text) {
+    let a: Narrow = Narrow(Hash { bytes: [7_u8; 32] });
+    let b: Narrow = Narrow(Hash { bytes: [7_u8; 32] });
+    let c: Narrow = Narrow(Hash { bytes: [9_u8; 32] });
+    print(f"{label}: same={equal_narrow(&a, &b)} different={equal_narrow(&a, &c)}");
+}
+
 fn main() {
     // --- the composition root ---
     // The ONLY place in the program that names a concrete backend.
@@ -625,4 +651,7 @@ fn main() {
         }
         Maybe.None => print("search: sample failed to verify"),
     }
+
+    // --- artefact identity (protocol spec §2.1) ---
+    hash_scene(&"hash");
 }
