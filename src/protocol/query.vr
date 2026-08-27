@@ -1,0 +1,235 @@
+// =============================================================================
+// verum_registry.protocol.query — asking a node what it holds
+// =============================================================================
+// Spec: registry-federation-protocol §5 (discovery)
+//
+// A node holds millions of coordinates. Every question anyone asks it is
+// a CONJUNCTION over that set — "versions of `@acme/http` at or above
+// 2.1 that this node vouches for locally" — and the answers wanted from
+// one such question are not all the same shape. A resolver wants the
+// list. A health check wants the count. An availability probe wants only
+// whether there is at least one, and wants to stop at the first.
+//
+// THE RULE: A QUERY IS DEFINED ONCE AND CONSUMED MANY WAYS.
+//
+// Not "defined once per way of consuming it". The three consumers above
+// must not be three copies of the filter chain that drift apart — a
+// count that disagrees with the list it counts is the kind of bug that
+// gets noticed a year later, in someone else's incident.
+//
+// That is a demand on the TYPE SYSTEM, and it is what a transducer is
+// for. `Transducer<A, B>` carries
+//
+//     transform: fn<R>(Reducer<B, R>) -> Reducer<A, R>
+//
+// where `R` is quantified INSIDE the function type — rank-2. The
+// selector is built without knowing what it will accumulate into, and
+// the caller chooses that afterwards. A rank-1 `fn(Reducer<B, R>) ->
+// Reducer<A, R>` would fix `R` at construction, which is exactly the
+// mistake: the query would have to be rebuilt per consumer, and the
+// three copies would be back.
+//
+// SCALE is the other half, and it is a property of the same shape rather
+// than a separate optimisation. A composed selector is ONE pass with no
+// intermediate collection: `filter(...).map(...).collect()` allocates a
+// list per stage, so a four-clause query over a million coordinates
+// builds four million-element lists to answer a question about a
+// hundred. Composition happens before the traversal starts; the
+// traversal then touches each coordinate once.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.query;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.protocol.evidence.{Verified};
+mount verum_registry.protocol.version.{Constraint, Version, parse, satisfies};
+mount core.base.iterator.{Transducer};
+
+// -----------------------------------------------------------------------------
+// What can be asked
+// -----------------------------------------------------------------------------
+
+/// One clause of a question.
+///
+/// A closed set, not a predicate function. Two reasons, and the second
+/// is the one that matters:
+///
+///   * a clause can be PRINTED, so a node can tell an operator what it
+///     was asked — a closure cannot describe itself;
+///   * a clause can be REORDERED, and the order is the whole of the
+///     performance story below.
+public type Clause is
+    /// Exactly this package name.
+    | Named(PackageName)
+    /// Only coordinates this node answers for in the given role.
+    | InRole(AuthorityRole)
+    /// Only coordinates whose version satisfies the constraint.
+    | AtVersion(Constraint)
+    /// Only coordinates the named authority answered for.
+    | From(Text);
+
+/// A question: every clause must hold.
+///
+/// A conjunction and nothing else. Disjunction is deliberately absent —
+/// "A or B" over a registry is two questions, and a node that answers
+/// them separately can tell an operator which half matched. An `Or`
+/// variant would let one query return a set nobody can attribute.
+public type Query is {
+    clauses: List<Clause>,
+};
+
+// -----------------------------------------------------------------------------
+// What a clause costs
+// -----------------------------------------------------------------------------
+
+/// How expensive one clause is to decide, low first.
+///
+/// This is a fact about the CLAUSE, stated where the clause is defined,
+/// so the planner below cannot drift from it. `Named` compares two
+/// interned names; `AtVersion` parses a version string and compares
+/// three components.
+///
+/// The refinement is an invariant of a value this module computes about
+/// itself, so a violation is our own bug — the same rule the rest of the
+/// programme follows for refinements against typed refusals.
+public pure fn clause_cost(c: &Clause) -> Int{it >= 0} {
+    match c {
+        Clause.Named(_) => 0,
+        Clause.From(_) => 1,
+        Clause.InRole(_) => 2,
+        Clause.AtVersion(_) => 3,
+    }
+}
+
+/// Does this coordinate satisfy this clause?
+///
+/// The whole of the matching rule for one clause, in one place, so the
+/// planner and any future explain-mode cannot disagree about what a
+/// query means.
+public pure fn clause_holds(c: &Clause, v: &Verified) -> Bool {
+    match c {
+        Clause.Named(n) => v.manifest.name.0 == n.0,
+        Clause.From(a) => v.authority_id == a.clone(),
+        Clause.InRole(r) => role_eq(&v.role, r),
+        Clause.AtVersion(k) => match parse(&v.manifest.version) {
+            Ok(ver) => satisfies(&ver, k),
+            // A version this node holds and cannot parse fails every
+            // version clause. It does NOT halt: the coordinate came from
+            // a peer, so a refusal is the right shape — and answering
+            // "no" is the safe direction, since the alternative is
+            // serving an artefact against a constraint nobody checked.
+            Err(_) => false,
+        },
+    }
+}
+
+/// Variant equality, written out because `AuthorityRole` carries no
+/// derived `Eq` and a query must not depend on one being added later.
+public pure fn role_eq(a: &AuthorityRole, b: &AuthorityRole) -> Bool {
+    match a {
+        AuthorityRole.Upstream => match b {
+            AuthorityRole.Upstream => true,
+            AuthorityRole.Local => false,
+        },
+        AuthorityRole.Local => match b {
+            AuthorityRole.Upstream => false,
+            AuthorityRole.Local => true,
+        },
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The selector
+// -----------------------------------------------------------------------------
+
+/// Build the selector for a query.
+///
+/// The result is a `Transducer<Verified, Verified>` — a filter chain
+/// that has not yet been told what it will accumulate into. That is the
+/// point: the caller chooses afterwards, and the three callers in
+/// `node/search` choose three different things from ONE selector.
+///
+/// CHEAPEST CLAUSE FIRST. A conjunction short-circuits, so the order the
+/// clauses are composed in decides how much work a non-matching
+/// coordinate costs. Sorting by `clause_cost` means the millions that do
+/// not match are usually rejected by a name comparison rather than by a
+/// version parse. That is a real difference at registry scale and it is
+/// invisible at test scale, which is why it is written down here rather
+/// than discovered later in a profile.
+public pure fn selector(q: &Query) -> Transducer<Verified, Verified> {
+    let ordered = by_cost(&q.clauses);
+    let mut acc: Transducer<Verified, Verified> = Transducer.map(|v| v);
+    for c in ordered.iter() {
+        let this = c.clone();
+        acc = Transducer.compose2(acc, Transducer.filter(|v| clause_holds(&this, v)));
+    }
+    acc
+}
+
+/// The clauses, cheapest first. A stable insertion sort: the list is a
+/// handful of clauses, and stability means two clauses of equal cost
+/// keep the order the caller wrote, so an explain-mode reads back what
+/// was asked.
+public pure fn by_cost(clauses: &List<Clause>) -> List<Clause> {
+    let mut out: List<Clause> = List.new();
+    for c in clauses.iter() {
+        let cost = clause_cost(c);
+        let mut at = out.len();
+        let mut i = 0;
+        while i < out.len() {
+            if clause_cost(&out[i]) > cost {
+                at = i;
+                i = out.len();
+            } else {
+                i = i + 1;
+            }
+        }
+        out.insert(at, c.clone());
+    }
+    out
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+
+/// Reordering a query does not change which coordinates it admits.
+///
+/// The failure this excludes is the one that makes the optimisation
+/// unsafe: if putting the cheap clause first could change the answer,
+/// then a node's reply would depend on the order an operator happened to
+/// type the clauses in, and two nodes could disagree while both being
+/// correct — the same property `protocol/version` protects for selection.
+public pure fn order_does_not_change_the_answer(
+    clauses: &List<Clause>,
+    v: &Verified,
+) -> Bool {
+    all_hold(clauses, v) == all_hold(&by_cost(clauses), v)
+}
+
+/// Does every clause hold?
+public pure fn all_hold(clauses: &List<Clause>, v: &Verified) -> Bool {
+    for c in clauses.iter() {
+        if !clause_holds(c, v) {
+            return false;
+        }
+    }
+    true
+}
+
+@verify(formal)
+public theorem reordering_preserves_the_answer(
+    clauses: &List<Clause>,
+    v: &Verified,
+)
+    ensures order_does_not_change_the_answer(clauses, v)
+    // STATED, NOT YET DISCHARGED, and the reason is the same one the
+    // selection theorem in `protocol/version` carries: both sides walk a
+    // LIST, and the prover does not unfold a loop. The argument is that
+    // `all_hold` is a conjunction and conjunction is commutative, which
+    // is exactly the shape a fold-aware prover would close.
+    proof by auto;

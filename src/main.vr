@@ -20,6 +20,9 @@ mount verum_registry.protocol.authority.{
     ResolutionError, resolve_authority,
 };
 mount verum_registry.node.cache.{Answer, Cache};
+mount verum_registry.node.search.{any, count, find};
+mount verum_registry.protocol.query.{Clause, Query};
+mount verum_registry.protocol.version.{Constraint, Version};
 mount verum_registry.node.ambient.{
     Clock, ConfiguredNode, FileStore, FrozenClock, NodeIdentity, StatedLink,
     Uplink,
@@ -326,6 +329,25 @@ fn dated_note(label: &Text) using [Clock, NodeIdentity] {
     print(f"{label}: at {Clock.now()} on log {NodeIdentity.log_id()}");
 }
 
+/// ONE QUESTION, THREE ANSWERS.
+///
+/// The point of this scene is what it does NOT contain: a second filter
+/// chain. `find`, `count` and `any` share one selector — the query is
+/// stated once and consumed three ways — and the three lines it prints
+/// are the evidence that they agree.
+///
+/// That is the rank-2 `fn<R>(Reducer<B, R>) -> Reducer<A, R>` in
+/// `Transducer` doing work no rank-1 signature could: the chain is built
+/// before anyone has said what it accumulates into. A rank-1 version
+/// would fix the accumulator at construction, so this scene would need
+/// three chains and they would be free to drift.
+fn search_scene(label: &Text, cache: &Cache, q: &Query) {
+    let listed = find(cache, q);
+    let counted = count(cache, q);
+    let present = any(cache, q);
+    print(f"{label}: found {listed.len()}, counted {counted}, any {present}");
+}
+
 fn main() {
     // --- the composition root ---
     // The ONLY place in the program that names a concrete backend.
@@ -572,5 +594,35 @@ fn main() {
             carry(&"unclosed-slice", &build_slice(&v, needs));
         }
         Maybe.None => print("slice: sample failed to verify"),
+    }
+
+    // --- discovery (protocol spec §5) ---
+    // A node with things in it, asked one question three ways.
+    match verified_sample() {
+        Maybe.Some(v) => {
+            let mut shelf = Cache.empty();
+            shelf.store(v.clone());
+
+            // Every clause holds: this is what the node has.
+            let mut hit: List<Clause> = List.new();
+            hit.push(Clause.Named(v.manifest.name.clone()));
+            hit.push(Clause.InRole(v.role.clone()));
+            search_scene(&"search/hit", &shelf, &Query { clauses: hit });
+
+            // One clause fails, and the three answers still agree —
+            // which is the property, not the count.
+            let mut miss: List<Clause> = List.new();
+            miss.push(Clause.Named(v.manifest.name.clone()));
+            miss.push(Clause.From("nobody"));
+            search_scene(&"search/miss", &shelf, &Query { clauses: miss });
+
+            // An empty question admits everything the node holds. The
+            // degenerate case is worth printing: a query language where
+            // "ask nothing" means "get nothing" surprises people at
+            // exactly the wrong moment.
+            let none: List<Clause> = List.new();
+            search_scene(&"search/all", &shelf, &Query { clauses: none });
+        }
+        Maybe.None => print("search: sample failed to verify"),
     }
 }
