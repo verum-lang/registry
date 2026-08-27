@@ -181,15 +181,23 @@ public pure fn resolve_authority(
 // The obligation this module carries (spec §6)
 // -----------------------------------------------------------------------------
 //
-// STATE: these obligations are STATED and NOT YET DISCHARGED. The prover
-// currently proves a goal only when the predicate is a single expression
-// over primitive parameters — a `let` binding, a field access or a method
-// call defeats it regardless of how easy the claim is (`b.n == b.n` over a
-// struct fails). That is a limit of the prover's reach, not a doubt about
-// these properties, and it is filed with the ladder that measures it. The
-// theorems stay: an obligation nobody has discharged is an audit finding,
-// which is the honest record, and it becomes a proof the day the reach
-// covers it — without anyone having to remember to come back and add one.
+// STATE: these obligations are STATED and NOT YET DISCHARGED, and what
+// stops them has moved. They used to be UNSTATEABLE — the predicate's
+// parameters and its own declaration disagreed about what sort a record
+// or a variant has, so the claim never reached the solver at all, which
+// prints almost the same as a claim that failed. That is fixed: `let`
+// bindings, field reads, records, variants and `match` over an enum are
+// all inside the reach now, and every obligation here is put to the
+// solver.
+//
+// What is left is genuine reach. Each of these predicates walks a LIST
+// or matches over a `Result`, and the prover unfolds neither, so it
+// answers with a counterexample it invented rather than a proof. That is
+// a limit of the prover, not a doubt about the properties.
+//
+// The theorems stay: an obligation nobody has discharged is an audit
+// finding, which is the honest record, and it becomes a proof the day
+// the reach covers it — without anyone having to remember to come back.
 //
 // The module note above says the attribution is carried by the type. That
 // is a claim about every path through `resolve_authority`, and a claim of

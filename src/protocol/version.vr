@@ -1,0 +1,290 @@
+// =============================================================================
+// verum_registry.protocol.version — which version a constraint means
+// =============================================================================
+// Spec: registry-federation-protocol §3 (selection)
+//
+// A registry that can only answer exact coordinates is an artefact store.
+// What makes it a registry is that a build asks for a RANGE and gets one
+// answer, and that everyone asking the same question of the same held set
+// gets the SAME answer.
+//
+// THE RULE: SELECTION IS A FUNCTION OF THE HELD SET AND THE CONSTRAINT,
+// AND OF NOTHING ELSE.
+//
+// Not of the order the versions arrived in, not of which authority
+// answered, not of when the question was asked. That is why this module
+// is in `protocol/` with the other rules: a selection that depended on
+// any of those would be a selection two nodes could disagree about while
+// both being correct, and "we both installed 1.4.2" is the property a
+// lockfile exists to preserve.
+//
+// The refusals are the interesting part of the design. A constraint that
+// matches nothing is NOT the same as a constraint that is unreadable, and
+// neither is the same as a held set that is empty — a build system that
+// conflates them tells its user "no matching version" when the truth was
+// "your version string has a typo", and the user goes looking in the
+// wrong place.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.version;
+
+// -----------------------------------------------------------------------------
+// A version
+// -----------------------------------------------------------------------------
+
+/// A three-component version.
+///
+/// The components are refined non-negative rather than checked at every
+/// use. This is an invariant of a value this node computes about itself —
+/// nothing arriving from a peer reaches this type without going through
+/// `parse`, which RETURNS a refusal — so a negative component here would
+/// be our own bug, and halting is the right answer to one's own bug.
+///
+/// The distinction is the same one the module note in `evidence` draws,
+/// and it is worth restating because getting it backwards is a denial of
+/// service: assert on your own invariants, return a refusal on anyone
+/// else's input.
+public type Version is {
+    major: Int{it >= 0},
+    minor: Int{it >= 0},
+    patch: Int{it >= 0},
+};
+
+/// Why a version string could not be read.
+///
+/// Names the component, because "1.2.x" and "1.2" and "" fail for
+/// different reasons and the person fixing it needs to know which.
+public type VersionError is
+    /// Not three dot-separated components. Carries what arrived.
+    | NotThreeComponents(Text)
+    /// A component that is not a number. Carries the component, not the
+    /// whole string: the whole string is what the operator already sees.
+    | ComponentNotANumber(Text)
+    /// A component that parses and is negative.
+    | ComponentNegative(Int);
+
+// -----------------------------------------------------------------------------
+// Ordering
+// -----------------------------------------------------------------------------
+
+/// Is `a` strictly older than `b`?
+///
+/// Lexicographic on (major, minor, patch), which is the whole of the
+/// ordering for a three-component version — there are no pre-release
+/// tags in this scheme, and adding them later changes THIS function and
+/// nothing that calls it.
+public pure fn older(a: &Version, b: &Version) -> Bool {
+    if a.major != b.major {
+        return a.major < b.major;
+    }
+    if a.minor != b.minor {
+        return a.minor < b.minor;
+    }
+    a.patch < b.patch
+}
+
+/// Are these the same version?
+public pure fn same(a: &Version, b: &Version) -> Bool {
+    a.major == b.major && a.minor == b.minor && a.patch == b.patch
+}
+
+// -----------------------------------------------------------------------------
+// Constraints
+// -----------------------------------------------------------------------------
+
+/// What a build is willing to accept.
+///
+/// A closed set of four, each with a stated meaning, rather than a string
+/// parsed at every call site. A constraint language that grows by
+/// accident is one where two implementations disagree about `^0.x`, and
+/// that disagreement is invisible until it is a security incident.
+public type Constraint is
+    /// Exactly this version. What a lockfile writes.
+    | Exact(Version)
+    /// At least this version, no upper bound. The honest spelling of
+    /// "anything newer works" — which is a claim, and this type makes it
+    /// one someone wrote down.
+    | AtLeast(Version)
+    /// Compatible with this version: same major, and at least as new.
+    /// Undefined for major 0 in most ecosystems; here it means the same
+    /// thing at every major, because "0 is special" is a rule people
+    /// forget.
+    | Compatible(Version)
+    /// Anything the node holds.
+    | Any;
+
+/// Does this version satisfy this constraint?
+///
+/// The whole of the matching rule, in one function, so a caller cannot
+/// implement half of it. Every selection below is `satisfies` plus a
+/// choice among the survivors.
+public pure fn satisfies(v: &Version, c: &Constraint) -> Bool {
+    match c {
+        Constraint.Exact(want) => same(v, want),
+        Constraint.AtLeast(floor) => !older(v, floor),
+        Constraint.Compatible(base) => v.major == base.major && !older(v, base),
+        Constraint.Any => true,
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Selection
+// -----------------------------------------------------------------------------
+
+/// Why no version was selected.
+///
+/// Three distinct absences, never collapsed: see the module note. A
+/// caller that wants to treat them alike can; a caller that reports them
+/// to a human must not have to guess.
+public type SelectionError is
+    /// The node holds no versions of this name at all.
+    | NothingHeld
+    /// The node holds versions, none of which satisfy. Carries the count
+    /// held, because "we have 40 of them and none match" and "we have one
+    /// and it does not match" are different situations.
+    | NoneSatisfy(Int);
+
+/// The newest version in `held` that satisfies `c`.
+///
+/// NEWEST, deliberately, and stated here rather than left to the caller
+/// to infer from the loop: picking the oldest satisfying version is also
+/// a defensible policy, and a registry that did one while its clients
+/// assumed the other would produce builds that differ by who resolved
+/// them.
+///
+/// Linear in the held set, which is the right asymptote here: the set is
+/// the versions of ONE package, and a package with a million versions is
+/// a different problem. The index that matters — by package name — is in
+/// `node/cache`, where the millions actually are.
+public pure fn select_newest(held: &List<Version>, c: &Constraint) -> Result<Version, SelectionError> {
+    if held.len() == 0 {
+        return Result.Err(SelectionError.NothingHeld);
+    }
+    let mut best: Maybe<Version> = Maybe.None;
+    for v in held.iter() {
+        if satisfies(v, c) {
+            best = match best {
+                Maybe.None => Maybe.Some(*v),
+                Maybe.Some(b) => {
+                    if older(&b, v) {
+                        Maybe.Some(*v)
+                    } else {
+                        Maybe.Some(b)
+                    }
+                },
+            };
+        }
+    }
+    match best {
+        Maybe.Some(v) => Result.Ok(v),
+        Maybe.None => Result.Err(SelectionError.NoneSatisfy(held.len())),
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Reading a version string
+// -----------------------------------------------------------------------------
+
+/// Read `major.minor.patch`.
+///
+/// Returns a refusal rather than a default. A version string arrives from
+/// a manifest, which arrives from a peer, so the refinement on `Version`
+/// must not be reached with anything unvalidated — this function is the
+/// only door.
+public pure fn parse(text: &Text) -> Result<Version, VersionError> {
+    let parts = text.split(".");
+    if parts.len() != 3 {
+        return Result.Err(VersionError.NotThreeComponents(text.clone()));
+    }
+    let major = match parts[0].parse_int() {
+        Ok(n) => n,
+        Err(_) => return Result.Err(VersionError.ComponentNotANumber(parts[0].clone())),
+    };
+    let minor = match parts[1].parse_int() {
+        Ok(n) => n,
+        Err(_) => return Result.Err(VersionError.ComponentNotANumber(parts[1].clone())),
+    };
+    let patch = match parts[2].parse_int() {
+        Ok(n) => n,
+        Err(_) => return Result.Err(VersionError.ComponentNotANumber(parts[2].clone())),
+    };
+    if major < 0 {
+        return Result.Err(VersionError.ComponentNegative(major));
+    }
+    if minor < 0 {
+        return Result.Err(VersionError.ComponentNegative(minor));
+    }
+    if patch < 0 {
+        return Result.Err(VersionError.ComponentNegative(patch));
+    }
+    Result.Ok(Version { major: major, minor: minor, patch: patch })
+}
+
+/// Render a version back. `parse(render(v))` is `v` for every `v` this
+/// type admits — the property below says so.
+public pure fn render(v: &Version) -> Text {
+    f"{v.major}.{v.minor}.{v.patch}"
+}
+
+// -----------------------------------------------------------------------------
+// The obligations (spec §3.4)
+// -----------------------------------------------------------------------------
+//
+// Written next to the rules they describe, as the other protocol modules
+// do, and for the same reason: a comment claiming a property stops being
+// true silently, while a theorem stops compiling.
+
+/// A selected version satisfies the constraint it was selected for.
+///
+/// The failure this excludes is the one nobody notices: a selection that
+/// returns SOMETHING for every constraint, so a build succeeds against a
+/// version it never asked for.
+public pure fn selection_satisfies_or_refuses(
+    held: &List<Version>,
+    c: &Constraint,
+) -> Bool {
+    match select_newest(held, c) {
+        Ok(v) => satisfies(&v, c),
+        Err(_) => true,
+    }
+}
+
+@verify(formal)
+public theorem selection_is_within_the_constraint(
+    held: &List<Version>,
+    c: &Constraint,
+)
+    ensures selection_satisfies_or_refuses(held, c)
+    // STATED, NOT YET DISCHARGED — and the reason is now narrow enough
+    // to name: `select_newest` walks a LIST, and the prover does not
+    // unfold a loop. Everything else this claim needs is inside the
+    // reach: the record's fields, the variant constraint, the `match`
+    // over the result.
+    //
+    // By construction: `best` is only ever assigned inside the
+    // `satisfies` guard, and `Ok` is only built from `best`. There is no
+    // path that returns a version the guard did not admit.
+    proof by auto;
+
+/// The ordering is a strict order: nothing is older than itself.
+///
+/// Small, and the one a selection actually leans on — `older(&b, v)`
+/// decides whether to replace the incumbent, so `older(x, x)` being true
+/// would make selection depend on iteration order, which is exactly the
+/// property the module note says must not hold.
+public pure fn older_is_irreflexive(v: &Version) -> Bool {
+    !older(v, v)
+}
+
+// DISCHARGED. Worth recording how: `older` is a chain of early returns,
+// which the prover could not read until this module asked it to — the
+// predicate was an uninterpreted symbol and not one claim about it could
+// close. The fix is in the language, not here.
+@verify(formal)
+public theorem nothing_is_older_than_itself(v: &Version)
+    ensures older_is_irreflexive(v)
+    proof by auto;

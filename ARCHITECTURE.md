@@ -171,10 +171,20 @@ correctness requirement, and the note in the module says so, so nobody
 
 The three obligations the protocol spec §6 requires are written as
 theorems next to the rules they describe, and all three are UNPROVED.
-The prover currently discharges a goal only when the predicate is a
-single expression over primitive parameters — reading a struct field
-defeats it — which is a limit of its reach and not a doubt about the
-properties.
+What stops them has moved once already, and the distinction is worth
+keeping straight because the two states print almost identically.
+
+They used to be UNSTATEABLE. A predicate's parameters and its own
+declaration disagreed about what sort a record or a variant has, so the
+claim never reached the solver — and a claim that cannot be put is not
+a claim that failed. Writing this program is what surfaced that, and it
+is fixed: `let` bindings, field reads, records, variants and `match`
+over an enum are all inside the reach now, and every obligation here is
+put to the solver.
+
+What remains is genuine reach. Each of these predicates walks a LIST or
+matches over a `Result`, and the prover unfolds neither, so it answers
+with a counterexample it invented rather than a proof.
 
 They stay in the source, saying so in place. An obligation nobody has
 discharged is an audit finding, which is the honest record, and it
