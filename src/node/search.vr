@@ -20,19 +20,29 @@
 // someone else's incident, and the language can rule it out at the type
 // level rather than in review.
 //
-// A LIMITATION THE LANGUAGE HAS, stated here rather than worked around:
-// the project-wide `verum check` refuses these three calls with
+// A LIMITATION THE LANGUAGE HAD, and the record of it is worth keeping
+// because of how it was found. The project-wide `verum check` refused
+// these three calls with
 //
 //     expected 'Item<ListIter<Verified>>', found 'Verified'
 //
-// `Item<ListIter<Verified>>` IS `Verified`; the associated-type
-// projection is not reduced before the unification. The code is correct
-// and runs — the scene in `main` prints three agreeing answers — so this
-// is the checker refusing working code, and the natural spelling stays.
-// Filed against the projection-normalisation task with this file as the
-// reproduction, because it is a smaller one than any that existed: a
-// plain `ListIter`, no adapter chain, three functions differing only in
-// their accumulator.
+// while the same file checked clean on its own and the programme ran and
+// printed three agreeing answers. `Item<ListIter<Verified>>` IS
+// `Verified`, so the checker was refusing working code — in the mode
+// that gates everything.
+//
+// The natural spelling stayed instead of being worked around, and this
+// file became the reproduction: a plain `ListIter`, no adapter chain,
+// three functions differing only in their accumulator, which is smaller
+// than anything the projection-normalisation task had. The root turned
+// out not to be a missing reduction at all — the resolver was called and
+// answered correctly in the same run that reported the mismatch, and the
+// comparison simply did not ask it. Fixed at the comparison; these three
+// functions check clean now.
+//
+// The rule this leaves behind: when a programme refuses to work around
+// the language, the workaround it did not write is the reproduction
+// somebody else needed.
 //
 // WHAT THIS DOES NOT DO, deliberately: it never contacts an upstream.
 // Search answers from what this node HOLDS, so its answer is a fact

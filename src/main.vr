@@ -171,6 +171,30 @@ fn verified_sample() -> Maybe<Verified> {
     }
 }
 
+/// The same coordinate under a DIFFERENT name, attributed to this node
+/// rather than mirrored — so retention can be shown doing both halves of
+/// its rule instead of only the half that drops.
+fn local_sample() -> Maybe<Verified> {
+    let m = Manifest {
+        name: PackageName("@acme/internal"),
+        version: "0.1.0",
+        artefact: Digest("blake3:c0ffee"),
+        published_at: 1756200000,
+    };
+    let d = digest_of(&m);
+    let sig = SignatureBundle { manifest_digest: d.clone(), signer: "acme-ci" };
+    let proof = InclusionProof {
+        manifest_digest: d.clone(),
+        log_id: "local-log",
+        tree_size: 7,
+    };
+    let expected = "local-log";
+    match verify(m, &sig, &proof, "local", AuthorityRole.Local, &expected) {
+        Ok(v)  => Maybe.Some(v),
+        Err(_) => Maybe.None,
+    }
+}
+
 fn say(label: &Text, answer: Answer) {
     match answer {
         Answer.Hit(e) =>
@@ -405,6 +429,15 @@ fn retention_scene(label: &Text) {
         Maybe.Some(v) => {
             let mut shelf = Cache.empty();
             shelf.store(v.clone());
+            // BOTH HALVES OR NEITHER. A scene holding only a mirrored
+            // coordinate demonstrates that retention drops things, which
+            // is the easy half; the rule is that it drops what it
+            // MIRRORS and keeps what it ANSWERS FOR, and a shelf with
+            // one kind on it cannot show the difference.
+            match local_sample() {
+                Maybe.Some(mine) => shelf.store(mine),
+                Maybe.None       => print(f"{label}: local sample failed to verify"),
+            }
             let before = shelf.len();
 
             // A retention WINDOW of minus one second puts the horizon
@@ -415,7 +448,7 @@ fn retention_scene(label: &Text) {
             let horizon = horizon_for(-1);
             let dropped = prune_before(&mut shelf, horizon);
 
-            print(f"{label}: held {before}, dropped {dropped}, left {shelf.len()}");
+            print(f"{label}: held {before}, dropped {dropped}, left {shelf.len()} (its own)");
         }
         Maybe.None => print(f"{label}: sample failed to verify"),
     }
