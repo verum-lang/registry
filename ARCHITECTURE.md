@@ -167,6 +167,24 @@ Re-run it whenever the claim starts feeling like decoration. It costs
 two edits and one `verum check`, and a demonstration nobody has tried to
 break is a demonstration of nothing.
 
+Three of the table's claims have been falsified this way. Each row is
+one edit to the programme, the diagnostic it produced, and a revert:
+
+| claim | the edit | what the compiler said |
+|---|---|---|
+| `pure`, compiler-verified | a `print` inside `query.clause_cost` | `error<E503>: pure function 'clause_cost' has side effects: IO` |
+| meta parameters with refinements | `Narrow` re-typed to `Hash<20>` | `error<E506>: meta argument 1 of 'Hash' violates its refinement: '20' does not satisfy 'it == 32 \|\| it == 64'` |
+| `async` as an inherited fact | `async` removed from `durable.restore` | `Cannot await non-future type: Ok(Int{it >= 0}) \| Err(ImportError)` |
+
+The third one holds and is worth reading twice, because the diagnostic
+is weaker than the guarantee. The programme IS refused — but the message
+names the symptom (the awaited value is not a future, which follows) and
+not the cause (the enclosing function stopped being `async`), and it
+carries no error code, so a gate filtering on `error<E…>` scores it
+zero. The guarantee is real; the way it is reported would send somebody
+to the wrong line. Filed against the diagnostics debt rather than papered
+over here.
+
 ## Choices that keep coming up
 
 ### A refusal is a value, an invariant is a refinement
