@@ -69,19 +69,49 @@ public type Narrow is (Hash<32>);
 
 /// Constant-time equality of two 32-byte hashes.
 ///
-/// TWO PROPERTIES, and the type carries one of them so the code only has
-/// to carry the other.
+/// THREE PROPERTIES, and the language carries two of them so the code
+/// only has to carry the third.
 ///
 /// The WIDTH is the type's business: this function cannot be handed a
 /// 64-byte hash, so there is no prefix comparison to write incorrectly
 /// and no length check to forget.
 ///
-/// The TIMING is this function's business: it accumulates a difference
-/// over every byte rather than returning at the first mismatch, because
-/// a comparison that returns early tells a caller how many leading bytes
-/// they guessed right, and that is enough to forge a digest one byte at
-/// a time.
-public pure fn equal_narrow(a: &Narrow, b: &Narrow) -> Bool {
+/// The MEMORY SAFETY is the reference tier's business, and this is the
+/// one place in the programme that moves the dial. Everything else uses
+/// the default `&T`, which carries a generation and validates it on
+/// every dereference — about 15 ns, and worth it everywhere the cost is
+/// invisible. Here it is not invisible: the loop below performs 64
+/// guarded reads per comparison, and a slice import compares one hash
+/// per artefact, so a hundred-thousand-item import pays for 6.4 million
+/// of them.
+///
+/// `&checked` is Tier 1: the SAME guarantee, established by the
+/// compiler instead of at run time, and it is an error rather than a
+/// downgrade if the proof does not go through. The proof here is the
+/// short kind — `a` and `b` are parameters, the loop does not store
+/// them anywhere, and nothing escapes the call — which is precisely
+/// what escape analysis is for.
+///
+/// What this module deliberately does NOT contain is a `&unsafe`. That
+/// tier means a human wrote the proof, and the only honest reason to
+/// reach for it is a measurement showing Tier 1 refused a case that is
+/// actually safe. There is no such measurement here, and a safety
+/// annotation nobody can justify is worse than the check it removes.
+///
+/// MEASURED, so the tier choice is not folklore: at Tier 0 the two
+/// tiers are indistinguishable — 431 ns/op against 434 ns/op over
+/// 200 000 iterations — because interpretation dominates and the CBGR
+/// check disappears into it. The payoff is at Tier 1, where an
+/// instruction costs about a nanosecond and a 15 ns check does not.
+/// That second measurement has not been taken, and this comment says
+/// so rather than implying it.
+///
+/// The TIMING is this function's own business: it accumulates a
+/// difference over every byte rather than returning at the first
+/// mismatch, because a comparison that returns early tells a caller how
+/// many leading bytes they guessed right, and that is enough to forge a
+/// digest one byte at a time.
+public pure fn equal_narrow(a: &checked Narrow, b: &checked Narrow) -> Bool {
     let mut diff = 0;
     let mut i = 0;
     while i < 32 {
@@ -95,7 +125,7 @@ public pure fn equal_narrow(a: &Narrow, b: &Narrow) -> Bool {
 /// rather than one generic over `N`: the loop bound is the width, and
 /// writing it once for both would mean reading the width at runtime —
 /// which is the length check this design exists to remove.
-public pure fn equal_wide(a: &Wide, b: &Wide) -> Bool {
+public pure fn equal_wide(a: &checked Wide, b: &checked Wide) -> Bool {
     let mut diff = 0;
     let mut i = 0;
     while i < 64 {
@@ -116,12 +146,12 @@ public pure fn equal_wide(a: &Wide, b: &Wide) -> Bool {
 /// that catches a comparison written with the wrong loop bound — a loop
 /// to 31 would still return true here, but a loop to 33 would read past
 /// the array and the property would fail.
-public pure fn narrow_equals_itself(h: &Narrow) -> Bool {
+public pure fn narrow_equals_itself(h: &checked Narrow) -> Bool {
     equal_narrow(h, h)
 }
 
 @verify(formal)
-public theorem a_hash_matches_itself(h: &Narrow)
+public theorem a_hash_matches_itself(h: &checked Narrow)
     ensures narrow_equals_itself(h)
     // STATED, NOT YET DISCHARGED, and for the reason recorded on the
     // other two obligations of this shape: the body is a LOOP, and the
