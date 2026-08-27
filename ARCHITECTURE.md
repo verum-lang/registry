@@ -115,6 +115,7 @@ them found defects in the language while being written.
 | rank-2 transducers | `protocol/query`, `node/search` | one query definition, three consumers, no filter chain free to drift |
 | meta parameters with refinements | `protocol/hash` | a digest width is part of the type, and SHA-1's width is not a type at all |
 | the CBGR tier dial | `protocol/hash` | one place, with the proof and the measurement written beside it |
+| capability attenuation — **DECLARED, NOT YET ENFORCED** | `node/retention` vs `node/slice` | `&mut` grants the right to change and says nothing about WHICH changes; `with [Store]` / `with [Evict]` say it. The signatures are written and the compiler does not yet act on them — see below |
 | `@derive`, and its absence | `protocol/revocation` vs `protocol/authority` | derive when the structure IS the meaning; write it out when comparing is a decision somebody must make |
 | the `is` operator | `revocation.may_publish`, `revocation.installable` | a one-state question answered by a `Bool`, not by a match with arms that exist to say `false` |
 | an explicit `proof { … }` | `revocation.a_standing_never_goes_back` | the case analysis is short enough to read, so it is written rather than left to `auto` |
@@ -184,6 +185,28 @@ carries no error code, so a gate filtering on `error<E…>` scores it
 zero. The guarantee is real; the way it is reported would send somebody
 to the wrong line. Filed against the diagnostics debt rather than papered
 over here.
+
+### The one claim in that table the compiler does not yet keep
+
+`node/retention.prune_before` takes `&mut Cache with [Evict]` and
+`node/slice.import_slice` takes `&mut Cache with [Store]`. The intent is
+exact and the domain wants it: an importer may add coordinates and must
+not evict, a pruner the reverse, and `&mut` cannot draw that line.
+
+The compiler does not enforce it TODAY. Falsified the same way as the
+claims above — a pruner holding `[Evict]` was made to call `store`, and
+the project still checked with zero errors. The root is measured and
+filed: a capability-restricted type reports as its plain base at every
+binding, so nothing downstream ever sees the restriction; field access
+on one fails with `E103`, and widening `[Read]` into `[Read, Write]` is
+not refused at all.
+
+The signatures stay, and this section stays with them. They are the
+honest shape for the rule and they are what the fix will make real; what
+must not happen is the table listing them beside guarantees the compiler
+keeps, because a reader cannot tell those apart by looking. This is the
+declared-but-unenforced trap the proving-ground methodology puts first,
+and the programme is not exempt from it.
 
 ## Choices that keep coming up
 
