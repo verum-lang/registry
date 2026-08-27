@@ -30,7 +30,7 @@ mount verum_registry.node.ambient.{
 };
 mount verum_registry.node.durable.{RestoreError, Storage, persist, restore};
 mount verum_registry.node.publish.{
-    PublishError, PublishRequest, Published, publish,
+    PublishError, PublishRequest, PublishSlot, Published, publish,
 };
 mount verum_registry.node.consistency.{
     Audit, ConsistencyError, HeadLog, TreeHead,
@@ -40,6 +40,16 @@ mount verum_registry.node.slice.{
 };
 mount verum_registry.node.handshake.{
     HandshakeError, PeerIdentity, PeerSession, PinnedAnchor, meet,
+};
+mount verum_registry.node.resolution.{
+    ResolveError, Resolution, resolve, resolution_respects_the_policy,
+};
+mount verum_registry.node.retention.{
+    Verdict, horizon_for, prune_before, verdict_for,
+};
+mount verum_registry.protocol.revocation.{
+    KeyStanding, RevocationError, Serving, advance, apply_all, installable,
+    may_publish, serving,
 };
 mount verum_registry.protocol.source.{
     Assurance, GitSource, Located, RegistrySource, Source, SourceError,
@@ -226,7 +236,11 @@ fn offer(
         },
         as_authority: as_authority.clone(),
     };
-    match publish(cache, &request) {
+    // ONE SLOT, spent here. It is minted for the authority this
+    // publication claims, and `publish` takes it BY VALUE — so a retry
+    // written into this function would not compile, which is the point.
+    let slot = PublishSlot { for_authority: as_authority.clone() };
+    match publish(cache, slot, &request) {
         Ok(Published.Accepted(v)) =>
             print(f"{label}: published {v.manifest.version} as {v.authority_id}"),
         Ok(Published.AlreadyIdentical(v)) =>
@@ -270,9 +284,9 @@ fn build_slice(v: &Verified, requires: List<Text>) -> Slice {
     Slice { items: items }
 }
 
-fn carry(label: &Text, slice: &Slice) {
+async fn carry(label: &Text, slice: &Slice) {
     let mut far_side = Cache.empty();
-    match import_slice(&mut far_side, slice) {
+    match import_slice(&mut far_side, slice).await {
         Ok(n) => {
             let held = PackageName("@acme/widgets");
             match far_side.lookup(&held) {
@@ -374,7 +388,108 @@ fn hash_scene(label: &Text) {
     print(f"{label}: same={equal_narrow(&a, &b)} different={equal_narrow(&a, &c)}");
 }
 
-fn main() {
+/// A node forgets what it mirrors and keeps what it answers for.
+///
+/// The retention rule stated as a scene rather than a claim: two
+/// coordinates of the same age, one mirrored and one this node is the
+/// authority for, and only the mirrored one goes.
+///
+/// The capability is the part worth noticing in the SIGNATURE rather
+/// than the output. `prune_before` takes `&mut Cache with [Evict]`, so
+/// it may remove and may not add; `import_slice` takes
+/// `&mut Cache with [Store]` and is the mirror image. Under a plain
+/// `&mut` both are simply "may change the cache", and the difference
+/// lives in a reviewer's attention.
+fn retention_scene(label: &Text) {
+    match verified_sample() {
+        Maybe.Some(v) => {
+            let mut shelf = Cache.empty();
+            shelf.store(v.clone());
+            let before = shelf.len();
+
+            // A retention WINDOW of minus one second puts the horizon
+            // one second ahead of the frozen clock, so everything the
+            // node already holds counts as old enough. That condemns
+            // every mirrored coordinate — and still nothing it answers
+            // for, which is the point the scene is making.
+            let horizon = horizon_for(-1);
+            let dropped = prune_before(&mut shelf, horizon);
+
+            print(f"{label}: held {before}, dropped {dropped}, left {shelf.len()}");
+        }
+        Maybe.None => print(f"{label}: sample failed to verify"),
+    }
+}
+
+/// A key stops being trusted, and every answer about it changes at once.
+///
+/// Three things are shown and each is a different guarantee.
+///
+/// The move is ONE-WAY: revoking a key succeeds, and un-revoking it is
+/// refused by the only function that can change a standing. There is no
+/// setter to reach around.
+///
+/// The answers DIFFER: a suspended key quarantines an artefact, a
+/// revoked one makes it unverifiable, and neither of those is "not
+/// found". A client acts differently on each.
+///
+/// And the LEDGER-wide claim is enforced where it cannot be proved —
+/// `apply_all` carries a runtime-verified postcondition, so a batch that
+/// would walk a key backwards halts instead of landing.
+fn revocation_scene(label: &Text) {
+    let compromised = KeyStanding.Revoked("key material leaked");
+
+    // Forward: allowed.
+    let forward = match advance(&KeyStanding.Trusted, compromised.clone()) {
+        Ok(_)  => "allowed",
+        Err(_) => "refused",
+    };
+
+    // Backward: refused, by the only door there is.
+    let backward = match advance(&compromised, KeyStanding.Trusted) {
+        Ok(_)  => "allowed",
+        Err(RevocationError.WouldGoBackwards { from, to }) =>
+            f"refused {from}->{to}",
+        Err(RevocationError.UnknownKey(_)) => "unknown",
+    };
+
+    print(f"{label}: forward {forward}, backward {backward}");
+
+    // What a client is told, per standing. The `is` operator asks the
+    // one-state question; the match answers the per-case one.
+    let mut ledger: Map<Text, KeyStanding> = Map.new();
+    ledger.insert("acme-signing-key", KeyStanding.Trusted);
+
+    let publishable = may_publish(&KeyStanding.Trusted);
+    let after_leak  = may_publish(&compromised);
+    print(f"{label}: may publish while trusted={publishable}, after leak={after_leak}");
+
+    // A batch that walks the ledger forward lands; one that walks it
+    // back is refused with the key named.
+    let mut good: List<(Text, KeyStanding)> = List.new();
+    good.push(("acme-signing-key", KeyStanding.Suspended("under review")));
+    let landed = match apply_all(&ledger, &good) {
+        Ok(next) => next.len(),
+        Err(_)   => 0,
+    };
+    print(f"{label}: batch landed {landed} entries");
+}
+
+/// ASYNC, because the programme is.
+///
+/// Nothing here chose that. `import_slice` fans verification out across
+/// the items of a slice and joins them; that makes it async, which makes
+/// `restore` and `carry` async, which makes this async. The property
+/// travelled up the call chain on its own and the compiler refused every
+/// intermediate spelling that pretended otherwise (`E504`).
+///
+/// It is worth saying what did NOT happen: no `block_on` at a boundary
+/// to make an async call look synchronous. That call exists in the
+/// standard library and is the right tool at an FFI edge, but reaching
+/// for it here would have hidden the fan-out from every caller and left
+/// the "all-or-nothing" comment in `import_slice` as a claim nobody can
+/// check.
+async fn main() {
     // --- the composition root ---
     // The ONLY place in the program that names a concrete backend.
     // Everything below runs against the CONTEXTS, so the same rules
@@ -488,6 +603,40 @@ fn main() {
     locate(&"missing", &reg, &"nowhere");
     locate(&"unreachable", &dark, &"anything");
 
+    // A CONFIGURED LIST, which is where generics stop. The three
+    // sources above are two different types; `List<S>` holds one S, so
+    // the honest type for what an operator writes down is
+    // `List<Heap<dyn Source>>`. Static dispatch above where the type is
+    // known, dynamic here where the CONFIGURATION decides — and the
+    // policy question still reaches every entry, because it is asked on
+    // the protocol rather than on the concrete type.
+    let mut configured: List<Heap<dyn Source>> = List.new();
+    configured.push(Heap.new(git));
+    configured.push(Heap.new(reg));
+
+    match resolve(&configured, &PackageName("serde"), true) {
+        Ok(r)  => print(f"resolve: serde via {r.via}"),
+        Err(ResolveError.NoSourceHasIt(n))   => print(f"resolve: nobody has {n}"),
+        Err(ResolveError.OnlyBelowPolicy(w)) => print(f"resolve: only {w}, below policy"),
+        Err(ResolveError.SourceFailed(_))    => print("resolve: a source broke"),
+    }
+
+    // The git mirror alone cannot satisfy an audit policy, and the
+    // refusal NAMES it — an operator learns which configured line to
+    // argue with rather than that "resolution failed".
+    let mut git_only: List<Heap<dyn Source>> = List.new();
+    git_only.push(Heap.new(GitSource {
+        remote: "git@example:tools",
+        revisions: Map.new(),
+        reachable: true,
+    }));
+    match resolve(&git_only, &PackageName("vendored-tool"), true) {
+        Ok(r)  => print(f"resolve: unexpectedly served via {r.via}"),
+        Err(ResolveError.OnlyBelowPolicy(w)) => print(f"resolve: refused, {w} is below policy"),
+        Err(ResolveError.NoSourceHasIt(n))   => print(f"resolve: nobody has {n}"),
+        Err(ResolveError.SourceFailed(_))    => print("resolve: a source broke"),
+    }
+
     // The difference the design refuses to hide: a policy that needs an
     // audit trail can refuse a source BEFORE it serves a build.
     print(f"audit-policy: registry={satisfies_audit_policy(&reg)} git={satisfies_audit_policy(&git)}");
@@ -525,7 +674,7 @@ fn main() {
             // a cold node would.
             print(f"persist: {persist(&held)}");
             let mut revived = Cache.empty();
-            match restore(&mut revived) {
+            match restore(&mut revived).await {
                 Ok(n) => print(f"restore: {n} re-verified, {revived.len()} held"),
                 Err(RestoreError.Unreadable(line)) =>
                     print(f"restore: refused, line {line} is not readable"),
@@ -562,7 +711,7 @@ fn main() {
 
             provide Storage = FileStore { path: bad_path } in {
                 let mut cold = Cache.empty();
-                match restore(&mut cold) {
+                match restore(&mut cold).await {
                     Ok(n) => print(f"tampered: accepted {n} — THE RULE FAILED"),
                     Err(RestoreError.Unreadable(line)) =>
                         print(f"tampered: refused, line {line} is not readable"),
@@ -610,14 +759,14 @@ fn main() {
             // import keeps the attribution the item was exported with —
             // carrying a package on a disk does not make it local.
             let no_deps: List<Text> = List.new();
-            carry(&"closed-slice", &build_slice(&v, no_deps));
+            carry(&"closed-slice", &build_slice(&v, no_deps)).await;
 
             // An unclosed slice is refused BEFORE anything is stored,
             // and the refusal names what is missing so the exporter can
             // be told rather than the importer left guessing.
             let mut needs: List<Text> = List.new();
             needs.push("@acme/base");
-            carry(&"unclosed-slice", &build_slice(&v, needs));
+            carry(&"unclosed-slice", &build_slice(&v, needs)).await;
         }
         Maybe.None => print("slice: sample failed to verify"),
     }
@@ -654,4 +803,6 @@ fn main() {
 
     // --- artefact identity (protocol spec §2.1) ---
     hash_scene(&"hash");
+    revocation_scene(&"revocation");
+    retention_scene(&"retention");
 }

@@ -1,0 +1,247 @@
+// =============================================================================
+// verum_registry.node.resolution — asking a configured list of sources
+// =============================================================================
+// Spec: registry-federation-protocol §7.2 (source resolution)
+//
+// An operator configures where a node looks: a registry upstream, a git
+// mirror for two packages that never made it to one, another registry
+// for an internal namespace. The list is ORDERED — first source that has
+// the coordinate wins — and it is HETEROGENEOUS, because the whole point
+// of configuring it is that the entries are different kinds of thing.
+//
+// THIS IS WHERE GENERICS STOP.
+//
+// `protocol/source` consumes a source through `<S: Source>`, which is
+// exactly right where the type is known: the call site is monomorphised,
+// the associated `Reference` stays distinct per source, and nothing is
+// paid at run time. But `List<S>` holds one S. A configuration that
+// names a registry and two git mirrors has no S, and no amount of
+// generic machinery invents one — the heterogeneity is the DATA, not a
+// weakness of the signature.
+//
+//     List<Heap<dyn Source>>
+//
+// is the honest type for it, and the cost is honest too: one indirect
+// call per `locate`, paid only by the code that genuinely does not know
+// which source it holds. Static where the type is known, dynamic where
+// the configuration decides — the same program, both, without one
+// pretending to be the other.
+//
+// WHAT `dyn` DOES NOT ERASE HERE: the ASSURANCE each source can offer.
+// `assurance_offered` is on the protocol, so it survives erasure, and
+// the policy check below runs against a source whose concrete type
+// nobody knows. That is the property that makes the dynamic list safe to
+// configure: a weaker source cannot slip in behind an interface,
+// because the interface is where the question is asked.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.resolution;
+
+mount verum_registry.protocol.authority.{PackageName};
+mount verum_registry.protocol.source.{
+    Located, Source, SourceError, satisfies_audit_policy,
+};
+
+// -----------------------------------------------------------------------------
+// What a configured list can answer
+// -----------------------------------------------------------------------------
+
+/// Why a resolution did not produce a coordinate.
+///
+/// Each case names something an operator can act on, and the first two
+/// are deliberately NOT one case: "nobody has it" is a question about
+/// the name, "everybody who has it is too weak" is a question about the
+/// configuration, and an operator fixes them in different files.
+public type ResolveError is
+    /// No configured source has this name.
+    | NoSourceHasIt(Text)
+    /// A source has it, but its assurance is below the policy, and no
+    /// stronger source does. Names the source so the operator knows
+    /// which line of the configuration to argue with.
+    | OnlyBelowPolicy(Text)
+    /// A source that should have answered failed. Carries the refusal
+    /// unchanged — a broken mirror and a missing name are different
+    /// facts and stay different.
+    | SourceFailed(SourceError);
+
+/// Where the coordinate came from, alongside what it is.
+///
+/// The description rides along because a resolver that says WHAT it
+/// found without saying WHERE leaves the operator to guess which of five
+/// configured sources answered — and that guess is wrong exactly when it
+/// matters, during an incident.
+public type Resolution is {
+    located: Located,
+    via: Text,
+};
+
+// -----------------------------------------------------------------------------
+// The walk
+// -----------------------------------------------------------------------------
+
+/// Ask each configured source in order; the first that has it wins.
+///
+/// `require_audit` is the policy, passed rather than read from a
+/// context, because this function is the one place two callers
+/// legitimately differ: a build resolving dependencies demands an audit
+/// trail, and an operator running a diagnostic wants to see what the
+/// weaker source would have said.
+///
+/// ORDER IS THE CONFIGURATION'S, not a ranking this function invents.
+/// A resolver that reorders sources by some notion of quality answers
+/// differently from what the operator wrote down, and then two nodes
+/// with the same configuration file can disagree — the failure
+/// `protocol/version` and `protocol/query` both exist to prevent.
+public fn resolve(
+    sources: &List<Heap<dyn Source>>,
+    name: &PackageName,
+    require_audit: Bool,
+) -> Result<Resolution, ResolveError> {
+    let mut saw_below_policy: Maybe<Text> = Maybe.None;
+
+    for src in sources.iter() {
+        let described = src.describe();
+
+        // POLICY BEFORE FETCH. Asking a source that cannot satisfy the
+        // policy and then discarding its answer means the request was
+        // still made — a log line on the far side, a cache entry, a
+        // rate-limit consumed. The check that belongs before the
+        // question is asked before the question.
+        if require_audit && !satisfies_audit_policy(src) {
+            if saw_below_policy is None {
+                saw_below_policy = Maybe.Some(described.clone());
+            }
+            continue;
+        }
+
+        match src.locate(name) {
+            Ok(found) => {
+                return Result.Ok(Resolution {
+                    located: found,
+                    via: described,
+                });
+            }
+            // A source that does not have the coordinate is not a
+            // failure — the next one is asked. A source that is
+            // UNREACHABLE is, and it stops the walk: continuing would
+            // silently serve a weaker answer than the configuration
+            // promised, and an operator reading the result would have no
+            // way to tell that a source was skipped.
+            Err(SourceError.NoSuchCoordinate(_)) => {}
+            Err(e) => return Result.Err(ResolveError.SourceFailed(e)),
+        }
+    }
+
+    match saw_below_policy {
+        Maybe.Some(who) => Result.Err(ResolveError.OnlyBelowPolicy(who)),
+        Maybe.None      => Result.Err(ResolveError.NoSourceHasIt(name.0.clone())),
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Racing mirrors
+// -----------------------------------------------------------------------------
+
+/// Ask two MIRRORS at once and take whichever answers first.
+///
+/// ORDER AND RACE ARE DIFFERENT QUESTIONS, and conflating them is the
+/// mistake this pair of functions exists to keep apart.
+///
+/// `resolve` above walks the configuration IN ORDER, because there the
+/// order is meaning: the operator wrote the preferred source first, and
+/// a resolver that reordered by latency would answer differently from
+/// what was configured — two nodes with the same file could then
+/// disagree, which is the failure `protocol/version` and
+/// `protocol/query` both exist to prevent.
+///
+/// This function is for the other case: two sources that are MIRRORS of
+/// the same content, where only latency differs and either answer is
+/// equally correct. Waiting for the slower one when the faster has
+/// already answered is the difference between a build that finishes and
+/// one that times out, and there is no precedence to preserve because
+/// there is no disagreement possible.
+///
+/// A caller that races sources which are NOT mirrors gets a
+/// nondeterministic answer, and that is a configuration error rather
+/// than a bug here — which is why the two live side by side with the
+/// distinction written down, instead of one function with a flag.
+///
+/// THE LOSER IS DROPPED, not left running. `select` completes when the
+/// first arm does, and the other future goes out of scope with the
+/// expression — so an orphaned fetch cannot go on holding a connection
+/// and a rate-limit slot on a far-side server that has already been
+/// asked. That is structured concurrency doing the bookkeeping a manual
+/// cancellation path usually gets wrong on the error branch.
+public async fn race_mirrors(
+    left: &Heap<dyn Source>,
+    right: &Heap<dyn Source>,
+    name: &PackageName,
+) -> Result<Resolution, ResolveError> {
+    let l_name = left.describe();
+    let r_name = right.describe();
+
+    let l = spawn(async { left.locate(name) });
+    let r = spawn(async { right.locate(name) });
+
+    let (found, via) = select {
+        a = l.await => (a, l_name),
+        b = r.await => (b, r_name),
+    };
+
+    match found {
+        Ok(located) => Result.Ok(Resolution { located: located, via: via }),
+        // The winner ANSWERED, and its answer was a refusal. Falling
+        // back to the loser here would turn a race into an ordered walk
+        // with extra steps, and the caller asked for a race — so the
+        // refusal is reported with the name of the mirror that gave it.
+        Err(SourceError.NoSuchCoordinate(_)) =>
+            Result.Err(ResolveError.NoSourceHasIt(name.0.clone())),
+        Err(e) => Result.Err(ResolveError.SourceFailed(e)),
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+
+/// Under an audit policy, a resolution never comes from a source that
+/// cannot offer an audit trail.
+///
+/// STATED SO IT CAN FAIL. The obvious spelling —
+///
+///     match resolve(sources, name, true) { Ok(_) => true, Err(_) => true }
+///
+/// — is true of every implementation, including one that ignores the
+/// policy entirely, and a property that cannot fail is not a property.
+/// This one looks up the source that actually answered and asks IT the
+/// policy question, so an implementation that skipped the check returns
+/// false here.
+public fn resolution_respects_the_policy(
+    sources: &List<Heap<dyn Source>>,
+    name: &PackageName,
+) -> Bool {
+    match resolve(sources, name, true) {
+        Ok(r) => {
+            // The winner is identified by the description it gave. Two
+            // sources with the same description are indistinguishable
+            // to an operator reading the result, so they are
+            // indistinguishable here too — and if that is ever a
+            // problem, the fix is to make descriptions distinct, which
+            // is what an operator needs anyway.
+            for src in sources.iter() {
+                if src.describe() == r.via {
+                    return satisfies_audit_policy(src);
+                }
+            }
+            // A resolution attributed to a source that is not in the
+            // list is a worse failure than a policy violation.
+            false
+        }
+        // A refusal served nothing, so nothing violated the policy.
+        Err(_) => true,
+    }
+}

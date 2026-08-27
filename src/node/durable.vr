@@ -160,7 +160,11 @@ public fn persist(slice: &Slice) -> Bool using [Storage] {
 /// same `verify` a fresh fetch runs, and a record edited between runs
 /// produces a refusal naming the coordinate rather than a trusted entry.
 /// A node with no store yet is not an error — it comes up empty.
-public fn restore(cache: &mut Cache) -> Result<Int, RestoreError>
+/// ASYNC because `import_slice` is: re-verification fans out, and this
+/// function waits for it. The property travels up the call chain by
+/// itself — nothing here chose to be asynchronous, it inherited the fact
+/// from what it calls.
+public async fn restore(cache: &mut Cache) -> Result<Int, RestoreError>
     using [Storage, Clock]
 {
     let stored = match Storage.load() {
@@ -181,7 +185,7 @@ public fn restore(cache: &mut Cache) -> Result<Int, RestoreError>
         }
     }
 
-    match import_slice(cache, &Slice { items: items }) {
+    match import_slice(cache, &Slice { items: items }).await {
         Ok(n) => Result.Ok(n),
         Err(e) => Result.Err(RestoreError.Refused(e)),
     }

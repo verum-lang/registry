@@ -1,0 +1,180 @@
+// =============================================================================
+// verum_registry.node.retention — what a node may forget, and what it may not
+// =============================================================================
+// Spec: registry-federation-protocol §4.3 (retention)
+//
+// A cache that never forgets fills a disk, and a node with a full disk
+// stops answering — which is the failure an air-gapped site can least
+// afford, because nobody is there to notice. So retention is not an
+// optimisation; it is part of staying up.
+//
+// THE RULE, and it is the whole module: A NODE MAY FORGET WHAT IT
+// MIRRORS. IT MAY NOT FORGET WHAT IT ANSWERS FOR.
+//
+// Dropping a mirrored coordinate costs a re-fetch. Dropping one this
+// node is the authority for destroys the only copy — there is nobody
+// upstream to ask, and the clients holding a lockfile that pins it find
+// a hole where a release used to be. The two cases look identical in the
+// cache and are told apart by the attribution each entry carries, which
+// is exactly why `Verified` refuses to exist without one.
+//
+// WHY THIS MODULE IS WHERE THE CAPABILITY EARNS ITS KEEP:
+//
+// `&mut Cache` grants the right to CHANGE the cache and says nothing
+// about which changes. Under it, the slice importer and this pruner are
+// the same kind of caller — an importer could evict, a pruner could
+// store, and only a reviewer would catch either. The two roles are
+// genuinely different rights over one value, and the type can hold that:
+//
+//     fn import_slice(cache: &mut Cache with [Store], …)
+//     fn prune_before(cache: &mut Cache with [Evict], …)
+//
+// Ownership alone cannot draw this line. Rust's `&mut`, Java's `final`,
+// Go's unexported fields all answer "may it be changed"; the question
+// here is "changed HOW", and it is answered where the compiler can act
+// on it rather than in a review comment.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.retention;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.node.ambient.{Clock};
+mount verum_registry.node.cache.{Cache, CachedEntry};
+
+// -----------------------------------------------------------------------------
+// What retention decides
+// -----------------------------------------------------------------------------
+
+/// What retention decided about ONE entry, and why.
+///
+/// A closed set rather than a boolean, for the same reason
+/// `protocol/query`'s clauses are: an operator asking "why is my disk
+/// full" needs the reason, and a boolean cannot carry one.
+@derive(Eq, Clone, Debug)
+public type Verdict is
+    /// Old enough, and only mirrored — dropping it costs a re-fetch.
+    | Drop
+    /// This node answers for it. There is no upstream to re-fetch from,
+    /// so this is kept regardless of age.
+    | KeepOwn
+    /// Younger than the horizon.
+    | KeepFresh;
+
+/// Decide about one entry.
+///
+/// PURE, and takes the clock reading rather than the clock: a decision
+/// that reads the time itself cannot be tested against a horizon, and
+/// this is the function the whole policy turns on.
+public pure fn verdict_for(entry: &CachedEntry, horizon: Int) -> Verdict {
+    match entry.verified.role {
+        // The local authority's own coordinates. Nobody upstream holds a
+        // copy, so age is not a reason to lose one.
+        AuthorityRole.Local => Verdict.KeepOwn,
+        AuthorityRole.Upstream => {
+            if entry.fetched_at < horizon {
+                Verdict.Drop
+            } else {
+                Verdict.KeepFresh
+            }
+        }
+    }
+}
+
+/// Does this verdict remove the entry?
+public pure fn removes(v: &Verdict) -> Bool {
+    v is Drop
+}
+
+// -----------------------------------------------------------------------------
+// The sweep
+// -----------------------------------------------------------------------------
+
+/// Forget every mirrored coordinate fetched before the horizon.
+///
+/// Returns how many were dropped. The refinement is an invariant of a
+/// value this module computes about itself — the same line the rest of
+/// the programme draws between a refinement and a typed refusal.
+///
+/// `with [Evict]` is the load-bearing part of the signature: this
+/// function may remove entries and may NOT add them, and neither fact
+/// depends on anyone reading the body.
+public fn prune_before(
+    cache: &mut Cache with [Evict],
+    horizon: Int,
+) -> Int{it >= 0} {
+    // TWO PASSES, DELIBERATELY. Deciding while removing would mutate the
+    // map under its own traversal; collecting the condemned first means
+    // the decision is made against one consistent view of the cache, and
+    // a decision that changes depending on iteration order is not a
+    // policy.
+    let mut condemned: List<PackageName> = List.new();
+    for name in cache.names().iter() {
+        match cache.entry(name) {
+            Maybe.Some(entry) => {
+                if removes(&verdict_for(&entry, horizon)) {
+                    condemned.push(name.clone());
+                }
+            }
+            Maybe.None => {},
+        }
+    }
+
+    let mut dropped = 0;
+    for name in condemned.iter() {
+        if cache.evict(name) {
+            dropped = dropped + 1;
+        }
+    }
+    dropped
+}
+
+/// The horizon for a retention window, read from the clock.
+///
+/// Separated from `prune_before` so the policy above stays pure and the
+/// context appears in exactly one place — the same shape `node/publish`
+/// and `node/durable` use.
+public fn horizon_for(window_seconds: Int) -> Int using [Clock] {
+    Clock.now() - window_seconds
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+
+/// A coordinate this node answers for is never dropped, at any horizon.
+///
+/// The claim the whole module exists for, and it is a finite case
+/// analysis over `AuthorityRole` — which is what makes it provable
+/// rather than stated.
+public pure fn own_coordinates_survive(entry: &CachedEntry, horizon: Int) -> Bool {
+    match entry.verified.role {
+        AuthorityRole.Local    => !removes(&verdict_for(entry, horizon)),
+        AuthorityRole.Upstream => true,
+    }
+}
+
+@verify(formal)
+public theorem a_node_never_forgets_what_it_answers_for(
+    entry: &CachedEntry,
+    horizon: Int,
+)
+    ensures own_coordinates_survive(entry, horizon)
+    proof {
+        // Case analysis on the entry's role, which is a closed set of
+        // two:
+        //
+        //   * `Local` — `verdict_for` returns `KeepOwn` on that arm
+        //     without consulting the horizon at all, and `removes`
+        //     answers `true` only for `Drop`. So the claim reduces to
+        //     `KeepOwn != Drop`, which holds because they are distinct
+        //     constructors of the same type.
+        //   * `Upstream` — the predicate's own arm is `true`.
+        //
+        // The horizon is universally quantified and never read on the
+        // arm that matters, which is why no arithmetic enters the
+        // argument.
+    };

@@ -89,6 +89,37 @@ public type Published is
 // The write path (spec §5 row 2)
 // -----------------------------------------------------------------------------
 
+/// The right to attempt ONE publication.
+///
+/// AFFINE, and the domain is why. A transparency log exists so that one
+/// release has one entry; a publisher whose request times out and
+/// retries, or a supervisor that restarts a worker mid-flight, can
+/// produce two entries for one release, and two entries are exactly the
+/// disagreement the log was built to make impossible.
+///
+/// `publish` CONSUMES the slot. A second call has nothing left to pass,
+/// so "attempted at most once" stops being a rule somebody has to keep
+/// and becomes a thing the compiler counts. An affine value cannot be
+/// used twice, and the checker says so at the second use rather than in
+/// an incident report.
+///
+/// WHAT THIS DOES NOT CLAIM, because it would be false: the NETWORK can
+/// still retry. Affinity governs this node's own code path — it removes
+/// the accidental double-publish that a retry loop or a restarted worker
+/// produces locally. The idempotent answer below (`AlreadyIdentical`)
+/// stays for the case affinity cannot reach: a second request arriving
+/// from outside, which is not this program using a value twice but two
+/// programs asking the same question.
+///
+/// Mainstream languages have moves; a value declared AFFINE says the
+/// intent at the declaration rather than leaving each reader to infer
+/// it from how the function happens to take its argument.
+public type affine PublishSlot is {
+    /// Which authority the slot was issued for, so a slot cannot be
+    /// minted for one name and spent on another.
+    for_authority: Text,
+};
+
 /// Publish `request` into `cache`, against the authorities this node is
 /// configured with.
 ///
@@ -103,8 +134,19 @@ public type Published is
 /// the node runs with is not a judgement anybody asked for.
 public fn publish(
     cache: &mut Cache,
+    slot: PublishSlot,
     request: &PublishRequest,
 ) -> Result<Published, PublishError> using [Clock, NodeIdentity, Uplink] {
+    // The slot is consumed by being taken. Reading the authority it was
+    // issued for is what makes it more than a token: a slot minted for
+    // one authority cannot be spent publishing as another.
+    let issued_for = slot.for_authority;
+    if issued_for != request.as_authority {
+        return Result.Err(PublishError.NotOurName(
+            request.as_authority.clone(),
+            issued_for,
+        ));
+    }
     let authorities = NodeIdentity.authorities();
     let name = PackageName(request.manifest.name.0.clone());
 

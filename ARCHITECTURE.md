@@ -110,15 +110,43 @@ them found defects in the language while being written.
 | scoped `provide … in { }` | `main.vr` | exercising both states of the world without a mock threaded through five call sites |
 | `pure`, compiler-verified | all of `protocol/` | the layering is a fact the compiler holds, not a convention a reviewer notices |
 | structured concurrency | `node/slice` | all-or-nothing import becomes a CONSEQUENCE of the parent-outlives-child law, not a comment |
+| `async` as an inherited fact | `node/slice` → `node/durable` → `main` | one function fans out and waits; every caller up the chain says so, because `.await` outside an async context is a refusal and not a silent block |
 | protocols with associated types | `protocol/source` | two sources with different reference shapes, one rule over both |
 | rank-2 transducers | `protocol/query`, `node/search` | one query definition, three consumers, no filter chain free to drift |
 | meta parameters with refinements | `protocol/hash` | a digest width is part of the type, and SHA-1's width is not a type at all |
 | the CBGR tier dial | `protocol/hash` | one place, with the proof and the measurement written beside it |
+| `@derive`, and its absence | `protocol/revocation` vs `protocol/authority` | derive when the structure IS the meaning; write it out when comparing is a decision somebody must make |
+| the `is` operator | `revocation.may_publish`, `revocation.installable` | a one-state question answered by a `Bool`, not by a match with arms that exist to say `false` |
+| an explicit `proof { … }` | `revocation.a_standing_never_goes_back` | the case analysis is short enough to read, so it is written rather than left to `auto` |
+| gradual verification | `revocation.apply_all` | the same property over a WALK is not provable today — the claim keeps its enforcement, at run time, stated in the signature |
+| `select` over racing futures | `node/resolution.race_mirrors` | order and race are DIFFERENT questions — precedence must be preserved, mirrors must not be waited on; the two sit side by side rather than behind a flag |
+| dynamic dispatch, where generics stop | `node/resolution` | a configured source list is HETEROGENEOUS by definition; `List<S>` holds one S, and the heterogeneity is the data, not a weak signature |
+| affine resources | `node/publish`'s `PublishSlot` | one release, one log entry — a retry that republishes is the split-brain a transparency log exists to prevent, and the slot is consumed by being spent |
 | architectural obligations | every module's `@arch_module` | the audit gates on them |
 
 Two are deliberately ABSENT and say so where they would go: `&unsafe`
 anywhere (`protocol/hash` states why), and disjunction in a query
 (`protocol/query` states why).
+
+A fifth is a claim `PublishSlot` deliberately does NOT make. Affinity
+governs this node's own code path: it removes the double-publish a retry
+loop or a restarted worker produces locally. It cannot reach a second
+request arriving over the network, which is not one program using a
+value twice but two programs asking the same question — so the
+idempotent `AlreadyIdentical` answer stays, and says why.
+
+A fourth is `&mut` on the revocation ledger. `apply_all` takes the
+ledger by reference and RETURNS a new one, because a batch that is
+refused half-way must leave nothing behind — and a function that mutates
+in place cannot promise that without an undo log nobody would trust.
+
+A third absence is worth naming because it was a temptation rather than
+a design: `block_on` at the boundary where `import_slice` became async.
+It exists in the standard library and is the right tool at an FFI edge,
+but using it here would have let every caller keep a synchronous
+signature while a fan-out ran underneath — and the all-or-nothing
+guarantee `node/slice` claims would have become a comment again. The
+chain says `async` all the way to `main` instead.
 
 ## Choices that keep coming up
 

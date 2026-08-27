@@ -112,7 +112,13 @@ implement Slice {
 /// storing loop would leave a partially-populated node when the third
 /// item fails, and a node whose contents disagree with its own manifest
 /// reports the disagreement later, somewhere unrelated.
-public fn import_slice(
+/// ASYNC, and the signature says so because the body does it. The fan-out
+/// below spawns one verification per item and joins every one before the
+/// storing loop; `.await` is how a parent waits for its children, and a
+/// parent that waits is an async function. Verum will not let this be
+/// written any other way — an `.await` outside an async context is
+/// `E504`, not a silent block.
+public async fn import_slice(
     cache: &mut Cache,
     slice: &Slice,
 ) -> Result<Int{it >= 0}, ImportError> using [Clock] {

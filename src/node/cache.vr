@@ -117,6 +117,58 @@ implement Cache {
         }
     }
 
+    /// Every name this node holds.
+    ///
+    /// Exists so a policy can decide about entries WITHOUT reaching into
+    /// the map. That is not tidiness: the capability on `prune_before`
+    /// says a pruner may evict and may not store, and a caller that can
+    /// touch `entries` directly has both rights back regardless of what
+    /// its signature claims. A restriction the value's own surface lets
+    /// you walk around is a comment, not a guarantee.
+    public fn names(&self) -> List<PackageName> {
+        let mut out: List<PackageName> = List.new();
+        for k in self.entries.keys() {
+            out.push(PackageName(k.clone()));
+        }
+        out
+    }
+
+    /// The entry stored under a name, if any.
+    public fn entry(&self, name: &PackageName) -> Maybe<CachedEntry> {
+        self.entries.get(name.0.clone())
+    }
+
+    /// Forget an entry.
+    ///
+    /// A cache without eviction grows until the disk does not, and an
+    /// air-gapped node with a full disk is a real failure rather than a
+    /// hypothetical one. Returns whether anything was there, because a
+    /// prune that reports what it actually removed is the difference
+    /// between a maintenance job and a guess.
+    ///
+    /// EVICTING IS NOT STORING, and the type says so. `&mut` grants the
+    /// right to change a value; it says nothing about WHICH changes, so
+    /// an importer holding `&mut Cache` may quietly overwrite an
+    /// attribution or drop a coordinate somebody else vouched for. The
+    /// capability splits the two:
+    ///
+    ///     fn import_slice(cache: &mut Cache with [Store],  …)
+    ///     fn prune_before(cache: &mut Cache with [Evict],  …)
+    ///
+    /// Neither can do the other's job, and no reviewer has to notice.
+    /// This is the distinction ownership alone cannot draw — Rust's
+    /// `&mut`, Java's `final`, Go's unexported fields all stop at "may
+    /// it be changed", and the question here is "changed HOW".
+    public fn evict(&mut self, name: &PackageName) -> Bool {
+        // ONE probe, not two: `remove` already reports what it took
+        // out, and asking `get` first would be a second traversal
+        // whose answer can only agree with this one.
+        match self.entries.remove(name.0.clone()) {
+            Some(_) => true,
+            None    => false,
+        }
+    }
+
     /// How many entries this node holds — the figure a consistency
     /// answer is dated against.
     ///
