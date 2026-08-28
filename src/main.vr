@@ -325,6 +325,13 @@ async fn carry(label: &Text, slice: &Slice) {
             print(f"{label}: refused, {who} needs {needs} which the slice omits"),
         Err(ImportError.ItemRefused(who, _)) =>
             print(f"{label}: refused, evidence for {who} did not check out"),
+        // Reachable only through `node.ingest`, which is where the write
+        // happens — this demonstration imports without persisting. It is
+        // spelled out rather than swallowed by a wildcard because the
+        // state it names is the one an operator most needs told apart:
+        // the node HOLDS these coordinates and will lose them on restart.
+        Err(ImportError.NotPersisted) =>
+            print(f"{label}: imported, and the write to durable storage failed"),
     }
 }
 

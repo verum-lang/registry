@@ -115,7 +115,8 @@ them found defects in the language while being written.
 | rank-2 transducers | `protocol/query`, `node/search` | one query definition, three consumers, no filter chain free to drift |
 | meta parameters with refinements | `protocol/hash` | a digest width is part of the type, and SHA-1's width is not a type at all |
 | the CBGR tier dial | `protocol/hash` | one place, with the proof and the measurement written beside it |
-| capability attenuation — **DECLARED, NOT YET ENFORCED** | `node/retention` vs `node/slice` | `&mut` grants the right to change and says nothing about WHICH changes; `with [Store]` / `with [Evict]` say it. The signatures are written and the compiler does not yet act on them — see below |
+| capability attenuation | `node/retention` vs `node/slice` vs `node/ingest` | `&mut` grants the right to change and says nothing about WHICH changes; `with [Store]` / `with [Evict]` say it. A pruner cannot reach the importer, and the compiler says so at the call |
+| linear resources — exactly once | `node/ingest` | the duty to write a change down must be DISCHARGED, not merely not-repeated; forgetting it on any path out is a compile error, and there are two named ways to discharge it |
 | `@derive`, and its absence | `protocol/revocation` vs `protocol/authority` | derive when the structure IS the meaning; write it out when comparing is a decision somebody must make |
 | the `is` operator | `revocation.may_publish`, `revocation.installable` | a one-state question answered by a `Bool`, not by a match with arms that exist to say `false` |
 | an explicit `proof { … }` | `revocation.a_standing_never_goes_back` | the case analysis is short enough to read, so it is written rather than left to `auto` |
@@ -179,10 +180,16 @@ one edit to the programme, the diagnostic it produced, and a revert:
 | meta parameters with refinements | `Narrow` re-typed to `Hash<20>` | `error<E506>: meta argument 1 of 'Hash' violates its refinement: '20' does not satisfy 'it == 32 \|\| it == 64'` |
 | `async` as an inherited fact | `async` removed from `durable.restore` | `Cannot await non-future type: Ok(Int{it >= 0}) \| Err(ImportError)` |
 | affine resources | the `PublishSlot` spent twice | `value 'slot' used after move` |
-| capability attenuation | a pruner holding `[Evict]` calls `store` | **nothing — the project still checks clean** |
+| capability attenuation | a pruner holding `[Evict]` calls a `[Store]` function | `error<E411>: capability cannot be widened: this value carries [Evict], and [Store] is required` |
+| linear resources (exactly once) | `ingest_volatile` drops the `Unsaved` duty instead of discharging it | `error<E303>: linear value 'pending' must be consumed exactly once` |
 
-Six of the seven hold. The last does not, and is marked in the table
-above and explained below.
+All eight hold, and the last two did not when this table was first
+written. Capability attenuation read "**nothing — the project still
+checks clean**" and had a section below explaining why the signatures
+stayed anyway; both the compiler gap and that section are gone, and the
+row now carries the refusal it was always supposed to produce. That is
+the table doing its job: it named an unenforced guarantee for a day
+instead of letting it pass as a real one.
 
 TWO THINGS THE TABLE SHOWS THAT A LIST OF TICKS WOULD HIDE.
 
@@ -198,27 +205,99 @@ function simply stopped asking for the context. The guarantees are real
 and the reports would send somebody to the wrong line. Both are filed
 against the diagnostics debt rather than smoothed over here.
 
-### The one claim in that table the compiler does not yet keep
+### The claim that was not kept, and now is
 
 `node/retention.prune_before` takes `&mut Cache with [Evict]` and
-`node/slice.import_slice` takes `&mut Cache with [Store]`. The intent is
-exact and the domain wants it: an importer may add coordinates and must
-not evict, a pruner the reverse, and `&mut` cannot draw that line.
+`node/slice.import_slice` takes `&mut Cache with [Store]`. An importer
+may add coordinates and must not evict; a pruner the reverse; and `&mut`
+cannot draw that line, because it answers "may it be changed" when the
+question is "changed HOW".
 
-The compiler does not enforce it TODAY. Falsified the same way as the
-claims above — a pruner holding `[Evict]` was made to call `store`, and
-the project still checked with zero errors. The root is measured and
-filed: a capability-restricted type reports as its plain base at every
-binding, so nothing downstream ever sees the restriction; field access
-on one fails with `E103`, and widening `[Read]` into `[Read, Write]` is
-not refused at all.
+FOR A DAY THIS SECTION SAID THE COMPILER DID NOT ENFORCE IT, and the row
+above said so too. That was measured, not assumed: a pruner holding
+`[Evict]` was made to call a `[Store]` function and the project checked
+clean. The signatures stayed, marked, rather than being deleted or
+quietly listed beside guarantees that were real — a reader cannot tell
+those apart by looking, which is the declared-but-unenforced trap the
+proving-ground methodology puts first.
 
-The signatures stay, and this section stays with them. They are the
-honest shape for the rule and they are what the fix will make real; what
-must not happen is the table listing them beside guarantees the compiler
-keeps, because a reader cannot tell those apart by looking. This is the
-declared-but-unenforced trap the proving-ground methodology puts first,
-and the programme is not exempt from it.
+It is enforced now. The same falsification returns
+
+    error<E411>: capability cannot be widened:
+                 this value carries [Evict], and [Store] is required
+
+WHAT THE FIX TURNED OUT TO BE, because the recorded diagnosis was wrong
+twice. The note said a capability-restricted type "reports as its plain
+base at every binding", so nothing downstream could see it. An
+instrument at the binding showed the opposite: it holds
+`CapabilityRestricted { base: Store, capabilities: {ReadOnly} }`, and
+the type renderer prints it faithfully. The misleading
+`expected 'Int', found 'Store'` came from inside the unifier's own
+deliberate peel — a capability does not change what a value IS, so
+unification looks through it in both directions — and I had read a
+nested comparison as an erasure.
+
+The second error was worse, because it held the fix back. The note
+claimed widening was already "refused by accident" with an unrelated
+`E103`, so landing the field-access fix would trade a wrong refusal for
+silent acceptance. Measured with all four cases in one run, `E103`
+appeared only on FIELD ACCESS; a widening CALL already compiled. There
+was nothing to trade.
+
+Both halves shipped together, because either alone is a hole: field
+access peels the wrapper, and a directional check refuses widening.
+`unify` cannot host that check — it peels in both directions by design —
+so it lives where a direction exists, comparing an actual against an
+expected.
+
+AND AN UNRESTRICTED VALUE SATISFIES ANY RESTRICTION. A plain `Cache`
+states no restriction, i.e. full rights, so passing it where `[Store]`
+is required is itself an attenuation. My own probe had that labelled
+"must be refused"; refusing it would have made every capability
+parameter unreachable from ordinary code, which is how a feature ends up
+declared and never used.
+
+### Exactly once, and why `affine` was not enough
+
+`node/ingest.Unsaved` is `linear`: the duty to write down a change that
+has already been made in memory.
+
+A registry exists to HOLD evidence. A node that verified a slice, stored
+it, and went down without writing it comes back up missing coordinates
+it had already checked — and from outside, that is indistinguishable
+from a node that never had them, which is the one thing a transparency
+log may not be ambiguous about. The window is not hypothetical:
+verification is the slow part, persistence is the cheap part at the end,
+and every crash lands in between.
+
+`affine` says at most once — take it or drop it, both fine. Dropping it
+is precisely the bug. `linear` says the obligation must be DISCHARGED,
+and the compiler counts: reaching the end of a function still holding
+one is an error, and so is reaching a `return` still holding one.
+
+TWO WAYS TO DISCHARGE IT, deliberately. `write_down` persists;
+`keep_in_memory` says the node is volatile on purpose. A rule that can
+only be obeyed one way stops being a decision and becomes a ritual, and
+the two spellings read differently in a review — which is the part
+`defer`-style cleanup cannot manage.
+
+WHAT NO MAINSTREAM LANGUAGE DOES HERE. Rust's `#[must_use]` is a warning
+and applies to a value you ignore, not one you bind; Java's
+`@CheckReturnValue` the same. Go's `defer` runs cleanup but cannot make
+forgetting to write one a compile error. C++ destructors make the
+opposite choice — they make dropping SILENT rather than refused, and
+"it ran the wrong cleanup" is how a half-written log happens.
+
+`ingest` and `ingest_volatile` differ in exactly one call, and that call
+is the whole difference in behaviour: no flag, no configuration key, and
+no way to end up in the wrong one by accident.
+
+AND THE `match` IN `ingest` IS A SHAPE THAT DID NOT COMPILE UNTIL
+RECENTLY. Both arms discharge the duty, exactly one arm runs, so it is
+discharged exactly once per execution — which is what `linear` asks for.
+The checker used to walk the arms in sequence and carry the consumed
+state from one into the next, refusing the commit-or-rollback shape that
+every transaction-like function is written in.
 
 ## Choices that keep coming up
 

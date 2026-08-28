@@ -70,7 +70,13 @@ public type ImportError is
     | ItemRefused(Text, EvidenceError)
     /// The slice is not closed: an item needs something the slice does
     /// not carry. Named so the exporter can be told what to add.
-    | NotClosed(Text, Text);
+    | NotClosed(Text, Text)
+    /// Everything verified and was stored in memory, and the write to
+    /// durable storage failed. DISTINCT from the refusals above, because
+    /// the node's state is different: it HOLDS the coordinates and will
+    /// lose them on restart. An operator needs to tell "nothing was
+    /// accepted" from "accepted, and it will not survive".
+    | NotPersisted;
 
 // -----------------------------------------------------------------------------
 // Closure (spec §4.2)
@@ -118,8 +124,23 @@ implement Slice {
 /// parent that waits is an async function. Verum will not let this be
 /// written any other way — an `.await` outside an async context is
 /// `E504`, not a silent block.
+/// IMPORTING IS NOT EVICTING, and the type says so.
+///
+/// `&mut` grants the right to CHANGE a value and says nothing about
+/// which changes, so an importer holding a plain `&mut Cache` may just
+/// as well drop a coordinate somebody else vouched for. `[Store]` and
+/// `[Evict]` split the two, and neither can do the other's job:
+///
+///     fn import_slice(cache: &mut Cache with [Store], …)
+///     fn prune_before(cache: &mut Cache with [Evict], …)
+///
+/// A caller holding `[Evict]` cannot reach this function, and the
+/// compiler says so at the call rather than a reviewer noticing. This is
+/// the distinction ownership alone cannot draw: Rust's `&mut`, Java's
+/// `final` and Go's unexported fields all stop at "may it be changed",
+/// and the question here is "changed HOW".
 public async fn import_slice(
-    cache: &mut Cache,
+    cache: &mut Cache with [Store],
     slice: &Slice,
 ) -> Result<Int{it >= 0}, ImportError> using [Clock] {
     match slice.closure_gap() {
