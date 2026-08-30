@@ -1,0 +1,23 @@
+— versions and proofs —
+true true false
+latest 1.0.1
+— effects and purity —
+left-pad: score 300
+invalid package name
+total 10
+— ownership and tokens —
+publish 42
+— capabilities in the signature —
+v1 at 1700000000
+v2 at 1700000000
+age 42
+— three tiers of reference —
+first blob is verum-core
+its size is 4096
+mirror holds 6144 bytes
+— a size is part of the type —
+address width 32
+preview width 8
+— theorems about the design —
+1.2.3 ranks 1002003, 1.2.4 ranks 1002004
+1.3.0 ranks 1003000 — above 1.2.999 at 1002999
