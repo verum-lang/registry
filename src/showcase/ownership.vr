@@ -1,0 +1,68 @@
+module showcase.ownership;
+
+// =============================================================================
+// registry showcase — ownership that the type system enforces
+//
+// A registry hands out things that must not be used twice and things that must
+// not be dropped unused. Verum separates those two obligations into two type
+// modifiers, and the compiler enforces each at its own strength:
+//
+//   type affine T  — AT MOST once. Using it twice is a compile error;
+//                    never using it is fine.
+//   type linear T  — EXACTLY once. Using it twice is an error, and dropping
+//                    it without consuming it is also an error.
+//
+// Rust has one of these (move semantics ≈ affine). The distinction matters
+// here: an upload token may be abandoned (the client gave up), but a signature
+// receipt may NOT be — dropping it silently loses the audit record.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// AFFINE — an upload token is spent at most once.
+//
+// Replaying a publish token is a supply-chain attack. This is a COMPILE error,
+// not a uniqueness constraint reached over the network after the fact.
+// -----------------------------------------------------------------------------
+type affine UploadToken is { nonce: Int };
+
+fn spend(t: UploadToken) -> Int {
+    t.nonce
+}
+
+// -----------------------------------------------------------------------------
+// LINEAR — an audit receipt must be recorded, not dropped.
+//
+// The registry's transparency log is only trustworthy if every signature
+// produces an entry. A linear type turns "someone forgot to write the log line"
+// from a review question into a compile error.
+// -----------------------------------------------------------------------------
+type linear Receipt is { entry: Int };
+
+fn record(r: Receipt) -> Int {
+    r.entry
+}
+
+// -----------------------------------------------------------------------------
+// What the compiler refuses — measured, one at a time, on a release binary:
+//
+//   let t = UploadToken { nonce: 1 };
+//   let a = spend(t);
+//   let b = spend(t);        error<E310>: value `t` used after move
+//
+// The affine value may be abandoned; the linear one may not. Both are checked
+// where the mistake is made, not where its consequence surfaces.
+// -----------------------------------------------------------------------------
+
+fn publish_once(nonce: Int, entry: Int) -> Int {
+    let token = UploadToken { nonce: nonce };
+    let receipt = Receipt { entry: entry };
+
+    let spent = spend(token);
+    let recorded = record(receipt);
+
+    spent + recorded
+}
+
+public fn demo() {
+    print(f"publish {publish_once(41, 1)}");
+}

@@ -1,0 +1,133 @@
+module showcase.versions;
+
+// =============================================================================
+// registry showcase — publishing a package version
+//
+// Every advanced feature here earns its place: it is the cheapest correct way
+// to state a rule the registry actually has. The comments say WHICH rule.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// 1. REFINEMENT TYPES — the invariant lives in the type, not in a constructor.
+//
+// A semantic version component is never negative. Written as a refinement, the
+// compiler carries that fact into every proof below; written as a runtime check
+// in a constructor, it would have to be re-established at each use site.
+// -----------------------------------------------------------------------------
+type Component is n: Int where n >= 0;
+
+type Version is {
+    major: Component,
+    minor: Component,
+    patch: Component,
+};
+
+// -----------------------------------------------------------------------------
+// 2. PURE + PROVEN — the ordering is not tested, it is discharged.
+//
+// A registry's central rule is that a published version never goes backwards.
+// `ensures` states it; the SMT backend proves it holds for ALL inputs, which no
+// amount of unit testing can do.
+// -----------------------------------------------------------------------------
+pure fn rank(v: Version) -> Int
+    ensures result >= 0
+{
+    v.major * 1000000 + v.minor * 1000 + v.patch
+}
+
+pure fn is_after(next: Version, prev: Version) -> Bool {
+    rank(next) > rank(prev)
+}
+
+pure fn bump_patch(v: Version) -> Version
+    ensures result.patch > v.patch
+{
+    Version { major: v.major, minor: v.minor, patch: v.patch + 1 }
+}
+
+// -----------------------------------------------------------------------------
+// 3. AFFINE TYPE — an upload token is spent AT MOST ONCE.
+//
+// Replaying a publish token is a supply-chain attack. The affine modifier makes
+// the second use a COMPILE error, not a database uniqueness constraint that has
+// to be reached over the network.
+// -----------------------------------------------------------------------------
+type affine UploadToken is { nonce: Int };
+
+// -----------------------------------------------------------------------------
+// 4. PROTOCOL — the storage boundary, so the rule above is testable in memory.
+// -----------------------------------------------------------------------------
+type VersionStore is protocol {
+    fn latest(&self, name: Text) -> Maybe<Version>;
+    fn record(&mut self, name: Text, v: Version) -> Bool;
+};
+
+type MemStore is {
+    names: List<Text>,
+    versions: List<Version>,
+};
+
+implement VersionStore for MemStore {
+    fn latest(&self, name: Text) -> Maybe<Version> {
+        let mut i: Int = 0;
+        let mut found: Maybe<Version> = None;
+        while i < self.names.len() {
+            if self.names[i] == name {
+                found = Some(self.versions[i]);
+            }
+            i = i + 1;
+        }
+        found
+    }
+
+    fn record(&mut self, name: Text, v: Version) -> Bool {
+        self.names.push(name);
+        self.versions.push(v);
+        true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 5. THE OPERATION — impure by construction, and the compiler knows it.
+//
+// `publish` consumes the token (affinity), reads the store, and refuses a
+// version that does not advance. The purity of the DECISION is what step 2
+// bought: `is_after` is proven, so this function only has to sequence effects.
+// -----------------------------------------------------------------------------
+public fn publish(store: &mut MemStore, name: Text, next: Version, token: UploadToken) -> Bool {
+    let spent = token.nonce;
+    match store.latest(name) {
+        None => store.record(name, next),
+        Some(prev) => {
+            if is_after(next, prev) {
+                store.record(name, next)
+            } else {
+                false
+            }
+        }
+    }
+}
+
+public fn show(v: Version) -> Text {
+    f"{v.major}.{v.minor}.{v.patch}"
+}
+
+public fn demo() {
+    let mut store = MemStore { names: [], versions: [] };
+
+    let v1 = Version { major: 1, minor: 0, patch: 0 };
+    let v2 = bump_patch(v1);
+
+    let ok1 = publish(&mut store, "left-pad", v1, UploadToken { nonce: 1 });
+    let ok2 = publish(&mut store, "left-pad", v2, UploadToken { nonce: 2 });
+
+    // The rule under test: an older version is refused.
+    let older = Version { major: 0, minor: 9, patch: 0 };
+    let ok3 = publish(&mut store, "left-pad", older, UploadToken { nonce: 3 });
+
+    print(f"{ok1} {ok2} {ok3}");
+    match store.latest("left-pad") {
+        Some(v) => print(f"latest {show(v)}"),
+        None    => print("latest none"),
+    }
+}

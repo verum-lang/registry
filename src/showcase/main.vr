@@ -1,0 +1,22 @@
+// =============================================================================
+// registry showcase — one entry, three chapters
+//
+// Each chapter is its own module, and this file is the program. Independent
+// example files sharing a directory would be the natural shape, but several
+// files each declaring `main` currently run an arbitrary one of them (T0979) —
+// so the showcase is organised the way an application is, which is honest
+// anyway: one entry point, modules beside it.
+// =============================================================================
+
+mount showcase.versions.{demo as versions_demo};
+mount showcase.effects.{demo as effects_demo};
+mount showcase.ownership.{demo as ownership_demo};
+
+fn main() {
+    print("— versions and proofs —");
+    versions_demo();
+    print("— effects and purity —");
+    effects_demo();
+    print("— ownership and tokens —");
+    ownership_demo();
+}

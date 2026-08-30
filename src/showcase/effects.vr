@@ -1,0 +1,87 @@
+module showcase.effects;
+
+// =============================================================================
+// registry showcase — computational properties as the contract between layers
+//
+// Verum INFERS five properties (Pure, IO, Async, Fallible, Mutates) from the
+// body. `pure` is not a promise the author makes and the compiler believes: it
+// is a claim the compiler CHECKS. That inversion is what makes a layered
+// service design enforceable instead of conventional.
+//
+// In a registry the layering matters: version arithmetic and name validation
+// must be reproducible and testable without a database, while storage and
+// logging obviously are not. The `pure` keyword draws that line where the
+// reviewer can see it AND where the compiler can hold it.
+// =============================================================================
+
+type PackageName is { text: Text };
+
+// -----------------------------------------------------------------------------
+// THE PURE CORE — decisions only. No IO, no mutation of anything the caller
+// can observe. The compiler refuses this function if that stops being true.
+// -----------------------------------------------------------------------------
+
+pure fn name_is_valid(n: PackageName) -> Bool {
+    let len = n.text.len();
+    len > 0 && len <= 64
+}
+
+pure fn score(downloads: Int, days_since_publish: Int) -> Int
+    requires downloads >= 0
+    requires days_since_publish >= 0
+    ensures result >= 0
+{
+    if days_since_publish == 0 {
+        downloads
+    } else {
+        downloads / (days_since_publish + 1)
+    }
+}
+
+// A `pure fn` MAY write to its own locals — that is not an effect, because no
+// caller can observe it. Without this the keyword would be unusable for the
+// ordinary way of writing a loop.
+pure fn total(values: List<Int>) -> Int {
+    let mut acc: Int = 0;
+    let mut i: Int = 0;
+    while i < values.len() {
+        acc = acc + values[i];
+        i = i + 1;
+    }
+    acc
+}
+
+// What a `pure fn` may NOT do — each of these is a compile error, and the four
+// were measured one at a time on a release binary:
+//
+//   pure fn a() -> Int { print("x"); 1 }        E503 … side effects: IO
+//   pure fn b() -> Int { impure_helper() }      E503 … side effects: IO
+//   pure fn c() -> Int { spawn { 1 }; 2 }       E503 … side effects: Spawns
+//   pure fn d(x: &mut Int) -> Int { *x = 1; 1 } E503 … side effects: Mutates
+//
+// The last one only started failing today (T0792): the inferrer unioned the
+// properties of an assignment's operands and never looked at the assignment.
+// A `pure` signature promising that a lent-out `&mut` comes back unchanged was
+// not being checked at all.
+
+// -----------------------------------------------------------------------------
+// THE EFFECTFUL EDGE — no `pure`, because it prints. The compiler knows.
+// -----------------------------------------------------------------------------
+
+fn report(n: PackageName, downloads: Int, age: Int) {
+    if name_is_valid(n) {
+        print(f"{n.text}: score {score(downloads, age)}");
+    } else {
+        print("invalid package name");
+    }
+}
+
+public fn demo() {
+    let good = PackageName { text: "left-pad" };
+    report(good, 900, 2);
+
+    let empty = PackageName { text: "" };
+    report(empty, 0, 0);
+
+    print(f"total {total([1, 2, 3, 4])}");
+}
