@@ -14,6 +14,7 @@ mount showcase.ownership.{demo as ownership_demo};
 mount showcase.capabilities.{demo as capabilities_demo};
 mount showcase.references.{demo as references_demo};
 mount showcase.sizes.{demo as sizes_demo};
+mount showcase.theorems.{demo as theorems_demo};
 
 fn main() {
     print("— versions and proofs —");
@@ -28,4 +29,6 @@ fn main() {
     references_demo();
     print("— a size is part of the type —");
     sizes_demo();
+    print("— theorems about the design —");
+    theorems_demo();
 }
