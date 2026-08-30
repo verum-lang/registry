@@ -32,3 +32,7 @@ Thumbs.db
 
 # Lock file (commit for libraries, ignore for binaries)
 # verum.lock
+
+# Z3 drops an empty trace file into the CWD of whatever ran the verifier.
+# Not ours to produce and not ours to keep.
+.z3-trace
