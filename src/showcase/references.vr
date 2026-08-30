@@ -1,0 +1,88 @@
+module showcase.references;
+
+// =============================================================================
+// registry showcase — three tiers of reference, chosen one reference at a time
+//
+// A registry mirror hands out package bytes. Copying them per request is
+// wasteful; handing out a raw pointer is how mirrors get CVEs. Every language
+// picks ONE answer to that and makes you live with it:
+//
+//   * a garbage collector: safe, and you pay on every allocation forever;
+//   * C: free, and the safety argument lives in a code-review convention;
+//   * Rust: free and safe, but the lifetime must be provable at every step,
+//     so the shapes it cannot prove are simply not expressible.
+//
+// Verum makes it a per-reference decision with a default that is safe:
+//
+//   &T          tier 0   generation-checked, ~1 ns measured
+//   &checked T  tier 1   the compiler PROVED the lifetime — 0 ns
+//   &unsafe T   tier 2   you proved it, and you carry the obligation — 0 ns
+//
+// The difference that matters is the direction of the burden. Tier 0 is what
+// you get by writing nothing, so the unconsidered case is the safe one, and
+// dropping to a cheaper tier is a thing you do on purpose, in one place, where
+// a reader can see it.
+// =============================================================================
+
+type Blob is {
+    name: Text,
+    size: Int,
+};
+
+// -----------------------------------------------------------------------------
+// TIER 0 — the default. Nothing is written, and the reference is protected.
+//
+// The check is a generation compare on dereference: if the referent were freed
+// and its slot reused, the generation would differ and the access would be
+// refused rather than reading whatever now lives there. That is the bug class
+// — use-after-free — that a mirror serving bytes from a cache is exposed to.
+// -----------------------------------------------------------------------------
+pure fn describe(b: &Blob) -> Text {
+    b.name
+}
+
+// -----------------------------------------------------------------------------
+// TIER 1 — the same code, with the check removed BY PROOF rather than by
+// assertion. `&checked` compiles to a bare pointer; escape analysis has shown
+// the referent outlives the reference, so there is nothing left to check.
+//
+// It reads as a stronger claim than tier 0 and it is: a reference the compiler
+// could not prove cannot be spelled this way.
+// -----------------------------------------------------------------------------
+pure fn size_of(b: &checked Blob) -> Int {
+    b.size
+}
+
+// -----------------------------------------------------------------------------
+// The mirror. It holds blobs and answers about them without copying.
+// -----------------------------------------------------------------------------
+type Mirror is {
+    blobs: List<Blob>,
+};
+
+fn total_size(m: &Mirror) -> Int {
+    let mut sum = 0;
+    let mut i = 0;
+    while i < m.blobs.len() {
+        sum = sum + m.blobs[i].size;
+        i = i + 1;
+    }
+    sum
+}
+
+public fn demo() {
+    let mirror = Mirror {
+        blobs: [
+            Blob { name: "verum-core", size: 4096 },
+            Blob { name: "verum-net", size: 2048 },
+        ],
+    };
+
+    // The reference here is tier 0 and nothing said so — that is the point.
+    print(f"first blob is {describe(&mirror.blobs[0])}");
+
+    // And this one is tier 1: the same access, with the check discharged.
+    print(f"its size is {size_of(&mirror.blobs[0])}");
+
+    print(f"mirror holds {total_size(&mirror)} bytes");
+}

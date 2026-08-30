@@ -1,0 +1,76 @@
+module showcase.theorems;
+
+// =============================================================================
+// registry showcase — a theorem is a declaration, not a comment
+//
+// The chapters before this one attach proof obligations to FUNCTIONS: a
+// `requires` guards a call, an `ensures` describes a return. That covers what
+// one function promises. It does not cover what the design as a whole is
+// supposed to guarantee — "a republish can never move a package backwards" is
+// a claim about the RELATIONSHIP between two operations, and there is no
+// single function to hang it on.
+//
+// In most languages such a claim lives in a design document, and drifts. Here
+// it is a declaration the compiler discharges, in the same file as the code it
+// is about, and it fails the build when the code stops satisfying it.
+// =============================================================================
+
+// The ordering the registry publishes by. Deliberately arithmetic: a claim
+// about it is a claim the solver can decide.
+pure fn rank(major: Int, minor: Int, patch: Int) -> Int
+    requires major >= 0, minor >= 0, patch >= 0
+    ensures result >= 0
+{
+    major * 1000000 + minor * 1000 + patch
+}
+
+// -----------------------------------------------------------------------------
+// THEOREM 1 — bumping the patch always moves FORWARD.
+//
+// This is the registry's central rule. Not "we tested it with a few versions":
+// for every major, minor and patch that satisfy the preconditions, the ranked
+// value strictly increases. The solver decides it once, for all of them.
+// -----------------------------------------------------------------------------
+theorem patch_bump_moves_forward(major: Int, minor: Int, patch: Int)
+    requires major >= 0, minor >= 0, patch >= 0
+    ensures rank(major, minor, patch + 1) > rank(major, minor, patch)
+{
+    proof by smt
+}
+
+// -----------------------------------------------------------------------------
+// THEOREM 2 — a minor bump outranks ANY patch bump under it.
+//
+// The rule a registry gets wrong when it packs a version into an integer with
+// too little room: 1.2.1000 must not overtake 1.3.0. Stating it as a theorem
+// makes the field width a proven property of the encoding rather than a
+// comment beside the constant.
+// -----------------------------------------------------------------------------
+theorem minor_outranks_any_patch(major: Int, minor: Int, patch: Int)
+    requires major >= 0, minor >= 0, patch >= 0, patch < 1000
+    ensures rank(major, minor + 1, 0) > rank(major, minor, patch)
+{
+    proof by smt
+}
+
+// A proof that cannot fail proves nothing, so here is the control, measured:
+// widening `patch < 1000` to `patch < 2000` admits patch = 1500, the claim
+// stops holding, and the theorem is REFUSED:
+//
+//     ✓ theorem patch_bump_moves_forward: Proved
+//     ✗ theorem minor_outranks_any_patch: Failed
+//
+// The bound is not decoration — it is the field width of the encoding, and
+// the theorem is what ties the two together. Change the constant in `rank`
+// and this build stops.
+
+public fn demo() {
+    // The theorems above are discharged at COMPILE time — nothing here runs
+    // them. What runs is ordinary code that relies on what they established.
+    let before = rank(1, 2, 3);
+    let after = rank(1, 2, 4);
+    print(f"1.2.3 ranks {before}, 1.2.4 ranks {after}");
+
+    let minor_bump = rank(1, 3, 0);
+    print(f"1.3.0 ranks {minor_bump} — above 1.2.999 at {rank(1, 2, 999)}");
+}

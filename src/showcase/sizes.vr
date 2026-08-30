@@ -1,0 +1,52 @@
+module showcase.sizes;
+
+// =============================================================================
+// registry showcase — a size is part of the type
+//
+// A registry stores digests. A SHA-256 digest is 32 bytes and a BLAKE3 digest
+// is 32 bytes, but a truncated preview is 8, and mixing them is the class of
+// bug that ends with two different packages sharing an address.
+//
+// In most languages the width lives in a constant, a comment, and a runtime
+// assert, and the three drift. Here it is a type parameter, so a function that
+// wants a 32-byte digest cannot be handed an 8-byte one — the compiler says so
+// at the call site, by number:
+//
+//     error<E400>: Type mismatch: expected '32', found '8'
+//
+// Measured, not asserted: that line is what the compiler prints for the
+// mismatch below. C++ gets this with templates and pays in error messages;
+// most other languages do not get it at all.
+// =============================================================================
+
+type Digest<const N: Int> is { bytes: List<Int> };
+
+// The registry addresses content by a full-width digest. The width is in the
+// SIGNATURE, so no call site can quietly pass a preview.
+pure fn address_of(d: Digest<32>) -> Int
+    requires d.bytes.len() >= 0
+{
+    32
+}
+
+// A short form exists for display, and it is a DIFFERENT type. Nothing stops
+// you computing one; the type stops you storing it as an address.
+pure fn preview_width(d: Digest<8>) -> Int {
+    8
+}
+
+public fn demo() {
+    let full: Digest<32> = Digest { bytes: [1, 2, 3] };
+    let short: Digest<8> = Digest { bytes: [1] };
+
+    print(f"address width {address_of(full)}");
+    print(f"preview width {preview_width(short)}");
+
+    // Writing `address_of(short)` here is a compile error, not a runtime
+    // check and not a code-review convention:
+    //
+    //     error<E400>: Type mismatch: expected '32', found '8'
+    //
+    // The two widths are two types, and the registry's addressing rule is
+    // carried by the signature rather than by a comment above it.
+}

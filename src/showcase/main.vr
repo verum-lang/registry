@@ -12,6 +12,8 @@ mount showcase.versions.{demo as versions_demo};
 mount showcase.effects.{demo as effects_demo};
 mount showcase.ownership.{demo as ownership_demo};
 mount showcase.capabilities.{demo as capabilities_demo};
+mount showcase.references.{demo as references_demo};
+mount showcase.sizes.{demo as sizes_demo};
 
 fn main() {
     print("— versions and proofs —");
@@ -22,4 +24,8 @@ fn main() {
     ownership_demo();
     print("— capabilities in the signature —");
     capabilities_demo();
+    print("— three tiers of reference —");
+    references_demo();
+    print("— a size is part of the type —");
+    sizes_demo();
 }
