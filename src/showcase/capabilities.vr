@@ -1,0 +1,66 @@
+module showcase.capabilities;
+
+// =============================================================================
+// registry showcase — ambient capabilities that are visible in the signature
+//
+// A registry needs the clock, and it needs it to be a lie in tests. Most
+// languages solve that with a mocking framework, a global that tests reach
+// in and overwrite, or an extra parameter threaded through every call site.
+//
+// Verum makes it part of the type: `using [Clock]` says what a function
+// reaches for, the compiler checks that the caller supplies it, and `provide`
+// binds an implementation for a scope. No container, no reflection, and the
+// requirement cannot drift away from the code that has it.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// THE CAPABILITY — declared once, named in signatures, supplied at the edge.
+// -----------------------------------------------------------------------------
+context Clock {
+    fn now(&self) -> Int;
+}
+
+type FixedClock is { at: Int };
+
+implement Clock for FixedClock {
+    fn now(&self) -> Int { self.at }
+}
+
+// -----------------------------------------------------------------------------
+// THE DOMAIN — a publication carries the moment it was accepted.
+//
+// `stamp` needs the clock and says so. A reader of the signature knows; a test
+// supplies a fixed one; nothing else in the module changes.
+// -----------------------------------------------------------------------------
+type Stamped is {
+    version: Int,
+    at: Int,
+};
+
+fn stamp(version: Int) -> Stamped using [Clock] {
+    Stamped { version: version, at: Clock.now() }
+}
+
+// A function that does NOT reach for the clock does not name it, and cannot
+// silently acquire it later — adding the call would fail to compile until the
+// signature admits the requirement.
+pure fn age_of(s: Stamped, now: Int) -> Int
+    requires now >= s.at
+    ensures result >= 0
+{
+    now - s.at
+}
+
+public fn demo() {
+    // One binding, one scope. Tests bind a different clock and the code under
+    // test is untouched — which is the whole argument for capabilities over
+    // globals.
+    provide Clock = FixedClock { at: 1700000000 };
+
+    let first = stamp(1);
+    let second = stamp(2);
+
+    print(f"v{first.version} at {first.at}");
+    print(f"v{second.version} at {second.at}");
+    print(f"age {age_of(first, 1700000042)}");
+}

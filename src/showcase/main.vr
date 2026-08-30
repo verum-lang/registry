@@ -11,6 +11,7 @@
 mount showcase.versions.{demo as versions_demo};
 mount showcase.effects.{demo as effects_demo};
 mount showcase.ownership.{demo as ownership_demo};
+mount showcase.capabilities.{demo as capabilities_demo};
 
 fn main() {
     print("— versions and proofs —");
@@ -19,4 +20,6 @@ fn main() {
     effects_demo();
     print("— ownership and tokens —");
     ownership_demo();
+    print("— capabilities in the signature —");
+    capabilities_demo();
 }
