@@ -62,5 +62,15 @@ public fn demo() {
 
     print(f"v{first.version} at {first.at}");
     print(f"v{second.version} at {second.at}");
-    print(f"age {age_of(first, 1700000042)}");
+    // The verifier refused an earlier version of this line. It read
+    //
+    //     age_of(first, 1700000042)
+    //
+    // and 1700000042 IS greater than the stamp — but nothing PROVES it:
+    // `first.at` came from `Clock.now()`, and the verifier cannot know
+    // what an injected capability returns. That is the correct answer.
+    // Deriving the later moment from the stamp itself discharges the
+    // precondition, and the code says what it means besides.
+    let later = first.at + 42;
+    print(f"age {age_of(first, later)}");
 }
