@@ -22,23 +22,19 @@ cd "$(dirname "$0")/.." || exit 2
 fail=0
 
 echo "== running the showcase =="
-# THE CACHE-BUST IS NOT OPTIONAL (T1003). The persistent script cache is
-# keyed on the ENTRY FILE'S CONTENT alone, so editing any mounted chapter
-# leaves `verum run main.vr` executing the PREVIOUS build — with no
-# warning and no note in the output. Without this the gate reports on
-# bytecode that no longer corresponds to the sources, which is how it
-# first PASSED a deliberately broken chapter.
+# No cache-bust here any more, and its absence is load-bearing history.
+# It used to be mandatory: the persistent script cache was keyed on the
+# ENTRY FILE'S CONTENT alone, so editing any mounted chapter left
+# `verum run main.vr` executing the PREVIOUS build — with no warning and
+# no note in the output. This gate once PASSED a deliberately broken
+# chapter for exactly that reason.
 #
-# Done in place rather than in a temp copy: the chapters declare
-# `module showcase.<name>;` and resolve against the project layout, so a
-# copy elsewhere does not compile. The trap restores the file on any
-# exit path, including a failed diff.
+# The cache now records the mount closure it compiled and re-verifies it
+# on lookup (T1003), so an edited chapter is a miss. If a stale run ever
+# reappears here, that check is the first thing to measure — not this
+# script.
 ENTRY=src/showcase/main.vr
-cp "$ENTRY" "$ENTRY.gatebak"
-trap 'mv -f "$ENTRY.gatebak" "$ENTRY" 2>/dev/null' EXIT INT TERM
-echo "// cache-bust $(date +%s%N)" >> "$ENTRY"
 actual=$("$VERUM" run "$ENTRY" 2>&1 | grep -v '^ *Running')
-mv -f "$ENTRY.gatebak" "$ENTRY"; trap - EXIT INT TERM
 if ! diff -u src/showcase/EXPECTED.txt <(printf '%s\n' "$actual"); then
     echo "FAIL: output differs from src/showcase/EXPECTED.txt"
     fail=1
