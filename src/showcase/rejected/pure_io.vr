@@ -1,0 +1,8 @@
+// Claimed by src/showcase/effects.vr:
+//     pure fn a() -> Int { print("x"); 1 }   E503 ... side effects: IO
+//
+// A pure function may not perform I/O.
+
+pure fn a() -> Int { print("x"); 1 }
+
+public fn main() { print(f"{a()}"); }

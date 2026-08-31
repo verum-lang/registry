@@ -1,0 +1,8 @@
+// Claimed by src/showcase/effects.vr:
+//     pure fn c() -> Int { spawn { 1 }; 2 }   E503 ... side effects: Spawns
+//
+// Starting a task is an effect, even when its result is discarded.
+
+pure fn c() -> Int { spawn { 1 }; 2 }
+
+public fn main() { print(f"{c()}"); }

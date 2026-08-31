@@ -59,5 +59,42 @@ for row in versions:6:0 theorems:4:0 capabilities:3:0 ownership:4:0; do
     fi
 done
 
+echo "== rejections =="
+# Every chapter states in prose what the compiler REFUSES, and until now
+# those statements were guarded by nothing: a chapter could stop
+# rejecting and its comment would go on claiming the guarantee. That is
+# the same failure `versions.vr` had — a claim outliving the thing it
+# describes — one level up, in the text instead of the proof count.
+#
+# Each row is one such claim, made executable in src/showcase/rejected/.
+# TWO things are checked, because either one alone drifts:
+#   1. the program is still REJECTED, with the named code;
+#   2. the chapter still CLAIMS that code — otherwise the gate goes on
+#      testing a promise the text has already dropped.
+# chapter:code:probe
+for row in sizes:E400:width_mismatch \
+           ownership:E310:use_after_move \
+           effects:E503:pure_io \
+           effects:E503:pure_calls_impure \
+           effects:E503:pure_spawn \
+           effects:E503:pure_mutates; do
+    ch="${row%%:*}"; rest="${row#*:}"
+    code="${rest%%:*}"; probe="${rest#*:}"
+    got=$("$VERUM" check "src/showcase/rejected/$probe.vr" 2>&1 \
+          | grep -oE 'error<E[0-9]+>' | head -1)
+    if [ "$got" != "error<$code>" ]; then
+        printf "  %-20s FAIL: expected %s, got '%s'\n" \
+               "$probe" "$code" "${got:-no error at all}"
+        fail=1
+    elif ! grep -q "$code" "src/showcase/$ch.vr"; then
+        printf "  %-20s FAIL: %s no longer claims %s — the gate is testing a promise the chapter dropped\n" \
+               "$probe" "$ch.vr" "$code"
+        fail=1
+    else
+        printf "  %-20s rejected with %s (claimed by %s)\n" \
+               "$probe" "$code" "$ch.vr"
+    fi
+done
+
 [ "$fail" -eq 0 ] && echo "showcase intact" || echo "showcase CHANGED — update EXPECTED.txt only if the change is intended"
 exit "$fail"

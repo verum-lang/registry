@@ -1,0 +1,15 @@
+// Claimed by src/showcase/ownership.vr:
+//     error<E310>: value `t` used after move
+//
+// An affine value may be used AT MOST once.
+
+type affine UploadToken is { nonce: Int };
+
+fn spend(t: UploadToken) -> Int { t.nonce }
+
+public fn main() {
+    let t = UploadToken { nonce: 1 };
+    let a = spend(t);
+    let b = spend(t);
+    print(f"{a} {b}");
+}

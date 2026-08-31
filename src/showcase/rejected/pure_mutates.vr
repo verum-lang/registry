@@ -1,0 +1,9 @@
+// Claimed by src/showcase/effects.vr:
+//     pure fn d(x: &mut Int) -> Int { *x = 1; 1 }   E503 ... side effects: Mutates
+//
+// A pure signature promises that a lent-out `&mut` comes back unchanged.
+// Until T0792 this was not checked at all.
+
+pure fn d(x: &mut Int) -> Int { *x = 1; 1 }
+
+public fn main() { let mut v = 0; print(f"{d(&mut v)}"); }

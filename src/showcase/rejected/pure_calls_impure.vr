@@ -1,0 +1,10 @@
+// Claimed by src/showcase/effects.vr:
+//     pure fn b() -> Int { impure_helper() }   E503 ... side effects: IO
+//
+// Purity is not local: calling an impure function makes the caller impure.
+
+fn impure_helper() -> Int { print("y"); 2 }
+
+pure fn b() -> Int { impure_helper() }
+
+public fn main() { print(f"{b()}"); }

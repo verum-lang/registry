@@ -1,0 +1,14 @@
+// Claimed by src/showcase/sizes.vr:
+//     error<E400>: Type mismatch: expected '32', found '8'
+//
+// A digest width is part of the type, so a preview cannot be stored as
+// an address.
+
+type Digest<const N: Int> is { bytes: List<Int> };
+
+pure fn address_of(d: Digest<32>) -> Int { 32 }
+
+public fn main() {
+    let short: Digest<8> = Digest { bytes: [1] };
+    print(f"width {address_of(short)}");
+}
