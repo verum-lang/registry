@@ -5,6 +5,7 @@ latest 1.0.1
 left-pad: score 300
 invalid package name
 total 10
+ranked 300
 — ownership and tokens —
 publish 42
 — capabilities in the signature —

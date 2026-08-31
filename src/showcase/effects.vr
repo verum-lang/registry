@@ -65,6 +65,50 @@ pure fn total(values: List<Int>) -> Int {
 // not being checked at all.
 
 // -----------------------------------------------------------------------------
+// SAYING MORE THAN `pure` — a promise about capabilities NOT used.
+// -----------------------------------------------------------------------------
+//
+// `pure` says the result is a function of the arguments. A NEGATIVE context
+// says something else, and stronger: this named capability is never reached
+// for, whatever the body does. Written as a group, one name carries several
+// such promises.
+//
+// This is the part with no equivalent in the languages a reader is likely to
+// come from. A Rust `fn` cannot say "and I never touch the clock"; a Haskell
+// type can say what an action MAY do, not what it declines to do. Here the
+// refusal is in the signature, and the compiler checks it.
+
+context Clock {
+    fn now(&self) -> Int;
+}
+
+context Random {
+    fn next(&self) -> Int;
+}
+
+using Deterministic = [!Clock, !Random];
+
+// Reads: pure, AND it will not consult the clock, AND it will not draw a
+// random number. A caller reviewing a pricing rule can stop reading here.
+pure fn ranked(downloads: Int, age: Int) -> Int using Deterministic {
+    score(downloads, age)
+}
+
+// The group spelling was REFUSED until 2026-08-31 (T0986). `using [!Clock]`
+// spelled out worked; the same promise written as a group did not, because a
+// group's own reference carries `is_negative: false` and the purity gate read
+// the NAME instead of looking through it to its members. One rule, two
+// spellings of one thing, two answers — and the stronger statement was the
+// unsayable one.
+//
+// A group that MIXES a promise with an injection is still refused, which is
+// what keeps this honest:
+//
+//   using Mixed = [!Clock, Random];
+//   pure fn f() -> Int using Mixed { 42 }
+//       E503 … declares context `Random` through group `Mixed`
+
+// -----------------------------------------------------------------------------
 // THE EFFECTFUL EDGE — no `pure`, because it prints. The compiler knows.
 // -----------------------------------------------------------------------------
 
@@ -84,4 +128,5 @@ public fn demo() {
     report(empty, 0, 0);
 
     print(f"total {total([1, 2, 3, 4])}");
+    print(f"ranked {ranked(900, 2)}");
 }
