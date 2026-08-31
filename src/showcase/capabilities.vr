@@ -41,9 +41,18 @@ fn stamp(version: Int) -> Stamped using [Clock] {
     Stamped { version: version, at: Clock.now() }
 }
 
-// A function that does NOT reach for the clock does not name it, and cannot
-// silently acquire it later — adding the call would fail to compile until the
-// signature admits the requirement.
+// A function that does not reach for the clock does not name it, and the
+// signature is what a reader, a reviewer and a test go by.
+//
+// Being honest about the boundary: today that honesty is a CONVENTION, not
+// yet a check. Measured 2026-08-31 — a function with no `using [Clock]` that
+// calls `Clock.now()` compiles and runs, and a `pure fn` doing the same is
+// accepted too. So the signature tells the truth because its author wrote it
+// that way, and not because the compiler insisted (T1027).
+//
+// This chapter states it rather than hiding it. The argument for capabilities
+// over globals is that the requirement is VISIBLE, and that part holds today;
+// the argument that it is UNAVOIDABLE is the half still owed.
 pure fn age_of(s: Stamped, now: Int) -> Int
     requires now >= s.at
     ensures result >= 0
