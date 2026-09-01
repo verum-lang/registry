@@ -44,7 +44,8 @@ fi
 
 echo "== proofs =="
 # chapter:expected-proved:expected-failed
-for row in versions:6:0 theorems:4:0 capabilities:3:0 ownership:4:0 transducers:8:0; do
+for row in versions:6:0 theorems:4:0 capabilities:3:0 ownership:4:0 transducers:8:0 \
+           termination:3:0; do
     ch="${row%%:*}"; rest="${row#*:}"
     want_p="${rest%%:*}"; want_f="${rest#*:}"
     line=$("$VERUM" verify "src/showcase/$ch.vr" 2>&1 | grep -oE 'Summary: [0-9]+ proved, [0-9]+ failed' | head -1)
@@ -78,7 +79,8 @@ for row in sizes:E400:width_mismatch \
            effects:E503:pure_calls_impure \
            effects:E503:pure_spawn \
            effects:E503:pure_mutates \
-           transducers:E400:rank2_monomorphic_stage; do
+           transducers:E400:rank2_monomorphic_stage \
+           termination:E321:measure_that_grows; do
     ch="${row%%:*}"; rest="${row#*:}"
     code="${rest%%:*}"; probe="${rest#*:}"
     got=$("$VERUM" check "src/showcase/rejected/$probe.vr" 2>&1 \

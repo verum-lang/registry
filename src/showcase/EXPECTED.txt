@@ -26,3 +26,6 @@ preview width 8
 live packages:      3
 downloads (live):   515
 busiest (live):     340
+— termination is declared, and the declaration is checked —
+dependency hops walked: 4
+publish attempts spent: 2

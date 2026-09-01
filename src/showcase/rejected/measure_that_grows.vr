@@ -1,0 +1,22 @@
+// Claimed by src/showcase/termination.vr:
+//     error<E321>: `forever` declares `decreases n`, and it does not decrease
+//     at this recursive call
+//
+// `decreases n` is an ASSERTION BY THE AUTHOR, not a hint. This function
+// declares that `n` shrinks and then grows it.
+//
+// Note what is NOT enough to save it: `forever` HAS a base case, `n <= 0`,
+// and never reaches it. A base case is necessary for termination and nowhere
+// near sufficient — accepting one as proof is exactly the defect this probe
+// guards against.
+
+fn forever(n: Int) -> Int
+    requires n >= 0
+    decreases n
+{
+    if n <= 0 { 0 } else { forever(n + 1) }
+}
+
+public fn main() {
+    print(f"{forever(3)}");
+}

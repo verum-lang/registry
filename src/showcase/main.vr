@@ -1,5 +1,5 @@
 // =============================================================================
-// registry showcase — one entry, eight chapters
+// registry showcase — one entry, nine chapters
 //
 // Each chapter is its own module, and this file is the program. Independent
 // example files sharing a directory would be the natural shape, but several
@@ -16,6 +16,7 @@ mount showcase.references.{demo as references_demo};
 mount showcase.sizes.{demo as sizes_demo};
 mount showcase.theorems.{demo as theorems_demo};
 mount showcase.transducers.{demo as transducers_demo};
+mount showcase.termination.{demo as termination_demo};
 
 fn main() {
     print("— versions and proofs —");
@@ -34,4 +35,6 @@ fn main() {
     theorems_demo();
     print("— a promise about what a transformation cannot see —");
     transducers_demo();
+    print("— termination is declared, and the declaration is checked —");
+    termination_demo();
 }

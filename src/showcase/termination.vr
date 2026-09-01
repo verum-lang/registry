@@ -1,0 +1,98 @@
+module showcase.termination;
+
+// =============================================================================
+// registry showcase — termination is DECLARED, and the declaration is CHECKED
+//
+// Most languages let you write a recursive function and hope. A few let you
+// annotate it. Verum makes the annotation an OBLIGATION: `decreases n` says
+// this recursion terminates, and the compiler refuses the function if the
+// measure it names does not shrink.
+//
+// That inversion is the same one `pure` makes. `pure` is not a promise the
+// author makes and the compiler believes — it is a claim the compiler checks.
+// `decreases` is the termination half of the same idea.
+//
+// In a registry it matters where you would expect: a resolver walks a
+// dependency chain, a publisher retries with backoff. Both are loops written
+// as recursion, and both are exactly the places where "it obviously
+// terminates" has been wrong before.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// A BUDGETED WALK — the simplest measure: one parameter, strictly shrinking.
+//
+// `budget` is the number of dependency hops left, and the measure says the
+// walk ends. Deliberately no postcondition here: a statement about the RESULT
+// of a recursion needs induction, and the solver times out on it — this
+// chapter claims termination, and claims only what is discharged.
+// -----------------------------------------------------------------------------
+
+pure fn resolve_depth(budget: Int, seen: Int) -> Int
+    requires budget >= 0
+    requires seen >= 0
+    decreases budget
+{
+    if budget <= 0 {
+        seen
+    } else {
+        resolve_depth(budget - 1, seen + 1)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// A LEXICOGRAPHIC MEASURE — two dimensions, ordered.
+//
+// Publishing retries: each attempt waits through a backoff, and a fresh
+// attempt resets the wait. Neither number shrinks on its own — `backoff` goes
+// back UP when an attempt is consumed — so no single parameter is a measure.
+// The PAIR is: `decreases attempts, backoff` means (attempts, backoff)
+// strictly decreases lexicographically, which is exactly what happens.
+//
+// A later component may shrink only while every earlier one is unchanged.
+// That is what makes the reset legal: it happens in the same step where
+// `attempts` decreases, so the pair still goes down.
+// -----------------------------------------------------------------------------
+
+pure fn publish_with_backoff(attempts: Int, backoff: Int) -> Int
+    requires attempts >= 0
+    requires backoff >= 0
+    decreases attempts, backoff
+{
+    if attempts <= 0 {
+        0
+    } else {
+        if backoff <= 0 {
+            1 + publish_with_backoff(attempts - 1, 3)
+        } else {
+            publish_with_backoff(attempts, backoff - 1)
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// WHAT THE COMPILER REFUSES
+//
+// The measure is an assertion, so a measure that grows is a false claim and
+// is refused — with a message about the measure, not about a stack:
+//
+//     error<E321>: `forever` declares `decreases n`, and it does not decrease
+//     at this recursive call — a declared measure is an assertion about
+//     termination, so it is checked
+//
+// Note what is NOT enough. `forever` below has a base case, `if n <= 0`, and
+// never reaches it. A base case is necessary for termination and nowhere near
+// sufficient — which is why the check looks at the measure at every recursive
+// call rather than at the shape of the body.
+//
+// Measured, not asserted: src/showcase/rejected/measure_that_grows.vr is that
+// program, and the showcase gate refuses to pass unless the compiler still
+// rejects it with E321.
+// -----------------------------------------------------------------------------
+
+public fn demo() {
+    let hops = resolve_depth(4, 0);
+    print(f"dependency hops walked: {hops}");
+
+    let published = publish_with_backoff(2, 3);
+    print(f"publish attempts spent: {published}");
+}
