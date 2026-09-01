@@ -22,3 +22,7 @@ preview width 8
 — theorems about the design —
 1.2.3 ranks 1002003, 1.2.4 ranks 1002004
 1.3.0 ranks 1003000 — above 1.2.999 at 1002999
+— a promise about what a transformation cannot see —
+live packages:      3
+downloads (live):   515
+busiest (live):     340

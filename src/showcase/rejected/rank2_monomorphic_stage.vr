@@ -1,0 +1,19 @@
+// Claimed by src/showcase/transducers.vr:
+//     error<E400>: Type mismatch in field 'transform' of 'Transducer'
+//
+// A rank-2 field promises to work for EVERY accumulator. A stage that
+// only works when the accumulator is Int cannot satisfy that promise,
+// and the compiler holds the line with a SKOLEM: R is replaced by a
+// fresh constant the stage cannot possibly know, so any stage that
+// depends on what R is fails to typecheck.
+
+type Reducer<A, R> is fn(R, A) -> R;
+type Transducer<A, B> is { transform: fn<R>(Reducer<B, R>) -> Reducer<A, R> };
+
+// Fixed to Int accumulators — not universally quantified.
+fn int_only(step: Reducer<Int, Int>) -> Reducer<Int, Int> { step }
+
+public fn main() {
+    let t: Transducer<Int, Int> = Transducer { transform: int_only };
+    print("a monomorphic stage was stored in a rank-2 field");
+}

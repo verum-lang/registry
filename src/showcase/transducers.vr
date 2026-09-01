@@ -1,0 +1,160 @@
+module showcase.transducers;
+
+// =============================================================================
+// registry showcase — rank-2 function types: a guarantee about what a
+// transformation CANNOT see
+//
+// Every language lets a function be generic in its result. Very few let a
+// FIELD hold a function that is generic in its result — where the quantifier
+// lives inside the type and the caller never gets to choose. That difference
+// is this whole chapter.
+//
+//     type Processor<T> is fn(T) -> T;                  rank-1: CALLER picks T
+//     transform: fn<R>(Reducer<B, R>) -> Reducer<A, R>  rank-2: the VALUE must
+//                                                       work for EVERY R
+//
+// In a registry this is the difference between a search pipeline you can trust
+// and one you have to read. The pipeline filters and reshapes package rows; a
+// separate decision says what you are collecting — a count, a total, the
+// busiest package. Rank-2 says the pipeline cannot depend on which. That is
+// not a convention or a review rule: the type gives the pipeline no way to
+// name the accumulator, so no implementation of it can inspect one.
+// =============================================================================
+
+type PackageRow is {
+    name: Text,
+    downloads: Int,
+    yanked: Bool,
+};
+
+// A reducer folds one item into an accumulator. Rank-1 on purpose: whoever
+// writes a reducer knows exactly what it accumulates.
+type Reducer<A, R> is fn(R, A) -> R;
+
+// A transducer rewrites a reducer of `B` into a reducer of `A`, for EVERY `R`.
+// `fn<R>` binds R inside the function type, so a `Transducer<A, B>` value is
+// ONE function good for all accumulators — not a family the caller
+// instantiates.
+type Transducer<A, B> is {
+    transform: fn<R>(Reducer<B, R>) -> Reducer<A, R>,
+};
+
+// -----------------------------------------------------------------------------
+// The stages. Each is an ordinary generic function; storing one in a `fn<R>`
+// field is what keeps it rank-2 — the quantifier stays, uninstantiated.
+// -----------------------------------------------------------------------------
+
+// Drop yanked rows. Note what this CANNOT do: it never names R, so it cannot
+// read the accumulator, branch on it, or short-circuit based on it.
+fn live_only<R>(step: Reducer<PackageRow, R>) -> Reducer<PackageRow, R> {
+    |acc, row| if row.yanked { acc } else { step(acc, row) }
+}
+
+// Project a row to its download count: changes the ITEM type, never the
+// accumulator type.
+fn to_downloads<R>(step: Reducer<Int, R>) -> Reducer<PackageRow, R> {
+    |acc, row| step(acc, row.downloads)
+}
+
+// -----------------------------------------------------------------------------
+// The folds — the things a pipeline must not be able to see.
+// -----------------------------------------------------------------------------
+
+pure fn count_row(acc: Int, row: PackageRow) -> Int
+    requires acc >= 0
+    ensures result >= acc
+{
+    acc + 1
+}
+
+pure fn add(acc: Int, value: Int) -> Int
+    requires acc >= 0
+    requires value >= 0
+    ensures result >= acc
+{
+    acc + value
+}
+
+pure fn keep_larger(acc: Int, value: Int) -> Int
+    ensures result >= acc
+{
+    if value > acc { value } else { acc }
+}
+
+// -----------------------------------------------------------------------------
+// One driver, three answers.
+// -----------------------------------------------------------------------------
+
+fn fold_rows<R>(rows: List<PackageRow>, step: Reducer<PackageRow, R>, seed: R) -> R {
+    let mut acc: R = seed;
+    let mut i: Int = 0;
+    while i < rows.len() {
+        acc = step(acc, rows[i]);
+        i = i + 1;
+    }
+    acc
+}
+
+fn sample_rows() -> List<PackageRow> {
+    [
+        PackageRow { name: "spindle", downloads: 120, yanked: false },
+        PackageRow { name: "loom",    downloads: 340, yanked: false },
+        PackageRow { name: "weft",    downloads: 900, yanked: true  },
+        PackageRow { name: "warp",    downloads: 55,  yanked: false },
+    ]
+}
+
+public fn demo() {
+    let rows = sample_rows();
+
+    // The two stages, held as VALUES in rank-2 fields. This is the line that
+    // does not exist in most languages: a plain record field whose type is
+    // universally quantified.
+    let drop_yanked: Transducer<PackageRow, PackageRow> =
+        Transducer { transform: live_only };
+    let project: Transducer<PackageRow, Int> =
+        Transducer { transform: to_downloads };
+
+    // The parentheses are load-bearing: `x.f(a)` is a METHOD call, so
+    // calling a function held in a FIELD is written `(x.f)(a)`. A field and
+    // a method may share a name, so the language cannot guess — and until
+    // T1037 the refusal did not say so either.
+    // Count live rows: the filter alone, folded into an Int.
+    let live_count = fold_rows(rows, (drop_yanked.transform)(count_row), 0);
+    print(f"live packages:      {live_count}");
+
+    // Sum live downloads: filter, then project, then fold with `add`.
+    let live_downloads =
+        fold_rows(rows, (drop_yanked.transform)((project.transform)(add)), 0);
+    print(f"downloads (live):   {live_downloads}");
+
+    // Busiest live package: THE SAME two stages, a different fold. Neither
+    // stage was recompiled, rewritten, or told what changed.
+    let busiest =
+        fold_rows(rows, (drop_yanked.transform)((project.transform)(keep_larger)), 0);
+    print(f"busiest (live):     {busiest}");
+
+    // `weft` carries 900 downloads and is yanked. It appears in none of the
+    // three answers, and none of the three folds says the word `yanked`.
+}
+
+// -----------------------------------------------------------------------------
+// WHAT THE COMPILER REFUSES, and how it holds the promise
+//
+// The guarantee above is not documentation. A stage fixed to one
+// accumulator cannot be stored in a rank-2 field:
+//
+//     fn int_only(step: Reducer<Int, Int>) -> Reducer<Int, Int> { step }
+//     Transducer { transform: int_only }
+//     error<E400>: Type mismatch in field 'transform' of 'Transducer'
+//
+// The mechanism is SKOLEMISATION: to check the field, R is replaced by a
+// fresh constant no stage can know anything about. A stage that works for
+// every R still typechecks; a stage that needs R to be Int cannot, because
+// the constant is not Int and nothing tells it otherwise. That is why the
+// promise costs nothing at run time — it was discharged during checking.
+//
+// Measured, not asserted: src/showcase/rejected/rank2_monomorphic_stage.vr
+// is that program, and the showcase gate refuses to pass unless the
+// compiler still rejects it with E400.
+// -----------------------------------------------------------------------------
