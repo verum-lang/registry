@@ -43,6 +43,21 @@ else
 fi
 
 echo "== tier identity =="
+# COST, measured 2026-09-02 on a loaded machine (load ~78, a stdlib bake
+# running alongside): 578s — roughly four times the rest of this gate put
+# together, because `diff-tiers` performs TWO AOT builds of the whole
+# showcase. On an idle machine it is faster, but it is never quick.
+#
+# Do not wrap this script in a short `timeout`: a kill lands here and
+# reads as "the showcase changed", which is what happened the first time
+# and cost a wrong verdict. If you need the fast checks only, run them
+# and say so — do not silently drop this one, or the tiers chapter is
+# back to asserting a guarantee nothing verifies.
+#
+# The line below exists because the step is otherwise SILENT for those
+# minutes, and a silent gate that takes ten minutes is indistinguishable
+# from a hung one.
+echo "  (two AOT builds — minutes, not seconds)"
 # The `tiers` chapter claims that one bytecode has one behaviour. A claim
 # a gate does not check is the thing this script exists to prevent, so the
 # judge runs here over the WHOLE showcase — every chapter, not a probe
