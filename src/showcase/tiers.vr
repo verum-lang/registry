@@ -1,0 +1,117 @@
+module showcase.tiers;
+
+// =============================================================================
+// registry showcase — ONE BYTECODE, TWO EXECUTIONS, ONE ANSWER
+//
+// Every chapter before this one is a claim about a program's TEXT: this
+// recursion terminates, this transformation cannot see its reducer, this
+// token cannot be spent twice. This chapter is a claim about the program's
+// EXECUTIONS — that there is only one behaviour to reason about, no matter
+// which tier runs it.
+//
+// Verum compiles to VBC once and then either interprets it (Tier 0, the
+// fast start) or lowers it to native code (Tier 1, the fast run). Two
+// backends is an ordinary arrangement; what is not ordinary is that their
+// AGREEMENT is a judged property rather than an aspiration:
+//
+//     verum diff-tiers <file>
+//
+// runs both tiers as subprocesses of the same binary, compares the
+// program's output and exit status, and exits non-zero on any difference.
+// A tier that crashes is a recorded verdict, not a dead judge.
+//
+// WHY A CHAPTER AND NOT A FOOTNOTE. A language with a JIT or an AOT path
+// usually asks you to trust that the optimiser preserved meaning. The
+// failures are silent by construction: the interpreter prints a number and
+// the compiled binary prints a different one, or nothing, and the only
+// witness is a user who ran both. Making the comparison a command turns
+// that from a hope into a check anyone can run on their own program.
+//
+// AND IT BITES. The shapes below are not decorative. Each is a place where
+// the two tiers HAVE disagreed in this compiler, found by this judge:
+//
+//   * a reference to a field reached THROUGH a reference field — the AOT
+//     lowering handed back the field's VALUE where the caller wanted its
+//     ADDRESS, so `*r` dereferenced the number itself. `mutex.lock()
+//     .unwrap()` printed 7 under the interpreter and SIGSEGVed compiled.
+//   * a function dropped from the binary because an intrinsic was called
+//     with the wrong arity: the interpreter ran it, the compiled program
+//     did not contain it.
+//
+// Both are fixed. This chapter keeps them exercised, and the gate runs the
+// judge over the whole showcase — so the claim is checked, not asserted.
+// =============================================================================
+
+mount core.prelude.*;
+
+// -----------------------------------------------------------------------------
+// THE SHAPE THAT BROKE: a reference to a field, reached through a reference
+// field, and RETURNED across a call boundary.
+//
+// `IndexView` borrows an index rather than owning it — the ordinary thing a
+// registry does when a request reads the catalogue. `newest` hands back a
+// reference INTO the borrowed index, which is where Tier 1 used to return
+// the value and let the caller dereference a number.
+// -----------------------------------------------------------------------------
+
+public type PackageIndex is {
+    newest_rank: Int,
+    package_count: Int,
+};
+
+public type IndexView is {
+    index: &PackageIndex,
+};
+
+implement IndexView {
+    // `&Int` into the borrowed index — the returned-reference shape.
+    public fn newest(&self) -> &Int {
+        &self.index.newest_rank
+    }
+
+    public fn count(&self) -> Int {
+        self.index.package_count
+    }
+}
+
+// -----------------------------------------------------------------------------
+// A COMPUTATION WITH A CARRY, so a divergence would show in the OUTPUT and
+// not only in a crash. Ranking is the registry's own arithmetic: a version
+// triple folded into one comparable integer.
+// -----------------------------------------------------------------------------
+
+pure fn rank_of(major: Int, minor: Int, patch: Int) -> Int
+    requires major >= 0
+    requires minor >= 0
+    requires patch >= 0
+{
+    major * 1000000 + minor * 1000 + patch
+}
+
+pure fn fold_ranks(hi: Int, lo: Int, rounds: Int) -> Int
+    requires rounds >= 0
+    decreases rounds
+{
+    if rounds <= 0 {
+        hi + lo
+    } else {
+        fold_ranks(hi + lo, hi, rounds - 1)
+    }
+}
+
+public fn demo() {
+    let index: PackageIndex = PackageIndex {
+        newest_rank: rank_of(1, 3, 0),
+        package_count: 3,
+    };
+    let reader: IndexView = IndexView { index: &index };
+
+    // The dereference that used to fault under AOT.
+    let newest = reader.newest();
+    print(f"newest rank:  {*newest}");
+    print(f"packages:     {reader.count()}");
+
+    // Arithmetic with a carry — a wrong answer here is a wrong NUMBER,
+    // not a crash, which is the failure mode a crash-only check misses.
+    print(f"folded ranks: {fold_ranks(1, 1, 8)}");
+}

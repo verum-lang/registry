@@ -29,3 +29,7 @@ busiest (live):     340
 — termination is declared, and the declaration is checked —
 dependency hops walked: 4
 publish attempts spent: 2
+— one bytecode, two executions, one answer —
+newest rank:  1003000
+packages:     3
+folded ranks: 89

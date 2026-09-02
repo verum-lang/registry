@@ -42,6 +42,27 @@ else
     echo "  output matches ($(wc -l < src/showcase/EXPECTED.txt | tr -d ' ') lines)"
 fi
 
+echo "== tier identity =="
+# The `tiers` chapter claims that one bytecode has one behaviour. A claim
+# a gate does not check is the thing this script exists to prevent, so the
+# judge runs here over the WHOLE showcase — every chapter, not a probe
+# written to pass.
+#
+# `verum diff-tiers` runs both tiers as subprocesses of the same binary,
+# compares the program's output and exit status, and exits 3 on any
+# difference. A tier that crashes is a recorded verdict, not a dead judge.
+#
+# This is the chapter's only claim, and it is the whole of it: if the two
+# tiers ever disagree on the showcase, the chapter's text is false and this
+# gate says so.
+if verdict=$("$VERUM" diff-tiers "$ENTRY" 2>&1); then
+    echo "  showcase: identical under both tiers"
+else
+    echo "$verdict" | sed -n '/verdict:/,$p' | head -12
+    echo "FAIL: the tiers disagree on the showcase — src/showcase/tiers.vr claims they cannot"
+    fail=1
+fi
+
 echo "== proofs =="
 # chapter:expected-proved:expected-failed
 for row in versions:6:0 theorems:4:0 capabilities:3:0 ownership:4:0 transducers:8:0 \

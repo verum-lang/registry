@@ -17,6 +17,7 @@ mount showcase.sizes.{demo as sizes_demo};
 mount showcase.theorems.{demo as theorems_demo};
 mount showcase.transducers.{demo as transducers_demo};
 mount showcase.termination.{demo as termination_demo};
+mount showcase.tiers.{demo as tiers_demo};
 
 fn main() {
     print("— versions and proofs —");
@@ -37,4 +38,6 @@ fn main() {
     transducers_demo();
     print("— termination is declared, and the declaration is checked —");
     termination_demo();
+    print("— one bytecode, two executions, one answer —");
+    tiers_demo();
 }
