@@ -77,7 +77,7 @@ mount verum_registry.node.cache.{Cache};
 /// than when someone anticipates it.
 public fn held(cache: &Cache) -> List<Verified> {
     let mut out: List<Verified> = List.new();
-    for entry in cache.entries.values() {
+    for entry in cache.all().iter() {
         out.push(entry.verified.clone());
     }
     out

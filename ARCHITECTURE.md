@@ -448,14 +448,15 @@ re-run rather than trusted — a number in a document is the memory of a
 measurement, and this one had already rotted once.
 
     271  match arms                   102  format literals
-     70  sum-type variants             59  type declarations
+     70  sum-type variants             60  type declarations
      51  pure fn                       18  contexts `using [ ]`
-     15  refinement types `{it …}`     10  `@verify(formal)`
+     17  refinement types `{it …}`     10  `@verify(formal)`
      10  theorems and lemmas            9  `async fn`
-      6  CBGR `&checked` / `&unsafe`    4  capabilities `with [ ]`
+      6  CBGR `&checked` / `&unsafe`    5  capabilities `with [ ]`
       1  `@verify(runtime)`             1  protocol declaration
+      1  generic impl blocks
 
-    24 source files, 2705 lines of code
+    25 source files, 2759 lines of code
 
 IT COUNTS CODE, NOT PROSE, and the first version of this table did not.
 Written with a plain `grep`, it counted the paragraphs ABOUT each
@@ -479,24 +480,48 @@ one — the declaration lives in `core/base/iterator.vr`. Using a rank-2
 type and writing a rank-2 signature are different claims about a
 proving ground, and the old table conflated them.
 
-THREE CONSTRUCTS ARE ABSENT, and `tools/census.py --check-absences`
-fails if any stops being so — an absence is a claim like any other and
-rots the same way:
+TWO CONSTRUCTS ARE ABSENT, and `tools/census.py --check-absences`
+fails if either stops being so — an absence is a claim like any other and
+rots the same way. It checks the reverse polarity too: the construct that
+LEFT this list must not quietly go back to zero.
 
-**`implement<T> Foo<T>` — a generic implementation block. Zero.** Every
-`implement` here is on a concrete type. This is the gap worth closing,
-and not only for coverage: a tool written in this session was blind to
-exactly that head shape and misattributed every method inside a generic
-impl block in the standard library to whatever block preceded it. A
-construct this program never writes is a construct this program cannot
-find a defect in.
+**`implement<T> Foo<T>` — a generic implementation block. ONE, and it was
+zero until 2026-09-06.** The paragraph that stood here argued the absence
+was the gap worth closing, on the grounds that "a construct this program
+never writes is a construct this program cannot find a defect in", and
+named the cache as its natural home. Both halves came true.
 
-The natural home is the cache: `Cache` holds `Map<Text, CachedEntry>`
-and could as honestly be `implement<T> Store<T>`, with the retention
-and search policies written once over any stored value rather than once
-over `CachedEntry`. That is a real design improvement and not a
-coverage errand — the policies genuinely do not depend on what is
-stored.
+`node/store` is the result: `Keyed<T>` holds values under a name, and
+`sweep<T>` is the two-pass traversal — collect the condemned against one
+consistent view, then remove — written ONCE over any stored value.
+`Cache` HOLDS a `Keyed<CachedEntry>` rather than being one, so the
+policy that knows what a verified coordinate is stays in `retention`
+where it belongs, and the 58 scenes are byte-for-byte unchanged.
+
+WHAT WRITING IT FOUND, on the first try, which is the whole argument for
+the census having named the gap:
+
+* **T1207** — a value whose type is known only through a type parameter
+  loses that type ahead of time. A `Text` field read through the store
+  prints as an address under AOT and correctly in the interpreter; a
+  `Float` field prints `4612811918334230528`, the bit pattern of 2.5.
+  Both exit 0, so nothing keyed to an exit code sees it.
+* **T1212** — this cog's own `public type Store<T>`, declared and mounted
+  by name, LOST its simple name to an unrelated public stdlib type
+  (`PRAGMA temp_store`'s three-variant enum). It resolves correctly in a
+  single file, so the loss is on the cross-module mount path. The type is
+  called `Keyed` today for that reason alone, and `node/store.vr` records
+  the name it should have.
+* A capability list that was **wrong in both directions**: `sweep` was
+  written `with [Evict]`, and the checker refused it — a sweep must READ
+  before it removes. The narrow list claimed a right it does not need to
+  justify and withheld one it uses. No reviewer would have caught either.
+* A **reach-in that had been invisible**: `search` read `cache.entries`
+  directly, which compiled only because `entries` was a bare `Map` and
+  `Map` is in the prelude. Once it became a `Keyed`, a module that never
+  mounted `Keyed` could no longer call its methods, and the type system
+  said out loud what this document's note on `Cache.names` had argued in
+  prose. `Cache.all()` is the accessor that replaced it.
 
 **`@cfg` — conditional compilation. Zero.** Defensible: nothing here is
 platform-specific yet. It stops being defensible the moment the node

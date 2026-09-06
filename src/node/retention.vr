@@ -44,6 +44,7 @@ module verum_registry.node.retention;
 mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
 mount verum_registry.node.ambient.{Clock};
 mount verum_registry.node.cache.{Cache, CachedEntry};
+mount verum_registry.node.store.{sweep};
 
 // -----------------------------------------------------------------------------
 // What retention decides
@@ -106,30 +107,14 @@ public fn prune_before(
     cache: &mut Cache with [Evict],
     horizon: Int,
 ) -> Int{it >= 0} {
-    // TWO PASSES, DELIBERATELY. Deciding while removing would mutate the
-    // map under its own traversal; collecting the condemned first means
-    // the decision is made against one consistent view of the cache, and
-    // a decision that changes depending on iteration order is not a
-    // policy.
-    let mut condemned: List<PackageName> = List.new();
-    for name in cache.names().iter() {
-        match cache.entry(name) {
-            Maybe.Some(entry) => {
-                if removes(&verdict_for(&entry, horizon)) {
-                    condemned.push(name.clone());
-                }
-            }
-            Maybe.None => {},
-        }
-    }
-
-    let mut dropped = 0;
-    for name in condemned.iter() {
-        if cache.evict(name) {
-            dropped = dropped + 1;
-        }
-    }
-    dropped
+    // THE TRAVERSAL IS NOT HERE ANY MORE, and that is the point of the
+    // change rather than a side effect of it. The two-pass sweep — collect
+    // the condemned against one consistent view, then remove — is a
+    // property of sweeping a keyed store, not of retention, and it now
+    // lives once in `node.store` where any future store gets it. What
+    // stays here is the only part that knows the value is a verified
+    // coordinate: the verdict.
+    sweep(cache.store_mut(), |entry| removes(&verdict_for(entry, horizon)))
 }
 
 /// The horizon for a retention window, read from the clock.

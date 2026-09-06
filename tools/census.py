@@ -109,15 +109,32 @@ def main(argv: list[str]) -> int:
           f"(comments and blank lines excluded)")
 
     if "--check-absences" in argv:
-        # The three the document claims are ZERO. An absence is a claim like
-        # any other and rots the same way.
+        # The absences the document claims are ZERO. An absence is a claim
+        # like any other and rots the same way.
+        #
+        # `generic impl blocks` LEFT THIS LIST on 2026-09-06, and the way it
+        # left is the point: the document argued the absence was the gap
+        # worth closing, `node/store` closed it, and this check went red on
+        # the same commit that made the prose true. A claim retired by being
+        # made false is the only honest way off the list — an entry deleted
+        # because it became inconvenient is how the list stops meaning
+        # anything.
         bad = [label for label, n, _ in rows
-               if n and label in ("generic impl blocks", "`@cfg`", "`unsafe` blocks")]
+               if n and label in ("`@cfg`", "`unsafe` blocks")]
         if bad:
             print(f"\nABSENCE CLAIM BROKEN: {', '.join(bad)} is no longer zero — "
                   f"ARCHITECTURE.md says it is.")
             return 1
-        print("\nabsence claims hold: no generic impl block, no @cfg, no unsafe block")
+        # And the reverse polarity: a construct the document now claims is
+        # PRESENT must not quietly go back to zero.
+        gone = [label for label, n, _ in rows
+                if not n and label in ("generic impl blocks",)]
+        if gone:
+            print(f"\nPRESENCE CLAIM BROKEN: {', '.join(gone)} is back to zero — "
+                  f"ARCHITECTURE.md says the programme writes one.")
+            return 1
+        print("\nabsence claims hold: no @cfg, no unsafe block; "
+              "presence holds: at least one generic impl block")
     return 0
 
 

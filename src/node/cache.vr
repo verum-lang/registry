@@ -44,6 +44,7 @@ module verum_registry.node.cache;
 mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
 mount verum_registry.protocol.evidence.{Manifest, Verified};
 mount verum_registry.node.ambient.{Clock, Uplink};
+mount verum_registry.node.store.{Keyed};
 
 // -----------------------------------------------------------------------------
 // What a cache holds
@@ -59,8 +60,15 @@ public type CachedEntry is {
 };
 
 /// A node's local cache, indexed by the name a lookup asks for.
+///
+/// The indexing itself is `node.store`'s, not this module's. What is left
+/// here is everything that knows the value is a VERIFIED COORDINATE: that
+/// storing one dates it from the clock, that a miss must tell an outage
+/// apart from an absence, and that eviction is a different right from
+/// storage. A container that also knew those things would have to be
+/// rewritten for the next thing this node holds.
 public type Cache is {
-    entries: Map<Text, CachedEntry>,
+    entries: Keyed<CachedEntry>,
 };
 
 /// What a lookup can answer. Note what is NOT here: there is no variant
@@ -79,7 +87,7 @@ public type Answer is
 
 implement Cache {
     public fn empty() -> Cache {
-        Cache { entries: Map.new() }
+        Cache { entries: Keyed.empty() }
     }
 
     /// Store a verified coordinate, dated by the clock.
@@ -89,7 +97,7 @@ implement Cache {
     /// to build a `CachedEntry` without one.
     public fn store(&mut self, verified: Verified) using [Clock] {
         let key = verified.manifest.name.0.clone();
-        self.entries.insert(key, CachedEntry {
+        self.entries.put(key, CachedEntry {
             verified: verified,
             fetched_at: Clock.now(),
         });
@@ -109,7 +117,7 @@ implement Cache {
     /// have to change this shape to do it, and changing a shape is
     /// visible in a way that changing a branch is not.
     public fn lookup(&self, name: &PackageName) -> Answer using [Uplink] {
-        match self.entries.get(name.0.clone()) {
+        match self.entries.get(&name.0) {
             Some(e) => hit_for(e),
             None    => absent_for(Uplink.reachable()),
         }
@@ -125,15 +133,31 @@ implement Cache {
     /// you walk around is a comment, not a guarantee.
     public fn names(&self) -> List<PackageName> {
         let mut out: List<PackageName> = List.new();
-        for k in self.entries.keys() {
+        for k in self.entries.keys().iter() {
             out.push(PackageName(k.clone()));
         }
         out
     }
 
+    /// Every entry this node holds, in no promised order.
+    ///
+    /// `search` used to read `cache.entries` directly. That worked only
+    /// because `entries` was a bare `Map` and `Map` is in the prelude —
+    /// the reach-in was invisible, not permitted. Once `entries` became a
+    /// `Keyed`, a module that never mounted `Keyed` could no longer call
+    /// its methods and the reach-in became a compile error, which is the
+    /// type system saying out loud what this module's note on `names`
+    /// already argued: a caller that can touch the map has back every
+    /// right the signature withholds.
+    ///
+    /// So the accessor is the fix rather than a mount in `search`.
+    public fn all(&self) -> List<CachedEntry> {
+        self.entries.values()
+    }
+
     /// The entry stored under a name, if any.
     public fn entry(&self, name: &PackageName) -> Maybe<CachedEntry> {
-        self.entries.get(name.0.clone())
+        self.entries.get(&name.0)
     }
 
     /// Forget an entry.
@@ -158,13 +182,7 @@ implement Cache {
     /// `&mut`, Java's `final`, Go's unexported fields all stop at "may
     /// it be changed", and the question here is "changed HOW".
     public fn evict(&mut self, name: &PackageName) -> Bool {
-        // ONE probe, not two: `remove` already reports what it took
-        // out, and asking `get` first would be a second traversal
-        // whose answer can only agree with this one.
-        match self.entries.remove(name.0.clone()) {
-            Some(_) => true,
-            None    => false,
-        }
+        self.entries.forget(&name.0)
     }
 
     /// How many entries this node holds — the figure a consistency
@@ -179,6 +197,18 @@ implement Cache {
     /// untrusted party would let that party halt the node.
     public fn len(&self) -> Int{it >= 0} {
         self.entries.len()
+    }
+
+    /// The store itself, for a policy that sweeps it.
+    ///
+    /// Handing out `&mut Keyed` looks like handing out the map this
+    /// module spent a paragraph refusing to expose, and it is not: the
+    /// capability rides on the BORROW at the call site
+    /// (`sweep(cache.store_mut() with [Evict], …)`), so a caller still
+    /// cannot store through it. What it does buy is that the two-pass
+    /// traversal is written once, in `node.store`, over any value.
+    public fn store_mut(&mut self) -> &mut Keyed<CachedEntry> {
+        &mut self.entries
     }
 }
 
