@@ -75,8 +75,9 @@ because the type still checks — `0` is a perfectly good `Int`. A context
 cannot be forgotten: a function that needs one says so, and will not
 compile where none is provided.
 
-Reachability shows what else it buys. Passing a `Link` value down is a
-fact about the moment it was captured, presented as a fact about now.
+Reachability shows what else it buys. Passing a `StatedLink` value down
+is a fact about the moment it was captured, presented as a fact about
+now.
 As a context, exercising both states is a scoped `provide`:
 
 ```verum
