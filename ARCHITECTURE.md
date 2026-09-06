@@ -376,59 +376,68 @@ consecutive check twice while the record as a whole is a fork. That is a
 correctness requirement, and the note in the module says so, so nobody
 "optimises" it back into a bug.
 
-## What is stated and not yet proved
+## What is stated, and which of it is proved
 
-The three obligations the protocol spec §6 requires are written as
-theorems next to the rules they describe, and all three are UNPROVED.
-What stops them has moved once already, and the distinction is worth
-keeping straight because the two states print almost identically.
+Ten theorems, in eight files, beside the rules they describe. **Two are
+PROVED and eight are open** — measured 2026-09-06 by
+`tools/verify_obligations.sh`, which ships beside this claim for the
+reason the construct census does: a number in a document is the memory
+of a measurement.
 
-They used to be UNSTATEABLE. A predicate's parameters and its own
-declaration disagreed about what sort a record or a variant has, so the
-claim never reached the solver — and a claim that cannot be put is not
-a claim that failed. Writing this program is what surfaced that, and it
-is fixed: `let` bindings, field reads, records, variants and `match`
-over an enum are all inside the reach now, and every obligation here is
-put to the solver.
+    PROVED  a_hash_matches_itself             protocol/hash.vr
+    PROVED  nothing_is_older_than_itself      protocol/version.vr
+    open    selection_is_within_the_constraint protocol/version.vr
+    open    reordering_preserves_the_answer   protocol/query.vr
+    open    verified_implies_evidence         protocol/evidence.vr
+    open    resolution_is_attributed          protocol/authority.vr
+    open    a_standing_never_goes_back        protocol/revocation.vr
+    open    cache_keeps_attribution           node/cache.vr
+    open    absence_carries_no_attribution    node/cache.vr
+    open    a_node_never_forgets_what_it_answers_for  node/retention.vr
 
-What remains was WRITTEN DOWN AS REACH AND MEASURED AS SOMETHING ELSE.
+THIS SECTION SAID ALL OF THEM WERE UNPROVED, and it had said so long
+enough that `hash.vr` carried a comment explaining why its theorem
+*could not* be proved — directly above a theorem that is proved. Neither
+the document nor the source noticed, because both stated the claim in
+prose and prose is not re-run.
 
-The sentence here used to read: "each of these predicates walks a LIST
-or matches over a `Result`, and the prover unfolds neither". That was a
-hypothesis, it was plausible, and it is wrong — or at least it is not
-what stops them today. Three theorems in one file say so, and the first
-is the control, because `Int` is the sort the solver defaults to and
-therefore passes whether or not the declared type is consulted at all:
+Whether the prover grew the reach or the explanation was wrong when it
+was written is NOT established. What is established is that the text
+outlived the condition it described.
+
+THE MEASUREMENT CARRIES A NEGATIVE CONTROL, and without it the numbers
+above would be worth nothing: every goal reports in 0.00s, which is
+exactly what a vacuous pass looks like. So the script begins by putting
+two deliberately false theorems to the prover and requires them to FAIL
+— they do, with `rc=105` and a named counterexample. If the control does
+not fire the script refuses to print a census at all, rather than
+publishing numbers it cannot stand behind.
+
+A SECOND CLAIM HERE WAS STALE, and it was a claim about the LANGUAGE
+rather than about this program. This section recorded a three-way
+measurement as evidence that a theorem's parameter reaches the solver as
+an `Int` whatever it was declared:
 
     pure fn over_int(n: Int) -> Bool { n == n }     theorem PROVES
     pure fn over_bool(b: Bool) -> Bool { b == b }   theorem FAILS
     pure fn over_text(t: Text) -> Bool { t == t }   theorem FAILS
 
-`b == b` walks nothing. It fails because a theorem's parameter reaches
-the solver as an `Int` whatever it was declared, so a goal applies a
-symbol declared over `Bool` to an `Int` and the application is refused
-— reported as an unproved goal, which is indistinguishable in the
-output from a claim the prover could not show.
+Re-run 2026-09-06: **all three prove.** The sort defect that reading
+describes is gone, so the explanation built on it is gone with it. That
+was the third of three explanations this program has offered for the
+same failures — UNSTATEABLE, then REACH, then a parameter-sort
+mismatch — and it is now the third to be retired by re-measurement.
 
-That is the third time this program has moved an obligation from one
-explanation to another, and each move was a measurement rather than a
-re-reading:
+WHAT ACTUALLY STOPS THE REMAINING EIGHT IS NOT ESTABLISHED, and this
+section will not offer a fourth explanation on the strength of a
+reading. Each of the eight carries its own note where it stands; those
+notes are individually testable and individually suspect for exactly the
+reason this section just demonstrated.
 
-    UNSTATEABLE   the predicate and its declaration disagreed about a
-                  record's sort, so the claim never reached the solver
-    REACH         believed: the prover cannot unfold a loop
-    ACTUALLY      the goal and the declaration disagree about the
-                  PARAMETER's sort — the same class as the first, one
-                  level out, and invisible while every test used `Int`
-
-Reach is still a real limit and some of these will need it. But it was
-being credited with failures it did not cause, and a limit that
-absorbs other causes stops being a limit and becomes an excuse.
-
-They stay in the source, saying so in place. An obligation nobody has
-discharged is an audit finding, which is the honest record, and it
-becomes a proof the day the reach covers it without anyone having to
-remember to come back.
+They stay in the source. An obligation nobody has discharged is an audit
+finding, which is the honest record — and, as `a_hash_matches_itself`
+shows, an obligation somebody HAS discharged is worth saying just as
+loudly, because silence about it reads as failure.
 
 ## What this program does and does not exercise, counted
 

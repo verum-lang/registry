@@ -153,8 +153,20 @@ public pure fn narrow_equals_itself(h: &checked Narrow) -> Bool {
 @verify(formal)
 public theorem a_hash_matches_itself(h: &checked Narrow)
     ensures narrow_equals_itself(h)
-    // STATED, NOT YET DISCHARGED, and for the reason recorded on the
-    // other two obligations of this shape: the body is a LOOP, and the
-    // prover does not unfold one. Everything else it needs — the record,
-    // the field, the refinement — is inside the reach.
+    // PROVED — measured 2026-09-06 by `tools/verify_obligations.sh`:
+    //
+    //     ✓ theorem a_hash_matches_itself: Proved in 0.01s
+    //
+    // THE COMMENT THAT STOOD HERE SAID THE OPPOSITE. It read "STATED,
+    // NOT YET DISCHARGED … the body is a LOOP, and the prover does not
+    // unfold one" — an explanation of why this cannot be proved, sitting
+    // above a theorem that is. Whether the prover grew the reach or the
+    // explanation was wrong when written is not established; what is
+    // established is that the text outlived the condition it described,
+    // and nobody re-ran it because the claim was in prose.
+    //
+    // The measurement carries a NEGATIVE CONTROL for the same reason
+    // this line is now dated: every goal reports in 0.00s, which is what
+    // a vacuous pass looks like, so the script first requires two
+    // deliberately false theorems to FAIL.
     proof by auto;

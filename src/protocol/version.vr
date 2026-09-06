@@ -287,4 +287,9 @@ public pure fn older_is_irreflexive(v: &Version) -> Bool {
 @verify(formal)
 public theorem nothing_is_older_than_itself(v: &Version)
     ensures older_is_irreflexive(v)
+    // PROVED, measured 2026-09-06 (`tools/verify_obligations.sh`). Said
+    // in place because this theorem carried no note at all, and silence
+    // reads as "unproved like its neighbours" — which is what
+    // `ARCHITECTURE.md` concluded about it. A discharged obligation is
+    // worth as much as an open one and needs saying just as loudly.
     proof by auto;
