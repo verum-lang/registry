@@ -110,7 +110,7 @@ public fn count(cache: &Cache, q: &Query) -> Int{it >= 0} {
 /// What an availability probe asks. Stops at the first match — the
 /// accumulator is a boolean and the traversal has nothing left to learn
 /// once it is true.
-public fn any(cache: &Cache, q: &Query) -> Bool {
+public pure fn any(cache: &Cache, q: &Query) -> Bool {
     let all = held(cache);
     all.iter().transduce(selector(q)).fold(false, |seen, _v| true)
 }
@@ -126,11 +126,11 @@ public fn any(cache: &Cache, q: &Query) -> Bool {
 /// both functions were written on the same afternoon. If someone later
 /// "optimises" `count` into its own filter chain, this is what stops
 /// compiling.
-public fn count_agrees_with_find(cache: &Cache, q: &Query) -> Bool {
+public pure fn count_agrees_with_find(cache: &Cache, q: &Query) -> Bool {
     count(cache, q) == find(cache, q).len()
 }
 
 /// And `any` agrees with both.
-public fn any_agrees_with_count(cache: &Cache, q: &Query) -> Bool {
+public pure fn any_agrees_with_count(cache: &Cache, q: &Query) -> Bool {
     any(cache, q) == (count(cache, q) > 0)
 }

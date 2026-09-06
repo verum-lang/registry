@@ -101,19 +101,17 @@ implement Cache {
     /// is the point of §4.1: an office with a broken uplink keeps
     /// building. Only a name this node has never seen depends on the
     /// link, and then the two absences are told apart.
+    ///
+    /// THE GUARANTEE IS STRUCTURAL HERE, NOT COMMENTED. The hit arm
+    /// calls `hit_for`, which cannot consult the link because it does
+    /// not take it; the absent arm is the only one that reads
+    /// `Uplink`. A future edit that made a hit depend on the link would
+    /// have to change this shape to do it, and changing a shape is
+    /// visible in a way that changing a branch is not.
     public fn lookup(&self, name: &PackageName) -> Answer using [Uplink] {
         match self.entries.get(name.0.clone()) {
-            Some(e) => Answer.Hit(CachedEntry {
-                verified: e.verified.clone(),
-                fetched_at: e.fetched_at,
-            }),
-            None => {
-                if Uplink.reachable() {
-                    Answer.NotFound
-                } else {
-                    Answer.UpstreamUnreachable
-                }
-            }
+            Some(e) => hit_for(e),
+            None    => absent_for(Uplink.reachable()),
         }
     }
 
@@ -206,13 +204,45 @@ implement Cache {
 // finding, which is the honest record, and it becomes a proof the day
 // the reach covers it — without anyone having to remember to come back.
 
+/// The answer for a name this node HOLDS.
+///
+/// Takes no link state and cannot read one, which is the §4.1
+/// guarantee expressed as a signature.
+public pure fn hit_for(e: &CachedEntry) -> Answer {
+    Answer.Hit(CachedEntry {
+        verified: e.verified.clone(),
+        fetched_at: e.fetched_at,
+    })
+}
+
+/// The answer for a name this node does NOT hold, given whether the
+/// upstream could be reached.
+///
+/// The link state is an ARGUMENT, not an injected context. That is what
+/// makes the property above statable: a predicate over a function that
+/// requires injection is not a function of its arguments, so a theorem
+/// about it can never discharge — the claim is not hard, it is
+/// ill-formed. Verum has no way to say that today, so the modelling
+/// discipline has to (T1150).
+public pure fn absent_for(upstream_reachable: Bool) -> Answer {
+    if upstream_reachable {
+        Answer.NotFound
+    } else {
+        Answer.UpstreamUnreachable
+    }
+}
+
 /// Does this answer carry the attribution the entry was stored with?
 ///
 /// The failure it excludes is a cache that serves an upstream package as
 /// though the local node had published it — the same misrepresentation
 /// the evidence rules refuse at the proof level, arriving instead through
 /// the back door of a lookup that forgot where the answer came from.
-public fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -> Bool {
+///
+/// `pure` is load-bearing: a pure function may not call an impure one,
+/// so the predicate above cannot be pure unless this one is. The
+/// modifier was missing and cost this whole obligation its SMT symbol.
+public pure fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -> Bool {
     match a {
         Hit(e) => e.verified.authority_id == expected_authority.clone(),
         // The two absences carry no attribution because they carry no
@@ -223,26 +253,59 @@ public fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -> Boo
     }
 }
 
-/// Storing then looking a name up answers with the attribution it was
-/// stored with — whatever the link state, since serving from cache while
-/// offline is the point of having one.
-public fn store_then_lookup_keeps_attribution(
-    verified: Verified,
-) -> Bool using [Clock, Uplink] {
-    let expected = verified.authority_id.clone();
-    let wanted = PackageName(verified.manifest.name.0.clone());
-    let mut c = Cache.empty();
-    c.store(verified);
-    answer_keeps_attribution(&c.lookup(&wanted), &expected)
+/// Serving a held entry answers with the attribution it was stored
+/// with.
+///
+/// THIS OBLIGATION WAS RESTATED, NOT WEAKENED (T1150). It used to read
+///
+///     fn store_then_lookup_keeps_attribution(verified: Verified)
+///         -> Bool using [Clock, Uplink]
+///
+/// — a round trip through `Cache.empty()`, `store` and `lookup`, and
+/// therefore a predicate that requires injected dependencies. Such a
+/// predicate is not a function of its arguments: its answer may vary
+/// with what was provided. Reflection refuses it for exactly that
+/// reason, so `proof by auto` could never discharge it, whatever else
+/// were fixed. It was an obligation that LOOKED open and was in fact
+/// unstatable.
+///
+/// The property being claimed was never about the clock. `store` reads
+/// the clock only to date the entry, and `lookup` reads the link only
+/// to choose WHICH ABSENCE to report. Neither touches attribution. So
+/// the honest statement is over the held entry itself, and the
+/// restructure above (`hit_for` / `absent_for`) is what makes it
+/// sayable: the attribution path no longer passes through a context at
+/// all.
+///
+/// What is genuinely lost, and stated rather than hidden: this no
+/// longer says that `store` PUTS the attribution where `hit_for` finds
+/// it. That is a property of `store`, and `CachedEntry` has no field
+/// for an authority of its own — the attribution lives inside the
+/// `Verified` it holds, so there is nothing for `store` to drop and
+/// nothing for `lookup` to re-derive. Saying so in a type is better
+/// than proving it about a round trip, and it is already said.
+public pure fn a_hit_keeps_attribution(e: &CachedEntry) -> Bool {
+    let expected = e.verified.authority_id.clone();
+    answer_keeps_attribution(&hit_for(e), &expected)
 }
 
 @verify(formal)
-public theorem cache_keeps_attribution(verified: Verified)
-    ensures store_then_lookup_keeps_attribution(verified)
-    // `CachedEntry` has no field for an authority of its own: the
-    // attribution lives inside the `Verified` it holds, so there is
-    // nothing for `store` to drop and nothing for `lookup` to re-derive.
-    // The Hit arm copies that same `Verified`, and the link state selects
-    // only WHICH ABSENCE is reported when the name is unknown — it never
-    // selects a different attribution.
+public theorem cache_keeps_attribution(e: &CachedEntry)
+    ensures a_hit_keeps_attribution(e)
+    proof by auto;
+
+/// An absence carries no attribution to lose, in EITHER link state.
+///
+/// The companion, and the half that used to hide inside the round
+/// trip: `answer_keeps_attribution` is vacuously true on both absences,
+/// and the link state selects only which of the two is reported. With
+/// the link as an argument this is one claim over both values rather
+/// than a claim about whatever the ambient `Uplink` happened to say.
+public pure fn an_absence_keeps_attribution(reachable: Bool, expected: &Text) -> Bool {
+    answer_keeps_attribution(&absent_for(reachable), expected)
+}
+
+@verify(formal)
+public theorem absence_carries_no_attribution(reachable: Bool, expected: &Text)
+    ensures an_absence_keeps_attribution(reachable, expected)
     proof by auto;

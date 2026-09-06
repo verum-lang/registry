@@ -233,3 +233,35 @@ public theorem reordering_preserves_the_answer(
     // `all_hold` is a conjunction and conjunction is commutative, which
     // is exactly the shape a fold-aware prover would close.
     proof by auto;
+
+// -----------------------------------------------------------------------------
+// Clause constructors
+// -----------------------------------------------------------------------------
+//
+// Building a clause through a named function rather than by writing
+// `Clause.Named(...)` at the call site is better API on its own terms:
+// a caller passing a `Text` should not have to know that the name is
+// wrapped in a `PackageName`, and the wrapping is exactly the sort of
+// detail that drifts when the type changes.
+//
+// It is ALSO the way around T1133 — a mounted sum type's variant
+// constructor is refused in a non-entry module of a cog ("no method
+// named `From` found for type `Clause`") while the same spelling works
+// in the entry file. Ten different minimal cogs failed to reproduce
+// that, so it is recorded, not fixed; these functions live in the
+// module that DECLARES `Clause`, where construction has always worked.
+
+/// Match exactly this package name.
+public fn named(name: Text) -> Clause {
+    Clause.Named(PackageName(name))
+}
+
+/// Match only what the given authority answered for.
+public fn from_authority(authority: Text) -> Clause {
+    Clause.From(authority)
+}
+
+/// Match only coordinates this node answers for in the given role.
+public fn in_role(role: AuthorityRole) -> Clause {
+    Clause.InRole(role)
+}

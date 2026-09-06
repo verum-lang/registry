@@ -112,7 +112,7 @@ them found defects in the language while being written.
 | structured concurrency | `node/slice` | all-or-nothing import becomes a CONSEQUENCE of the parent-outlives-child law, not a comment |
 | `async` as an inherited fact | `node/slice` → `node/durable` → `main` | one function fans out and waits; every caller up the chain says so, because `.await` outside an async context is a refusal and not a silent block |
 | protocols with associated types | `protocol/source` | two sources with different reference shapes, one rule over both |
-| rank-2 transducers | `protocol/query`, `node/search` | one query definition, three consumers, no filter chain free to drift |
+| rank-2 transducers, USED not declared | `protocol/query`, `node/search` | one query definition, three consumers, no filter chain free to drift. The `fn<R>(Reducer<B, R>) -> Reducer<A, R>` signature is `core/base/iterator.vr`'s; this program consumes it and declares no rank-2 type of its own — see the census |
 | meta parameters with refinements | `protocol/hash` | a digest width is part of the type, and SHA-1's width is not a type at all |
 | the CBGR tier dial | `protocol/hash` | one place, with the proof and the measurement written beside it |
 | capability attenuation | `node/retention` vs `node/slice` vs `node/ingest` | `&mut` grants the right to change and says nothing about WHICH changes; `with [Store]` / `with [Evict]` say it. A pruner cannot reach the importer, and the compiler says so at the call |
@@ -391,14 +391,112 @@ is fixed: `let` bindings, field reads, records, variants and `match`
 over an enum are all inside the reach now, and every obligation here is
 put to the solver.
 
-What remains is genuine reach. Each of these predicates walks a LIST or
-matches over a `Result`, and the prover unfolds neither, so it answers
-with a counterexample it invented rather than a proof.
+What remains was WRITTEN DOWN AS REACH AND MEASURED AS SOMETHING ELSE.
+
+The sentence here used to read: "each of these predicates walks a LIST
+or matches over a `Result`, and the prover unfolds neither". That was a
+hypothesis, it was plausible, and it is wrong — or at least it is not
+what stops them today. Three theorems in one file say so, and the first
+is the control, because `Int` is the sort the solver defaults to and
+therefore passes whether or not the declared type is consulted at all:
+
+    pure fn over_int(n: Int) -> Bool { n == n }     theorem PROVES
+    pure fn over_bool(b: Bool) -> Bool { b == b }   theorem FAILS
+    pure fn over_text(t: Text) -> Bool { t == t }   theorem FAILS
+
+`b == b` walks nothing. It fails because a theorem's parameter reaches
+the solver as an `Int` whatever it was declared, so a goal applies a
+symbol declared over `Bool` to an `Int` and the application is refused
+— reported as an unproved goal, which is indistinguishable in the
+output from a claim the prover could not show.
+
+That is the third time this program has moved an obligation from one
+explanation to another, and each move was a measurement rather than a
+re-reading:
+
+    UNSTATEABLE   the predicate and its declaration disagreed about a
+                  record's sort, so the claim never reached the solver
+    REACH         believed: the prover cannot unfold a loop
+    ACTUALLY      the goal and the declaration disagree about the
+                  PARAMETER's sort — the same class as the first, one
+                  level out, and invisible while every test used `Int`
+
+Reach is still a real limit and some of these will need it. But it was
+being credited with failures it did not cause, and a limit that
+absorbs other causes stops being a limit and becomes an excuse.
 
 They stay in the source, saying so in place. An obligation nobody has
 discharged is an audit finding, which is the honest record, and it
 becomes a proof the day the reach covers it without anyone having to
 remember to come back.
+
+## What this program does and does not exercise, counted
+
+A proving ground is worth its name only for the constructs it actually
+puts through the compiler. The census below is produced by
+`tools/census.py`, which ships beside this file so the table can be
+re-run rather than trusted — a number in a document is the memory of a
+measurement, and this one had already rotted once.
+
+    271  match arms                   102  format literals
+     70  sum-type variants             59  type declarations
+     51  pure fn                       18  contexts `using [ ]`
+     15  refinement types `{it …}`     10  `@verify(formal)`
+     10  theorems and lemmas            9  `async fn`
+      6  CBGR `&checked` / `&unsafe`    4  capabilities `with [ ]`
+      1  `@verify(runtime)`             1  protocol declaration
+
+    24 source files, 2705 lines of code
+
+IT COUNTS CODE, NOT PROSE, and the first version of this table did not.
+Written with a plain `grep`, it counted the paragraphs ABOUT each
+construct as USES of it:
+
+    claimed  counted   construct
+        14        4    capabilities `with [ ]`
+         3        0    rank-2 function types `fn<R>`
+        23       70    sum-type variants
+
+Every gap is this document discussing its own vocabulary. A file that
+explains a construct carefully inflates its own count for it, so the
+more deliberate the writing, the worse the measurement — which is the
+opposite of what a proving ground wants.
+
+`fn<R>` falling to ZERO is the sharpest of the three and the most
+useful thing the census says. This program USES rank-2 types: the whole
+of `node/search` runs on `Transducer<A, B>`, whose `transform` field is
+declared `fn<R>(Reducer<B, R>) -> Reducer<A, R>`. It never DECLARES
+one — the declaration lives in `core/base/iterator.vr`. Using a rank-2
+type and writing a rank-2 signature are different claims about a
+proving ground, and the old table conflated them.
+
+THREE CONSTRUCTS ARE ABSENT, and `tools/census.py --check-absences`
+fails if any stops being so — an absence is a claim like any other and
+rots the same way:
+
+**`implement<T> Foo<T>` — a generic implementation block. Zero.** Every
+`implement` here is on a concrete type. This is the gap worth closing,
+and not only for coverage: a tool written in this session was blind to
+exactly that head shape and misattributed every method inside a generic
+impl block in the standard library to whatever block preceded it. A
+construct this program never writes is a construct this program cannot
+find a defect in.
+
+The natural home is the cache: `Cache` holds `Map<Text, CachedEntry>`
+and could as honestly be `implement<T> Store<T>`, with the retention
+and search policies written once over any stored value rather than once
+over `CachedEntry`. That is a real design improvement and not a
+coverage errand — the policies genuinely do not depend on what is
+stored.
+
+**`@cfg` — conditional compilation. Zero.** Defensible: nothing here is
+platform-specific yet. It stops being defensible the moment the node
+does its own file locking or uses a platform's zero-copy send, and the
+first such site should be written as `@cfg` rather than routed around.
+
+**`unsafe` — zero, and this one stays.** The three-tier reference model
+is exercised through `&checked`, which is the tier a service like this
+one should live in.
 
 ## Reading order
 

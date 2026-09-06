@@ -1,1 +1,8 @@
 target/
+
+# AOT/IR dumps written beside the sources by `verum build --emit-llvm`.
+# Regenerable, and one of them is 119 MB.
+*.ll
+
+# Z3 writes this beside the working directory when a proof runs.
+.z3-trace

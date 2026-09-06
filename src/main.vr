@@ -59,6 +59,23 @@ mount verum_registry.protocol.evidence.{
     Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
     Verified, digest_of, verify,
 };
+// T1126 WORKAROUND, not a design choice: a stdlib module mounted only
+// by a NON-ENTRY file of a cog is never loaded, and its free functions
+// become stubs that panic when reached. `protocol/wire.vr` mounts
+// core.encoding.json for its own use; this line exists solely to put
+// the module in the entry file's mount closure so that loading happens.
+// DELETE IT when T1126 lands — a workaround that outlives its cause
+// becomes folklore, and the next reader will think the registry needs
+// JSON at the top level.
+mount core.encoding.json.{decode, stringify};
+mount core.net.http.{Headers, Method, StatusCode};
+mount core.net.weft.handler.{WeftRequest};
+mount verum_registry.node.serve.{NodeHandler, serve_forever};
+mount core.shell.script.{args};
+mount verum_registry.protocol.wire.{
+    decode_publish_request, encode_publish_request, missing_field_is_named,
+    round_trip_preserves, WireError,
+};
 
 /// The configuration a mirror runs with: an upstream, and nothing owned.
 /// A node that owns nothing cannot publish, which is what a mirror is.
@@ -412,6 +429,235 @@ fn search_scene(label: &Text, cache: &Cache, q: &Query) {
 /// not a width this protocol admits, so `Hash<20>` is not a type. Both
 /// are the compiler doing what would otherwise be a runtime assertion
 /// in one constructor and absent from the next one someone adds.
+/// The publish request crossing the wire and coming back.
+///
+/// Until `protocol/wire.vr` existed a node could refuse, verify,
+/// attribute and serve, but nobody could SEND it anything — the
+/// publication path was reachable only from inside the program. This
+/// scene is what makes the claim "a developer can publish" checkable
+/// rather than asserted.
+///
+/// BOTH POLES, deliberately. `round_trip_preserves` alone is satisfied
+/// vacuously by a decoder that refuses everything AND an encoder that
+/// emits nothing, so the second line asks the opposite question: a body
+/// with one field removed must be REFUSED, and the refusal must name
+/// the field that is missing. A decoder that cannot say WHERE has
+/// turned a transport fault into a guessing game, and the operator ends
+/// up arguing with their authority configuration over a typo in a
+/// client.
+/// The publish route, end to end: an HTTP request in, a status code out.
+///
+/// This is the scene that makes "a developer can publish a cog" a thing
+/// the program DOES rather than a thing the README says. It exercises
+/// every layer at once — request, wire decode, slot mint, ownership,
+/// evidence, and the status mapping — which is exactly why it is worth
+/// having: each of those has its own scene above, and none of them
+/// proves they compose.
+///
+/// THREE REQUESTS, chosen so that a single bug cannot make all three
+/// look right:
+///   * a well-formed publication of a name this node owns   -> 201/200
+///   * the same body with `signature.signer` removed        -> 400, and
+///     the message NAMES the field, so the client is not left guessing
+///   * a well-formed publication of a name it does NOT own  -> 403
+///
+/// `as_authority` carries the authority's ID (`local`), not the name
+/// scope it owns (`@acme`). That distinction is the point of
+/// `resolve_authority`: an id identifies WHO is publishing, a pattern
+/// says WHAT they may publish, and conflating them is how a registry
+/// ends up letting anyone who can spell a scope publish into it.
+/// A route that answered 201 to everything would pass the first line
+/// alone; a route that answered 400 to everything would pass the
+/// second. Only the three together say the mapping is real.
+fn publish_route_scene(label: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let mut handler = NodeHandler.new(
+        Cache.empty(),
+        List.new(),
+        false,
+    );
+
+    // THE ACCEPTING POLE IS BUILT, NOT WRITTEN DOWN. A hand-typed digest
+    // cannot match `digest_of`, so a literal body can only ever
+    // demonstrate refusals — and a scene with three refusals and no
+    // acceptance proves the route can say no, which is the easy half.
+    // The manifest is built, its digest computed, and the JSON
+    // interpolated around it, so the request is one a real publisher
+    // would send.
+    let route_manifest = Manifest {
+        name: PackageName("@acme/internal"),
+        version: "1.2.3",
+        artefact: Digest("sha256:artefact"),
+        published_at: 1756300000,
+    };
+    let d = digest_of(&route_manifest);
+    let good = f"{{\"manifest\":{{\"name\":\"@acme/internal\",\"version\":\"1.2.3\",\"artefact\":\"sha256:artefact\",\"published_at\":1756300000}},\"signature\":{{\"manifest_digest\":\"{d.0}\",\"signer\":\"acme-release-key\"}},\"proof\":{{\"manifest_digest\":\"{d.0}\",\"log_id\":\"local-log\",\"tree_size\":42}},\"as_authority\":\"local\"}}";
+    let no_signer = "{\"manifest\":{\"name\":\"@acme/internal\",\"version\":\"1.2.3\",\"artefact\":\"sha256:abcd\",\"published_at\":1756300000},\"signature\":{\"manifest_digest\":\"sha256:abcd\"},\"proof\":{\"manifest_digest\":\"sha256:abcd\",\"log_id\":\"local-log\",\"tree_size\":42},\"as_authority\":\"@acme\"}";
+    let not_ours = "{\"manifest\":{\"name\":\"serde\",\"version\":\"1.0.0\",\"artefact\":\"sha256:beef\",\"published_at\":1756300000},\"signature\":{\"manifest_digest\":\"sha256:beef\",\"signer\":\"someone\"},\"proof\":{\"manifest_digest\":\"sha256:beef\",\"log_id\":\"local-log\",\"tree_size\":1},\"as_authority\":\"local\"}";
+
+    // SEARCH BEFORE AND AFTER, so the publication is observable from
+    // outside the handler. A route scene that only posts proves the
+    // codes; this proves the node actually HOLDS what it accepted —
+    // which is the claim a publisher cares about.
+    get_search(&mut handler, &f"{label}/search-before");
+    post(&mut handler, &f"{label}/owned", &good);
+    get_search(&mut handler, &f"{label}/search-after");
+    post(&mut handler, &f"{label}/no-signer", &no_signer);
+    post(&mut handler, &f"{label}/not-ours", &not_ours);
+}
+
+/// The resolve route, with sources actually configured.
+///
+/// Without this the route is reachable only in its 404 shape: a handler
+/// built with an empty source list refuses everything, and a scene that
+/// showed only that would be measuring the empty list, not the route.
+/// Three requests, three different answers:
+///
+///   a name a configured source has     -> 200, and the body NAMES the
+///                                         source, which is what an
+///                                         operator needs — not "yes"
+///                                         but "from where"
+///   a name nobody has                  -> 404
+///   no ?name= at all                   -> 400, naming what is missing
+fn resolve_route_scene(label: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let mut versions: Map<Text, Text> = Map.new();
+    versions.insert("serde", "1.0.0");
+    let mut sources: List<Heap<dyn Source>> = List.new();
+    sources.push(Heap.new(RegistrySource {
+        log_id: "upstream-log",
+        versions: versions,
+    }));
+
+    let handler = NodeHandler.new(Cache.empty(), sources, false);
+    get_resolve(&handler, &f"{label}/found", &Maybe.Some("serde"));
+    get_resolve(&handler, &f"{label}/missing", &Maybe.Some("nobody-has-this"));
+    get_resolve(&handler, &f"{label}/no-name", &Maybe.None);
+}
+
+/// One GET /resolve, with or without a `name` parameter.
+fn get_resolve(handler: &NodeHandler, label: &Text, name: &Maybe<Text>)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let raw_query = match name {
+        Maybe.Some(n) => Maybe.Some(f"name={n}"),
+        Maybe.None => Maybe.None,
+    };
+    let empty: List<Byte> = List.new();
+    let req = WeftRequest.new(
+        Method.Get,
+        "/resolve",
+        raw_query,
+        Headers.new(),
+        empty,
+    );
+    let resp = handler.route_resolve(&req);
+    match Text.from_utf8(&resp.body[..]) {
+        Ok(text) => print(f"{label}: {resp.status.code} {text}"),
+        Err(_) => print(f"{label}: {resp.status.code} <body is not UTF-8>"),
+    }
+}
+
+/// One GET /search through the handler.
+fn get_search(handler: &mut NodeHandler, label: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let empty: List<Byte> = List.new();
+    let req = WeftRequest.new(
+        Method.Get,
+        "/search",
+        Maybe.None,
+        Headers.new(),
+        empty,
+    );
+    let resp = handler.route_search(&req);
+    match Text.from_utf8(&resp.body[..]) {
+        Ok(text) => print(f"{label}: {resp.status.code} {text}"),
+        Err(_) => print(f"{label}: {resp.status.code} <body is not UTF-8>"),
+    }
+}
+
+/// One POST through the handler, reported as status + body.
+///
+/// The BODY is printed alongside the code on purpose. A scene that
+/// showed only `403` would confirm the mapping and hide whether the
+/// message tells the operator which of the several 403-shaped refusals
+/// happened — and that message is the difference between a registry
+/// somebody can run and one they cannot.
+fn post(handler: &mut NodeHandler, label: &Text, body_text: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let mut bytes: List<Byte> = List.new();
+    for b in body_text.bytes() {
+        bytes.push(b);
+    }
+    let req = WeftRequest.new(
+        Method.Post,
+        "/publish",
+        Maybe.None,
+        Headers.new(),
+        bytes,
+    );
+    let resp = handler.route_publish(&req);
+    // The body is bytes on the wire and must be read back as such.
+    // `from_utf8` returns a Result and this scene keeps both arms: a
+    // route that answered with a non-UTF-8 body would be a defect worth
+    // seeing, not worth papering over with a lossy conversion.
+    // T1130: `[..]` for the same reason as in node/serve.vr — a
+    // reference to a record field coerces to an empty slice here.
+    match Text.from_utf8(&resp.body[..]) {
+        Ok(text) => print(f"{label}: {resp.status.code} {text}"),
+        Err(_) => print(f"{label}: {resp.status.code} <body is not UTF-8>"),
+    }
+}
+
+fn wire_scene(label: &Text) {
+    let request = PublishRequest {
+        manifest: Manifest {
+            name: PackageName("@acme/internal"),
+            version: "1.2.3",
+            artefact: Digest("sha256:abcd"),
+            published_at: 1756300000,
+        },
+        signature: SignatureBundle {
+            manifest_digest: Digest("sha256:abcd"),
+            signer: "acme-release-key",
+        },
+        proof: InclusionProof {
+            manifest_digest: Digest("sha256:abcd"),
+            log_id: "local-log",
+            tree_size: 42,
+        },
+        as_authority: "@acme",
+    };
+
+    // POSITIVE POLE: what goes out comes back.
+    print(f"{label}/round-trip: {round_trip_preserves(&request)}");
+
+    // NEGATIVE POLE: a body missing `signature.signer` is refused BY
+    // NAME. The path in the expectation is the whole point — a refusal
+    // that says only "malformed" would pass a weaker check and help
+    // nobody.
+    let truncated = "{\"manifest\":{\"name\":\"@acme/internal\",\"version\":\"1.2.3\",\"artefact\":\"sha256:abcd\",\"published_at\":1756300000},\"signature\":{\"manifest_digest\":\"sha256:abcd\"},\"proof\":{\"manifest_digest\":\"sha256:abcd\",\"log_id\":\"local-log\",\"tree_size\":42},\"as_authority\":\"@acme\"}";
+    print(f"{label}/names-the-gap: {missing_field_is_named(&truncated, &\"signature.signer\")}");
+
+    // And what the refusal actually SAYS, printed rather than
+    // summarised — a scene that reports only true/false hides whether
+    // the message would help the person reading it.
+    match decode_publish_request(&truncated) {
+        Result.Ok(_) => print(f"{label}/message: accepted a body with no signer"),
+        Result.Err(e) => print(f"{label}/message: {e.describe()}"),
+    }
+
+    // A body that is not JSON at all fails as TRANSPORT, not policy.
+    match decode_publish_request(&"this is not json") {
+        Result.Ok(_) => print(f"{label}/not-json: accepted"),
+        Result.Err(e) => print(f"{label}/not-json: {e.describe()}"),
+    }
+}
+
 fn hash_scene(label: &Text) {
     let a: Narrow = Narrow(Hash { bytes: [7_u8; 32] });
     let b: Narrow = Narrow(Hash { bytes: [7_u8; 32] });
@@ -542,6 +788,35 @@ async fn main() {
     };
     provide Uplink = StatedLink { up: true };
     provide Storage = FileStore { path: "/tmp/verum-registry-store" };
+
+    // SERVE WHEN ASKED, DEMONSTRATE OTHERWISE.
+    //
+    // `verum run … serve` binds a listener; anything else runs the
+    // scenes below. The default is the scenes on purpose: they are how
+    // every rule in this cog is checked, and a node that starts
+    // listening the moment it is run cannot be exercised by a suite.
+    //
+    // The composition root is ABOVE this branch, so the served node and
+    // the demonstrated one stand in the same contexts. A server wired
+    // up with its own providers would be a second configuration that
+    // nothing checks — which is the failure the context system exists
+    // to prevent.
+    let argv = args();
+    let mut wants_serve = false;
+    for a in argv.iter() {
+        if a.clone() == "serve" {
+            wants_serve = true;
+        }
+    }
+    if wants_serve {
+        let no_sources: List<Heap<dyn Source>> = List.new();
+        match serve_forever(&"127.0.0.1:8080", Cache.empty(), no_sources, false).await {
+            Result.Ok(_) => print("registry: listener stopped"),
+            Result.Err(why) => print(f"registry: listener refused to start: {why}"),
+        }
+        return;
+    }
+
     dated_note(&"ambient");
 
     // A mirror attributes everything upstream — including names nobody
@@ -845,4 +1120,12 @@ async fn main() {
     hash_scene(&"hash");
     revocation_scene(&"revocation");
     retention_scene(&"retention");
+
+    // --- the wire (protocol/wire.vr) ---
+    wire_scene(&"wire");
+
+    // --- the publish route end to end (node/serve.vr) ---
+    publish_route_scene(&"route");
+    resolve_route_scene(&"resolve");
 }
+

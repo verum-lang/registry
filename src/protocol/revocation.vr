@@ -273,8 +273,17 @@ public fn apply_all(
 /// Every key in the new ledger stands at least where it stood before.
 ///
 /// The predicate the runtime level checks. Written as a walk, which is
-/// exactly why it is checked and not proved.
-public fn nothing_in_the_ledger_went_backwards(
+/// why it is not UNFOLDED — the reflector reads straight-line bodies,
+/// not iteration.
+///
+/// `pure` is not decoration here and was missing until T0905 measured
+/// what it costs. A walk over two maps calling only `severity` (itself
+/// `pure`) is a mathematical function by construction; but a predicate
+/// not DECLARED pure gets no SMT symbol at all, so a goal naming it
+/// fails on well-formedness — reported in the same shape as a failed
+/// proof. The word is the difference between "we could not show this"
+/// and "the solver never heard of it".
+public pure fn nothing_in_the_ledger_went_backwards(
     before: &Map<Text, KeyStanding>,
     after: &Map<Text, KeyStanding>,
 ) -> Bool {
