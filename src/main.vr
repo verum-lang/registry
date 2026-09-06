@@ -1027,6 +1027,18 @@ async fn main() {
             provide Storage = FileStore { path: bad_path } in {
                 let mut cold = Cache.empty();
                 match restore(&mut cold).await {
+                    // ZERO IS NOT A PASS AND IT IS NOT A FAILURE — it is
+                    // the fixture never having been written. This arm
+                    // used to print "accepted 0 — THE RULE FAILED",
+                    // which is the loudest possible way to say nothing:
+                    // under AOT the `write` above fails (T1192), the
+                    // corrupted file is empty, and `restore` truthfully
+                    // reports that it restored nothing. A rule that
+                    // announces its own violation when it was never
+                    // exercised is worse than one that stays quiet,
+                    // because the alarm is indistinguishable from the
+                    // real thing.
+                    Ok(0) => print("tampered: INCONCLUSIVE — nothing was stored to tamper with"),
                     Ok(n) => print(f"tampered: accepted {n} — THE RULE FAILED"),
                     Err(RestoreError.Unreadable(line)) =>
                         print(f"tampered: refused, line {line} is not readable"),
