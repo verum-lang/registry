@@ -53,21 +53,50 @@ mount verum_registry.node.ambient.{Clock};
 /// rules. A test provides a store that lives in memory and a deployment
 /// provides one backed by a file, and nothing between them changes.
 ///
-/// `load` answers `Maybe<Text>` rather than `Result`: a node starting
-/// for the FIRST TIME has no store, and that is not an error. A store
-/// that exists and cannot be read is a different matter and belongs in
+/// `load` answers `Result<Maybe<Text>, StoreError>`, and the two levels
+/// carry two different facts. A node starting for the FIRST TIME has no
+/// store, and that is not an error — it is `Ok(Maybe.None)`. A store that
+/// EXISTS and cannot be read is an error, and saying so is the whole
+/// point of the outer level.
+///
+/// THE PREVIOUS SHAPE GAVE THE BACKEND A DUTY AND NO CHANNEL. It was
+/// `Maybe<Text>`, with a comment saying an unreadable store "belongs in
 /// the backend, which is the only layer that knows what a read failure
-/// even means for it.
+/// even means for it" — and then left the backend nothing to say it
+/// with. `FileStore.load` duly collapsed every failure into `Maybe.None`,
+/// so a node whose store was corrupt, or whose path had become a
+/// directory, or whose permissions had changed, came up SILENTLY EMPTY
+/// and served nothing while reporting success. That is the failure this
+/// module's own header names: "a node that forgets everything when it
+/// restarts is not a cache; it is a proxy with extra steps."
+///
+/// Measured before the change, so the distinction is known to exist
+/// rather than assumed: `read_to_string` answers `NotFound` for an absent
+/// path, `PermissionDenied` for an unreadable file and `Other` for a
+/// directory, with a readable file as the positive control.
 public context Storage {
-    fn load() -> Maybe<Text>;
+    fn load() -> Result<Maybe<Text>, StoreError>;
     fn save(contents: Text) -> Bool;
 }
+
+/// Why a store could not be read.
+///
+/// Carries the platform's own word for the failure rather than a
+/// re-classification: an operator's next move depends on whether this was
+/// permissions, a directory in the way, or a bad disk, and this layer
+/// cannot improve on the kernel's answer.
+public type StoreError is
+    | Unreadable(Text);
 
 /// Why a node could not come back up.
 public type RestoreError is
     /// The stored text is not a rendering this version can read. Names
     /// the line, because an operator's next move is to look at it.
     | Unreadable(Int)
+    /// The store exists and could not be READ at all — distinct from
+    /// having no store yet, which is a normal first run and answers
+    /// `Ok(0)`. Carries the platform's word for the failure.
+    | StoreUnreadable(Text)
     /// The evidence in the store did not check out. Carries the import
     /// refusal unchanged — a tampered store and a malformed slice are
     /// the same failure and deserve the same words.
@@ -167,9 +196,16 @@ public fn persist(slice: &Slice) -> Bool using [Storage] {
 public async fn restore(cache: &mut Cache) -> Result<Int, RestoreError>
     using [Storage, Clock]
 {
+    // THREE OUTCOMES, NOT TWO. A first run (no store) is `Ok(0)` and a
+    // readable store is imported; a store that exists and refuses to be
+    // read is a REFUSAL, never an empty node. Collapsing the third into
+    // the first is what made a corrupt store indistinguishable from a
+    // fresh one.
     let stored = match Storage.load() {
-        Maybe.Some(text) => text,
-        Maybe.None => return Result.Ok(0),
+        Result.Ok(Maybe.Some(text)) => text,
+        Result.Ok(Maybe.None) => return Result.Ok(0),
+        Result.Err(StoreError.Unreadable(why)) =>
+            return Result.Err(RestoreError.StoreUnreadable(why)),
     };
 
     let mut items: List<SliceItem> = List.new();

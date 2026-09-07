@@ -32,6 +32,7 @@
 module verum_registry.node.ambient;
 
 mount verum_registry.protocol.authority.{Authority};
+mount verum_registry.node.durable.{StoreError};
 
 
 // -----------------------------------------------------------------------------
@@ -119,7 +120,7 @@ implement ConfiguredNode {
 public type FileStore is { path: Text };
 
 implement FileStore {
-    public fn load(&self) -> Maybe<Text> {
+    public fn load(&self) -> Result<Maybe<Text>, StoreError> {
         // The path is COPIED to a local first. Passing `&self.path`
         // straight to the file API silently does nothing and returns
         // `Ok` — a write reports success and no bytes land (T0899).
@@ -130,16 +131,29 @@ implement FileStore {
         match core.io.file.read_to_string(&path) {
             Ok(text) => {
                 if text.len() == 0 {
-                    Maybe.None
+                    Result.Ok(Maybe.None)
                 } else {
-                    Maybe.Some(text)
+                    Result.Ok(Maybe.Some(text))
                 }
             }
-            // A node starting for the FIRST TIME has no store, and that
-            // is not an error — it comes up empty. A store that exists
-            // and cannot be read is a different matter, and this is the
-            // only layer that knows which it is looking at.
-            Err(_) => Maybe.None,
+            // THE DISTINCTION THIS LAYER OWES ITS CALLER. A node starting
+            // for the FIRST TIME has no store, and that is not an error —
+            // `NotFound` comes back as `Ok(Maybe.None)` and the node comes
+            // up empty. Anything else means the store EXISTS and could not
+            // be read, and saying so is this layer's job: it is the only
+            // one that knows what a read failure means for a file.
+            //
+            // The previous line was `Err(_) => Maybe.None`, which threw
+            // the distinction away and made a corrupt store look like a
+            // fresh node. The kernel already tells them apart —
+            // `NotFound` / `PermissionDenied` / `Other` — so nothing had
+            // to be invented, only asked.
+            Err(e) => {
+                match e.kind {
+                    NotFound => Result.Ok(Maybe.None),
+                    other => Result.Err(StoreError.Unreadable(f"{other}")),
+                }
+            }
         }
     }
 

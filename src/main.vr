@@ -993,6 +993,8 @@ async fn main() {
                 Ok(n) => print(f"restore: {n} re-verified, {revived.len()} held"),
                 Err(RestoreError.Unreadable(line)) =>
                     print(f"restore: refused, line {line} is not readable"),
+                Err(RestoreError.StoreUnreadable(why)) =>
+                    print(f"restore: refused, the store could not be read ({why})"),
                 Err(RestoreError.Refused(_)) =>
                     print("restore: refused, the stored evidence did not check out"),
             }
@@ -1042,8 +1044,42 @@ async fn main() {
                     Ok(n) => print(f"tampered: accepted {n} — THE RULE FAILED"),
                     Err(RestoreError.Unreadable(line)) =>
                         print(f"tampered: refused, line {line} is not readable"),
+                    Err(RestoreError.StoreUnreadable(why)) =>
+                        print(f"tampered: refused, the store could not be read ({why})"),
                     Err(RestoreError.Refused(_)) =>
                         print("tampered: refused, the stored evidence did not check out"),
+                }
+            };
+
+            // --- a store that EXISTS and cannot be read ---
+            //
+            // Not the same as having no store yet, and the difference is
+            // the whole point. A first run comes up empty and that is
+            // correct; a node whose store has become unreadable — wrong
+            // permissions, a directory in the way, a bad disk — must
+            // REFUSE, because coming up empty would mean silently
+            // serving nothing while reporting success.
+            //
+            // `/tmp` is a directory, so reading it as a file fails with a
+            // kind that is not `NotFound`. That is the cheapest
+            // unreadable store there is: it needs no fixture, no
+            // permissions change, and it exists on every machine this
+            // programme runs on.
+            //
+            // BEFORE THIS SCENE THE NODE PRINTED `restore: 0 re-verified`
+            // HERE. `FileStore.load` collapsed every read failure into
+            // "no store", so the two cases were one, and the failure
+            // announced itself as a healthy cold start.
+            provide Storage = FileStore { path: "/tmp" } in {
+                let mut blind = Cache.empty();
+                match restore(&mut blind).await {
+                    Ok(n) => print(f"unreadable-store: came up with {n} — THE RULE FAILED"),
+                    Err(RestoreError.StoreUnreadable(why)) =>
+                        print(f"unreadable-store: refused ({why})"),
+                    Err(RestoreError.Unreadable(line)) =>
+                        print(f"unreadable-store: refused, line {line} is not readable"),
+                    Err(RestoreError.Refused(_)) =>
+                        print("unreadable-store: refused, the evidence did not check out"),
                 }
             };
         }
