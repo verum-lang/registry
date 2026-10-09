@@ -1,0 +1,38 @@
+{
+  "task": "T1635",
+  "registry_commit": "57708036067e11d8d178551daca246035afa859b",
+  "language_product_commit": "fdad59f06114fd2770f3d53058373764284c7c2e",
+  "cli_sha256": "0e488832a40517d260e50947a8788548484c4da931f49b92e4c1c7734858719a",
+  "cli_bytes": 495337656,
+  "schema": "v52-2026-10-05-semantic-formal-parameters",
+  "command": [
+    "verum",
+    "check"
+  ],
+  "working_directory": "registry repository root",
+  "environment_overrides": {
+    "VERUM_NO_OBJECT_CACHE": "1",
+    "TMPDIR": "/private/tmp"
+  },
+  "deadline_seconds": 600,
+  "elapsed_seconds": 600.09,
+  "process_returncode_after_deadline": -9,
+  "status": "timeout_without_verdict",
+  "log_sha256": "7fc411c7cda2d733bf523430f963cfe2cdc953e80a1c43f89bf655ac824fd8e9",
+  "source_head_and_clean_state_unchanged": true,
+  "profile": {
+    "duration_seconds": 3,
+    "thread": "verum-main",
+    "samples": 2058,
+    "context_registration_samples": 2057,
+    "stack": [
+      "check_project",
+      "register_stdlib_context_full",
+      "build_context_type_from_decl"
+    ],
+    "observed_descendant": "ensure_stdlib_type_loaded -> register_stdlib_impls_for_target",
+    "followup": "T1643",
+    "limit": "An interval profile; it does not attribute the entire timeout to one operation."
+  },
+  "scope": "Baseline on an identified older ordinary CLI. No current-main compiler, registry runtime, proof or release acceptance follows from this measurement."
+}

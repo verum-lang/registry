@@ -1,0 +1,29 @@
+name: Registry tooling
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tooling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Exercise verifier report and failure handling
+        run: python3 -m unittest discover -s tests/tooling -v
+      - name: Check shell entry point
+        run: bash -n tools/verify_obligations.sh
+      - name: Check source construct census
+        run: python3 tools/census.py --check-absences
+
+# This job tests the tooling. It does not run Verum, prove the registry's
+# obligations or certify its HTTP service. Those need an identified CLI
+# artifact and the runtime/launch controls documented in README.md.
