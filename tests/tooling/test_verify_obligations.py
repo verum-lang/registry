@@ -54,6 +54,20 @@ else:
         rows.append(("theorem unexpected", "proved"))
     if scenario == "function_failed":
         rows.append(("helper", "failed"))
+    if scenario == "empty_name":
+        rows.append(("  ", "proved"))
+    if path.name == "second.vr":
+        if scenario == "changed_after":
+            previous = path.with_name("first.vr")
+            previous.write_text(previous.read_text() + "\n// changed after verification\n")
+        if scenario == "deleted_after":
+            path.with_name("first.vr").unlink()
+        if scenario == "created_after":
+            path.with_name("new_helper.vr").write_text("pure fn added() -> Bool { true }\n")
+        if scenario == "dependency_changed":
+            path.with_name("helpers.vr").write_text("pure fn helper() -> Bool { false }\n")
+        if scenario == "manifest_changed":
+            Path("verum.toml").write_text('[cog]\nname = "changed"\n')
     rows.append(("unconstrained_helper", "skipped"))
 
 styles = {"proved": ("✓", "Proved in 0.01s"),
@@ -108,6 +122,8 @@ class ObligationRunnerTests(unittest.TestCase):
             'public lemma beta_2() ensures true proof by auto;\n'
             'corollary gamma() from alpha proof by auto;\n', encoding="utf-8"
         )
+        (self.project / "src/helpers.vr").write_text("pure fn helper() -> Bool { true }\n")
+        (self.project / "verum.toml").write_text('[cog]\nname = "fixture"\n')
         self.verifier = Path(self.temp.name) / "fake verifier"
         self.verifier.write_text(f"#!{sys.executable}\n{FAKE}", encoding="utf-8")
         self.verifier.chmod(0o755)
@@ -162,6 +178,66 @@ class ObligationRunnerTests(unittest.TestCase):
 
     def test_unknown_result(self):
         self.assert_runner_error("unknown")
+
+    def test_empty_result_name(self):
+        self.assert_runner_error("empty_name")
+
+    def test_previously_verified_source_changed(self):
+        self.assert_runner_error("changed_after")
+
+    def test_previously_verified_source_deleted(self):
+        self.assert_runner_error("deleted_after")
+
+    def test_new_source_without_theorems_created(self):
+        self.assert_runner_error("created_after")
+
+    def test_dependency_without_theorems_changed(self):
+        self.assert_runner_error("dependency_changed")
+
+    def test_manifest_changed(self):
+        self.assert_runner_error("manifest_changed")
+
+    def assert_inventory_accepts(self, prefix):
+        first = self.project / "src/first.vr"
+        first.write_text(prefix + '\npublic theorem alpha() ensures true proof by auto;\n')
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("3 obligation(s)", result.stdout)
+
+    def test_nested_comments_do_not_create_declarations(self):
+        self.assert_inventory_accepts('''/* outer /* inner */
+public theorem comment_only() ensures false;
+*/''')
+
+    def test_lifetimes_and_escaped_characters_do_not_hide_declarations(self):
+        self.assert_inventory_accepts(r'''fn borrow<'a>(x: &'a Text) -> &'a Text { x }
+const apostrophe = '\'';
+const slash = '\\';
+const newline = '\n';
+const unicode = '\u{1234}';
+const byte = b'\x41';''')
+
+    def test_triple_and_tagged_raw_literals_do_not_create_declarations(self):
+        self.assert_inventory_accepts('''const text = """
+public theorem raw_only() ensures false;
+" and "" are content; so are // and /*
+""";
+const empty = """""";
+const tagged = json#"""{ "text": "public theorem also_raw()" }""";''')
+
+    def test_ambiguous_quote_run_fails_closed(self):
+        first = self.project / "src/first.vr"
+        first.write_text('const raw = """raw """"\npublic theorem hidden();\n""";\n')
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("ambiguous raw quote run", result.stderr)
+
+    def test_legacy_raw_literal_fails_closed(self):
+        first = self.project / "src/first.vr"
+        first.write_text('const raw = r#"theorem hidden()"#;\n')
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("legacy r# raw literal", result.stderr)
 
     def test_missing_summary(self):
         self.assert_runner_error("no_summary")

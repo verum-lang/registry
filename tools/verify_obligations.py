@@ -54,6 +54,9 @@ SUMMARY = re.compile(
     r"^Summary: (\d+) proved, (\d+) failed, (\d+) timeout, (\d+) skipped$"
 )
 STATUS = {"✓": "proved", "✗": "failed", "⚠": "timeout", "-": "skipped"}
+CHARACTER = re.compile(r"'(?:[^'\\]|\\(?:[nrt0abfv\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}))'")
+LIFETIME = re.compile(r"'[^\W\d]\w*")
+LEGACY_RAW = re.compile(r'(?<!\w)r#{1,4}"')
 
 
 class RunnerError(Exception):
@@ -75,15 +78,32 @@ def code_only(source):
             end = source.find("\n", i)
             i = len(source) if end < 0 else end
         elif source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end < 0:
+            # The active lexer supports nesting; the EBNF's comment
+            # production is not recursive. Never expose inner comment
+            # prose as declarations while counting the compiler's input.
+            depth = 1
+            i += 2
+            while i < len(source) and depth:
+                if source.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif source.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            if depth:
                 raise RunnerError("unterminated block comment in source inventory")
-            i = end + 2
+        elif LEGACY_RAW.match(source, i):
+            raise RunnerError("legacy r# raw literal is outside the documented grammar; source inventory refused")
         elif source.startswith('"""', i):
             i += 3
             while i < len(source):
                 if source.startswith('""""', i):
-                    i += 4  # Escaped triple quote in a raw Verum literal.
+                    # EBNF calls four quotes an escaped triple quote;
+                    # the active lexer closes on every run of >=3. A
+                    # census cannot silently choose one interpretation.
+                    raise RunnerError("ambiguous raw quote run: grammar and lexer disagree; source inventory refused")
                 elif source.startswith('"""', i):
                     i += 3
                     break
@@ -91,7 +111,15 @@ def code_only(source):
                     i += 1
             else:
                 raise RunnerError("unterminated raw literal in source inventory")
-        elif source[i] in ('"', "'"):
+        elif source[i] == "'":
+            # A char closes immediately after one character or escape;
+            # a lifetime ('a, 'static) has no closing quote. Do not scan
+            # from one lifetime to the next and mask intervening code.
+            literal = CHARACTER.match(source, i) or LIFETIME.match(source, i)
+            if not literal:
+                raise RunnerError("malformed character/lifetime token in source inventory")
+            i = literal.end()
+        elif source[i] == '"':
             quote = source[i]
             i += 1
             while i < len(source):
@@ -113,12 +141,21 @@ def code_only(source):
     return "".join(out)
 
 
-def inventory():
+def snapshot_inputs():
+    """Capture the source set, including files without their own theorem."""
     files = sorted((ROOT / "src").rglob("*.vr"))
     files += sorted(ROOT.glob("*.vr"))
+    files += [ROOT / name for name in ("verum.toml", "verum.lock") if (ROOT / name).exists()]
+    return {path: path.read_bytes() for path in files}
+
+
+def inventory(inputs=None):
+    inputs = snapshot_inputs() if inputs is None else inputs
     found = {}
-    for path in files:
-        source = path.read_text(encoding="utf-8")
+    for path, contents in inputs.items():
+        if path.suffix != ".vr":
+            continue
+        source = contents.decode("utf-8")
         names = [f"{kind} {name}" for kind, name in DECLARATION.findall(code_only(source))]
         if len(names) != len(set(names)):
             raise RunnerError(f"{path}: duplicate obligation name; coverage is ambiguous")
@@ -137,6 +174,8 @@ def parse_report(output, expected, exit_code, label):
         if match:
             marker, name, detail = match.groups()
             name = name.strip()
+            if not name:
+                raise RunnerError(f"{label}: empty result name")
             status = STATUS[marker]
             if not detail.lower().startswith(status):
                 raise RunnerError(f"{label}: contradictory result marker: {line}")
@@ -204,7 +243,8 @@ def main(argv=None):
     # Resolve a supplied relative executable before entering the project.
     verum = str(Path(args.verum).resolve()) if os.sep in args.verum else args.verum
     try:
-        declarations = inventory()
+        inputs = snapshot_inputs()
+        declarations = inventory(inputs)
         # An explicit bad TMPDIR is an error, never a fallback. The context
         # manager is installed only after creation succeeds and owns exactly
         # this directory; no derived parent path is ever recursively removed.
@@ -221,6 +261,16 @@ def main(argv=None):
                 if path.read_text(encoding="utf-8") != source:
                     raise RunnerError(f"{path}: source changed during measurement")
                 measured.append((path, expected, rows))
+            # Re-read ALL inputs after the final invocation. A previously
+            # verified file, an imported helper, or the discovered file set
+            # can change while later files are being verified.
+            final_inputs = snapshot_inputs()
+            if final_inputs != inputs:
+                added = sorted(str(p.relative_to(ROOT)) for p in final_inputs.keys() - inputs.keys())
+                removed = sorted(str(p.relative_to(ROOT)) for p in inputs.keys() - final_inputs.keys())
+                changed = sorted(str(p.relative_to(ROOT)) for p in inputs.keys() & final_inputs.keys()
+                                 if inputs[p] != final_inputs[p])
+                raise RunnerError(f"project inputs changed during measurement: added={added}, removed={removed}, changed={changed}")
         proved = opened = 0
         other_open = []
         for path, expected, rows in measured:
