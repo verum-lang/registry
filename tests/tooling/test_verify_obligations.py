@@ -187,7 +187,7 @@ class ObligationRunnerTests(unittest.TestCase):
     def test_solver_timeout_is_a_measured_open_obligation(self):
         result = self.run_runner("timeout")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("timeout", result.stdout)
+        self.assertIn("TIMEOUT", result.stdout)
         self.assertNotIn("RUNNER ERROR", result.stderr)
 
     def test_failed_helper_does_not_become_theorem_success(self):
