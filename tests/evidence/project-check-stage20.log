@@ -1,0 +1,84 @@
+    Checking verum-registry v0.1.0 (/private/tmp/verum-registry-stage20-integration)
+2026-10-09T20:35:39.550838Z  WARN Context: Context 'Clock' in function 'restore' has no matching context declaration
+2026-10-09T20:35:39.550913Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'restore'
+2026-10-09T20:35:39.559899Z  WARN Context: Context 'Clock' in function 'dated_note' has no matching context declaration
+2026-10-09T20:35:39.559941Z  WARN Context: Context 'NodeIdentity' in function 'dated_note' has no matching context declaration
+2026-10-09T20:35:39.559949Z  WARN Context: Context 'Clock' in function 'publish_route_scene' has no matching context declaration
+2026-10-09T20:35:39.559954Z  WARN Context: Context 'NodeIdentity' in function 'publish_route_scene' has no matching context declaration
+2026-10-09T20:35:39.559958Z  WARN Context: Context 'Uplink' in function 'publish_route_scene' has no matching context declaration
+2026-10-09T20:35:39.559962Z  WARN Context: Context 'Clock' in function 'resolve_route_scene' has no matching context declaration
+2026-10-09T20:35:39.559966Z  WARN Context: Context 'NodeIdentity' in function 'resolve_route_scene' has no matching context declaration
+2026-10-09T20:35:39.559969Z  WARN Context: Context 'Uplink' in function 'resolve_route_scene' has no matching context declaration
+2026-10-09T20:35:39.559973Z  WARN Context: Context 'Clock' in function 'get_resolve' has no matching context declaration
+2026-10-09T20:35:39.559976Z  WARN Context: Context 'NodeIdentity' in function 'get_resolve' has no matching context declaration
+2026-10-09T20:35:39.559979Z  WARN Context: Context 'Uplink' in function 'get_resolve' has no matching context declaration
+2026-10-09T20:35:39.559982Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'get_resolve'
+2026-10-09T20:35:39.559985Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'get_resolve'
+2026-10-09T20:35:39.559989Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'get_resolve'
+2026-10-09T20:35:39.559992Z  WARN Context: Context 'Clock' in function 'get_search' has no matching context declaration
+2026-10-09T20:35:39.559995Z  WARN Context: Context 'NodeIdentity' in function 'get_search' has no matching context declaration
+2026-10-09T20:35:39.559998Z  WARN Context: Context 'Uplink' in function 'get_search' has no matching context declaration
+2026-10-09T20:35:39.560001Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'get_search'
+2026-10-09T20:35:39.560004Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'get_search'
+2026-10-09T20:35:39.560007Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'get_search'
+2026-10-09T20:35:39.560010Z  WARN Context: Context 'Clock' in function 'post' has no matching context declaration
+2026-10-09T20:35:39.560013Z  WARN Context: Context 'NodeIdentity' in function 'post' has no matching context declaration
+2026-10-09T20:35:39.560016Z  WARN Context: Context 'Uplink' in function 'post' has no matching context declaration
+2026-10-09T20:35:39.560019Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'post'
+2026-10-09T20:35:39.560022Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'post'
+2026-10-09T20:35:39.560025Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'post'
+2026-10-09T20:35:39.561258Z  WARN Context: Context 'Clock' in function 'store' has no matching context declaration
+2026-10-09T20:35:39.561299Z  WARN Context: Context 'Uplink' in function 'lookup' has no matching context declaration
+2026-10-09T20:35:39.565301Z  WARN Context: Context 'Clock' in function 'publish' has no matching context declaration
+2026-10-09T20:35:39.565321Z  WARN Context: Context 'NodeIdentity' in function 'publish' has no matching context declaration
+2026-10-09T20:35:39.565325Z  WARN Context: Context 'Uplink' in function 'publish' has no matching context declaration
+2026-10-09T20:35:39.565343Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'publish'
+2026-10-09T20:35:39.565347Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'publish'
+2026-10-09T20:35:39.567731Z  WARN Context: Context 'Storage' in function 'write_down' has no matching context declaration
+2026-10-09T20:35:39.567744Z  WARN Context: Context 'Storage' declared in 'using' clause but never used in function 'write_down'
+2026-10-09T20:35:39.567747Z  WARN Context: Context 'Clock' in function 'ingest' has no matching context declaration
+2026-10-09T20:35:39.567750Z  WARN Context: Context 'Storage' in function 'ingest' has no matching context declaration
+2026-10-09T20:35:39.567753Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'ingest'
+2026-10-09T20:35:39.567755Z  WARN Context: Context 'Clock' in function 'ingest_volatile' has no matching context declaration
+2026-10-09T20:35:39.567758Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'ingest_volatile'
+2026-10-09T20:35:39.568796Z  WARN Context: Context 'Clock' in function 'import_slice' has no matching context declaration
+2026-10-09T20:35:39.568805Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'import_slice'
+2026-10-09T20:35:39.570291Z  WARN Context: Context 'Clock' in function 'route_publish' has no matching context declaration
+2026-10-09T20:35:39.570299Z  WARN Context: Context 'NodeIdentity' in function 'route_publish' has no matching context declaration
+2026-10-09T20:35:39.570302Z  WARN Context: Context 'Uplink' in function 'route_publish' has no matching context declaration
+2026-10-09T20:35:39.570305Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T20:35:39.570307Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T20:35:39.570310Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T20:35:39.570312Z  WARN Context: Context 'Clock' in function 'serve_forever' has no matching context declaration
+2026-10-09T20:35:39.570315Z  WARN Context: Context 'NodeIdentity' in function 'serve_forever' has no matching context declaration
+2026-10-09T20:35:39.570317Z  WARN Context: Context 'Uplink' in function 'serve_forever' has no matching context declaration
+2026-10-09T20:35:39.570320Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T20:35:39.570322Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T20:35:39.570325Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T20:35:39.579472Z  WARN Context: Context 'Clock' in function 'horizon_for' has no matching context declaration
+2026-10-09T20:39:15.255809Z  WARN Type checking found 5 error(s)
+
+error: field 'body' not found in type 'core.net.http.Response'
+  --> <no source location attached to this diagnostic>
+error: Pattern expects a variant type, but scrutinee has type IoResult<Text> at /private/tmp/verum-registry-stage20-integration/src/main.vr:1024:17
+  --> <no source location attached to this diagnostic>
+error: Pattern expects a variant type, but scrutinee has type IoResult<Text> at /private/tmp/verum-registry-stage20-integration/src/node/ambient.vr:132:13
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'core.async.future.Future<Ok(verum_registry.protocol.evidence.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))>', found 'JoinHandle<Ok(verum_registry.protocol.evidence.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))>'
+  --> /private/tmp/verum-registry-stage20-integration/src/node/slice.vr:188:22
+    │
+186 │         let expected = item.log_id.clone();
+187 │         names.push(item.manifest.name.0.clone());
+188 │         pending.push(spawn(async {
+    │                      ^
+189 │             verify(m, &sig, &prf, who, role, &expected)
+190 │         }));
+191 │     }
+192 │ 
+    │
+error: Pattern expects a variant type, but scrutinee has type core.async.future.Future<Ok(verum_registry.protocol.evidence.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))> at /private/tmp/verum-registry-stage20-integration/src/node/slice.vr:201:13
+  --> <no source location attached to this diagnostic>
+
+error: compilation failed with 5 errors
+
+error: compilation failed with 5 errors

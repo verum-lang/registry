@@ -1,0 +1,63 @@
+{
+  "task": "T1635",
+  "previous_registry_commit": "9561ce0aeae6d212a0be7841f91b34a7e86b47d0",
+  "registry_commit": "7f11d28d80503a8cd364c743a0dfb9225c247dd0",
+  "previous_language_commit": "faabbe696f1ee928f6b3a9bb6c7980ba20577513",
+  "language_commit": "9b9c04a8a7364d35534a9e15dcfe7d9942c47420",
+  "previous_errors": 9,
+  "current_errors": 5,
+  "previous_seconds": 216.409,
+  "current_seconds": 218.477,
+  "unchanged_inputs": [
+    "mod.vr",
+    "src/main.vr",
+    "src/node/ambient.vr",
+    "src/node/cache.vr",
+    "src/node/consistency.vr",
+    "src/node/durable.vr",
+    "src/node/handshake.vr",
+    "src/node/ingest.vr",
+    "src/node/mod.vr",
+    "src/node/publish.vr",
+    "src/node/resolution.vr",
+    "src/node/retention.vr",
+    "src/node/search.vr",
+    "src/node/serve.vr",
+    "src/node/slice.vr",
+    "src/node/store.vr",
+    "src/protocol/authority.vr",
+    "src/protocol/evidence.vr",
+    "src/protocol/hash.vr",
+    "src/protocol/mod.vr",
+    "src/protocol/query.vr",
+    "src/protocol/revocation.vr",
+    "src/protocol/source.vr",
+    "src/protocol/version.vr",
+    "src/protocol/wire.vr",
+    "tests/language/task_handle_declared.vr",
+    "tests/language/task_handle_inferred.vr",
+    "tests/language/task_handle_record.vr",
+    "tests/publication_envelope.vr",
+    "verum.toml"
+  ],
+  "changed_inputs": {
+    "src/protocol/publication.vr": {
+      "before": "d6a3ba2112a5ae38fee85549fb107c44770dbb952863e641e6d726c0b96b0bde",
+      "after": "a76e24d9ef9086bd81d665d3113f60e8949bdac6b6b5bb6be2087781b5047516"
+    }
+  },
+  "added_inputs": {
+    "src/protocol/publication_metadata.vr": "558a1a0de43bebdca1f5f2bc718786feb3a32e8a45a212f3d4001dffc0b88148",
+    "tests/publication_metadata.vr": "da97742d7844cd9de7da326ef352276c8b686079ca824f6793c116c8a241efa6"
+  },
+  "removed_inputs": {},
+  "remaining_errors": {
+    "IoResult variant patterns": 2,
+    "qualified HTTP Response.body assignment": 1,
+    "Future versus JoinHandle and result pattern": 2
+  },
+  "source_protocol_bound_errors_absent": true,
+  "boundary": "Whole-project check still fails. Multiple compiler changes and added metadata inputs prevent attributing total error/time differences to one change. No runtime, proof, AOT or service verdict.",
+  "result_sha256": "f999a2ba960ca5ce9403723d07690467b0a1f4624d22f3180024865f7192865b",
+  "log_sha256": "10d0fe6f7aa74168feeb39f286e99fc2dc356826923b510b3e7cae884f54e5e7"
+}

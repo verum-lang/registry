@@ -39,14 +39,23 @@ These commands have different purposes:
 - The census counts source constructs. Counts establish neither runtime
   coverage nor correct implementations of those constructs.
 
-The rebuilt CLI at language commit `faabbe696` completed the whole-project
-check in **216.409 seconds with 9 compilation errors**, exit 101. The
-[receipt](tests/evidence/project-check-stage18.json) identifies the executable
-and every project input; the [raw log](tests/evidence/project-check-stage18.log)
-preserves the diagnostics. The remaining errors concern spawned handles,
-protocol implementation bounds, `IoResult` pattern checking and an HTTP response
-field. Context-declaration warnings also remain. The registry does not yet
-pass project checking.
+The fresh CLI at language commit `9b9c04a8a` completed the whole-project
+check in **218.477 seconds with 5 compilation errors**, exit 101. The
+[receipt](tests/evidence/project-check-stage20.json) identifies the executable
+and every project input; the [raw log](tests/evidence/project-check-stage20.log)
+preserves the diagnostics. Two errors concern `IoResult` patterns, one concerns
+HTTP response field assignment, and two concern spawned-handle types and their
+result pattern. Context-declaration warnings remain. The registry still does
+not pass whole-project checking.
+
+The previous `faabbe696` check reported
+[9 errors in 216.409 seconds](tests/evidence/project-check-stage18.json).
+Its four source-protocol bound errors are absent in the current result.
+The [comparison](tests/evidence/stage20-comparison.json) records every common,
+changed and added input, including the newly integrated publication decoder.
+Several compiler changes and source additions separate the checks; the
+reported totals do not isolate one fix or establish a performance change.
+These checks do not establish runtime, AOT or deployment acceptance.
 
 The earlier `d61c11aa5` product reported
 [11 errors in 211.317 seconds](tests/evidence/project-check-stage16.json).
