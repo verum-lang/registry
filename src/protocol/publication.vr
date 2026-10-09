@@ -44,6 +44,11 @@ public pure fn publication_body_limit(limits: &PublicationLimits) -> Int {
     limits.metadata_bytes + limits.archive_bytes + 12
 }
 
+/// Reuse the framing bound when decoding the enclosed JSON document.
+public pure fn publication_metadata_limit(limits: &PublicationLimits) -> Int {
+    limits.metadata_bytes
+}
+
 // The caller has checked that every header byte exists. Reading from the
 // most significant byte lets us refuse values above the configured bound
 // before multiplication, including an unsigned u64 that cannot fit Int.
