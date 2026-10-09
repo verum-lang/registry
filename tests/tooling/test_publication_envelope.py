@@ -4,7 +4,11 @@ The real decoder is validated separately by the identified ordinary CLI.
 These controls ensure a harness failure cannot turn into a component pass.
 """
 
+import argparse
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -14,6 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -120,16 +125,19 @@ class PublicationRunnerControls:
             [sys.executable, str(self.project / "tools/run_publication_envelope.py"),
              str(self.executable), "--language-commit", "a" * 40,
              "--evidence-dir", str(evidence), *selection, *extra],
-            env={**os.environ, "TMPDIR": str(self.scratch), "SCENARIO": scenario,
-                 "FIXTURE_REPOSITORY": str(self.project),
-                 "EXPECTED_COMPONENT": self.component,
-                 "INVOCATION_MARKER": str(self.base / "invoked"),
-                 "CHILD_SENTINEL": str(self.base / "child-survived"),
-                 "TIMEOUT_READY": str(self.base / "timeout-ready")},
+            env=self.environment(scenario),
             capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(list(self.scratch.iterdir()), [])
         return result, evidence
+
+    def environment(self, scenario):
+        return {**os.environ, "TMPDIR": str(self.scratch), "SCENARIO": scenario,
+                "FIXTURE_REPOSITORY": str(self.project),
+                "EXPECTED_COMPONENT": self.component,
+                "INVOCATION_MARKER": str(self.base / "invoked"),
+                "CHILD_SENTINEL": str(self.base / "child-survived"),
+                "TIMEOUT_READY": str(self.base / "timeout-ready")}
 
     def test_exact_component_copy_output_and_recorded_identities(self):
         cli_hash = hashlib.sha256(self.executable.read_bytes()).hexdigest()
@@ -194,8 +202,38 @@ class PublicationRunnerControls:
         self.assertFalse(receipt["checks"]["executable_unchanged"])
 
     def test_timeout_is_recorded_and_cancels_descendants(self):
-        result, evidence = self.invoke("timeout", ("--timeout", "0.5"))
-        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        # Establish the child-process precondition before the runner starts its
+        # wait deadline. A busy machine may need more than 0.5s just to launch
+        # Python; killing it before then does not exercise descendant cleanup.
+        spec = importlib.util.spec_from_file_location(
+            "publication_component_runner", self.project / "tools/run_publication_envelope.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        real_popen = subprocess.Popen
+        ready = self.base / "timeout-ready"
+
+        def launch_ready_fixture(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            startup_deadline = time.monotonic() + 5
+            while not ready.exists():
+                if process.poll() is not None or time.monotonic() >= startup_deadline:
+                    runner.stop(process)
+                    self.fail("timeout fixture did not establish its child-process precondition")
+                time.sleep(0.01)
+            return process
+
+        evidence = self.base / "evidence-timeout"
+        args = argparse.Namespace(
+            verum=str(self.executable), component=self.component,
+            language_commit="a" * 40, expected_cli_sha256=None,
+            evidence_dir=str(evidence), timeout=0.5)
+        with mock.patch.dict(os.environ, self.environment("timeout")), \
+                mock.patch.object(runner.subprocess, "Popen", launch_ready_fixture), \
+                mock.patch.object(runner.tempfile, "tempdir", str(self.scratch)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            returncode = runner.run(args)
+        self.assertEqual(returncode, 124)
+        self.assertEqual(list(self.scratch.iterdir()), [])
         receipt = json.loads((evidence / "result.json").read_text())
         self.assertEqual(receipt["status"], "timed_out")
         self.assertTrue(receipt["timed_out"])
@@ -203,6 +241,13 @@ class PublicationRunnerControls:
         self.assertTrue((self.base / "timeout-ready").exists())
         time.sleep(1.6)
         self.assertFalse((self.base / "child-survived").exists())
+
+    def test_cli_deadline_does_not_require_fixture_startup(self):
+        result, evidence = self.invoke("timeout", ("--timeout", "0.01"))
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertEqual(receipt["status"], "timed_out")
+        self.assertFalse(receipt["checks"]["within_deadline"])
 
     def test_existing_evidence_is_never_overwritten(self):
         evidence = self.base / "evidence-success"
