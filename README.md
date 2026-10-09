@@ -69,26 +69,23 @@ isolate the effect of one fix. The stage16
 [build log](tests/evidence/compiler-stage16.log) preserve the fresh automatic
 standard-library bake and executable identity.
 
-The separate typed publication-metadata candidate at `399cc41` now reaches
-interpreter execution with language `faabbe696`. It then fails with
-**`Index out of bounds: index 0 for list of length 0` after 166.19 seconds**,
-exit 1. The [receipt](tests/evidence/publication-metadata-stage18/result.json),
-[runtime log](tests/evidence/publication-metadata-stage18/stderr.log) and
-[comparison](tests/evidence/publication-metadata-stage18/comparison.json)
-preserve source/project hashes identical to the previous run. The
-forward-declared `DecodedDependencyOptions` E101 diagnostic from the
-[one-error stage17 result](tests/evidence/publication-metadata-stage17/result.json)
-is absent. The seventeen borrowed JSON object to typed map helper errors
-from the [earlier result](tests/evidence/publication-metadata-stage16/result.json)
-had already been removed by stage17.
+The separate typed publication-metadata candidate at `399cc41` now passes
+its valid-value checks with language `22a061ae6`, including nonempty arrays
+and detailed dependency options. It then fails a rejection oracle with
+**`Panic: source schema negative was accepted` after 174.83 seconds**,
+exit 1. The [receipt](tests/evidence/publication-metadata-stage19/result.json),
+[runtime log](tests/evidence/publication-metadata-stage19/stderr.log) and
+[comparison](tests/evidence/publication-metadata-stage19/comparison.json)
+preserve source/project hashes identical to stage18. The accepted document
+still needs diagnosis; this does not establish whether input construction,
+schema validation or runtime result handling is responsible.
 
-The [compiler build](tests/evidence/publication-metadata-stage18/build-manifest.json)
-rebuilt the reader and reused the exact earlier standard-library producer
-artifacts. A separately identified
-[diagnostic trace](tests/evidence/publication-metadata-stage18/README.md)
-narrows the new runtime investigation. The fixture did not complete, and
-the candidate remains separate from registry main. Successful metadata
-decoding and publication admission are still unverified.
+The [earlier array-reference crash](tests/evidence/publication-metadata-stage18/result.json)
+is absent. The forward-declared payload error had already disappeared by
+stage18. The [compiler build](tests/evidence/publication-metadata-stage19/build-manifest.json)
+reused the same standard-library producer artifacts. The complete fixture
+still fails, and the candidate remains separate from registry main. Full
+metadata decoding and publication admission remain unverified.
 
 The earlier [whole-project baseline](tests/evidence/project-check-stage14.json)
 reached its 600-second deadline without a verdict on identical registry
