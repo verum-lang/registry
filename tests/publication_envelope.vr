@@ -1,0 +1,85 @@
+// T1652: independent byte vectors exercise the production envelope decoder.
+module verum_registry.tests.publication_envelope;
+
+mount verum_registry.protocol.publication.{
+    EnvelopeError, PublicationLimits, decode_publication_envelope,
+    publication_body_limit, publication_limits,
+};
+
+fn limits(metadata: Int, archive: Int) -> PublicationLimits {
+    match publication_limits(metadata, archive) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("fixture limits must be valid"),
+    }
+}
+
+fn main() {
+    // Metadata is {"x":"λ"} (ten UTF-8 bytes); the five archive bytes
+    // deliberately include NUL, 0xff and CR. Archive validation is separate.
+    let body: List<Byte> = [
+        10_u8, 0_u8, 0_u8, 0_u8,
+        123_u8, 34_u8, 120_u8, 34_u8, 58_u8, 34_u8, 206_u8, 187_u8, 34_u8, 125_u8,
+        5_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8,
+        31_u8, 139_u8, 0_u8, 255_u8, 13_u8,
+    ];
+    let bound = limits(10, 5);
+    assert_eq(publication_body_limit(&bound), 27);
+    let decoded = match decode_publication_envelope(&body, &bound) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("exact-length envelope must decode"),
+    };
+    assert_eq(decoded.metadata, "{\"x\":\"λ\"}");
+    assert_eq(decoded.archive.len(), 5);
+    assert_eq(decoded.archive[0], 31_u8);
+    assert_eq(decoded.archive[1], 139_u8);
+    assert_eq(decoded.archive[2], 0_u8);
+    assert_eq(decoded.archive[3], 255_u8);
+    assert_eq(decoded.archive[4], 13_u8);
+
+    let mut end = 0;
+    while end < body.len() {
+        let mut prefix: List<Byte> = List.new();
+        let mut index = 0;
+        while index < end {
+            prefix.push(body[index]);
+            index = index + 1;
+        }
+        assert(decode_publication_envelope(&prefix, &bound) is Err(EnvelopeError.Truncated));
+        end = end + 1;
+    }
+
+    let mut trailing = body.clone();
+    trailing.push(0_u8);
+    assert(decode_publication_envelope(&trailing, &bound) is Err(EnvelopeError.TrailingBytes));
+
+    let mut empty_metadata = body.clone();
+    empty_metadata[0] = 0_u8;
+    assert(decode_publication_envelope(&empty_metadata, &bound) is Err(EnvelopeError.EmptyMetadata));
+    let mut empty_archive = body.clone();
+    empty_archive[14] = 0_u8;
+    assert(decode_publication_envelope(&empty_archive, &bound) is Err(EnvelopeError.EmptyArchive));
+
+    assert(decode_publication_envelope(&body, &limits(9, 5)) is Err(EnvelopeError.MetadataTooLarge));
+    assert(decode_publication_envelope(&body, &limits(10, 4)) is Err(EnvelopeError.ArchiveTooLarge));
+
+    let mut oversized_metadata = body.clone();
+    oversized_metadata[3] = 255_u8;
+    assert(decode_publication_envelope(&oversized_metadata, &bound) is Err(EnvelopeError.MetadataTooLarge));
+    let mut unsigned_overflow = body.clone();
+    unsigned_overflow[21] = 255_u8;
+    assert(decode_publication_envelope(&unsigned_overflow, &bound) is Err(EnvelopeError.ArchiveTooLarge));
+
+    let mut invalid_utf8 = body.clone();
+    invalid_utf8[11] = 255_u8;
+    assert(decode_publication_envelope(&invalid_utf8, &bound) is Err(EnvelopeError.InvalidUtf8));
+
+    assert(publication_limits(0, 1) is Err(EnvelopeError.InvalidLimits));
+    assert(publication_limits(-1, 1) is Err(EnvelopeError.InvalidLimits));
+    assert(publication_limits(1, 0) is Err(EnvelopeError.InvalidLimits));
+    assert(publication_limits(1, -1) is Err(EnvelopeError.InvalidLimits));
+    assert(publication_limits(1048577, 1) is Err(EnvelopeError.InvalidLimits));
+    assert(publication_limits(1, 67108865) is Err(EnvelopeError.InvalidLimits));
+    assert_eq(publication_body_limit(&limits(1048576, 67108864)), 68157452);
+    assert_eq(publication_body_limit(&limits(262144, 67108864)), 67371020);
+    print("publication_envelope: passed");
+}
