@@ -49,6 +49,13 @@ CLI: both false theorems failed and the true theorem proved. Its
 [complete report](tests/evidence/verifier-control-stage14.log) validate
 the report contract; they do not establish the registry's proof outcomes.
 
+The subsequent [registry proof sweep](tests/evidence/proof-census-stage14.json)
+was refused because `src/node/cache.vr` failed compilation before producing
+a verification report. No registry proof totals were accepted. The
+[project-mode publication control](tests/evidence/publication-project-stage14.json)
+also reached its 180-second deadline before runtime. These recorded
+failures remain pending replay with a rebuilt CLI.
+
 The demonstration in `src/main.vr` uses a frozen clock and fixed local
 configuration. Its default scenes access `/tmp/verum-registry-store`.
 Its `serve` mode binds a local development listener; it is not a production

@@ -114,7 +114,9 @@ the real verifier on the identified project and tool build.
 Generated specifications should carry source identity and verification
 receipts as evidence. An `@verify` annotation requests verification; it
 does not itself prove the annotated declaration. The language documentation
-generator currently needs this distinction repaired under T1640.
+generator now separates declared annotations from results and marks its
+source-only output Unverified. Attaching actual proof receipts remains a
+separate integration requirement.
 
 Demonstration output is useful for exploration. Automated acceptance needs
 assertions and exact output or state oracles, including corrupt input,
