@@ -96,6 +96,15 @@ and [188.95-second completion](tests/evidence/publication-envelope-stage15-exten
 retain the original fixture's results separately; they do not measure a
 performance change.
 
+The exact-release catalog candidate at `e298e4e` was checked as a complete
+project with its catalog control installed as the entry module. The same
+`b12135c9f` CLI returned **49 compilation errors in 235.28 seconds**, including
+source-owner resolution failures. Its [receipt](tests/evidence/catalog-check-stage15.json)
+and [diagnostics](tests/evidence/catalog-check-stage15.log) preserve that
+candidate's inputs separately from the registry main branch. No catalog
+runtime, history isolation or restart acceptance follows from this failed
+check; replay remains required with the corrected compiler.
+
 The demonstration in `src/main.vr` uses a frozen clock and fixed local
 configuration. Its default scenes access `/tmp/verum-registry-store`.
 Its `serve` mode binds a local development listener; it is not a production
