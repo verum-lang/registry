@@ -29,7 +29,11 @@ member must retain its value. Late invalid members must preserve exactly
 `authors[2]`, `features.<the complete key>[2]` and
 `dependencies.codec.features[2]`, with expected type `string`.
 
+The repair formats an indexed path only in the type-refusal branch; valid
+members use the same `JsonValue.as_string` extraction without constructing
+that path. The explicit borrowed element access stays intact. Strict parsing,
+schema and byte limits are unchanged.
+
 These controls remain pending ordinary component execution after T1684.
-The eventual repair must format an indexed path only on the type-refusal
-branch, without changing strict parsing, schema, byte limits or successful
-decoded values. The controls do not establish admission or AOT acceptance.
+Source and grammar review do not establish runtime, admission or AOT
+acceptance.

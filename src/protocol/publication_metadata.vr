@@ -98,7 +98,14 @@ fn text_list(value: &JsonValue, path: &Text) -> Result<List<Text>, MetadataError
     let mut result: List<Text> = List.with_capacity(values.len());
     let mut index = 0;
     while index < values.len() {
-        result.push(text_value(&values[index], &f"{path}[{index}]")?);
+        let item = &values[index];
+        let text = match item.as_string() {
+            Maybe.Some(text) => text,
+            // The path can contain long publisher-supplied keys. Construct
+            // its indexed form only when this element must be refused.
+            Maybe.None => return Result.Err(MetadataError.WrongType(f"{path}[{index}]", "string")),
+        };
+        result.push(text);
         index = index + 1;
     }
     Result.Ok(result)
