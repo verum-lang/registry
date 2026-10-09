@@ -39,13 +39,37 @@ These commands have different purposes:
 - The census counts source constructs. Counts establish neither runtime
   coverage nor correct implementations of those constructs.
 
-The rebuilt CLI at language commit `b12135c9f` completed the whole-project
-check in **217.97 seconds with 64 compilation errors**. The
-[receipt](tests/evidence/project-check-stage15.json) identifies the executable
-and every project input; the [raw log](tests/evidence/project-check-stage15.log)
-preserves the diagnostics. They include explicitly mounted project types
-resolving to unrelated standard-library types, tracked by T1212. The
-registry does not yet pass project checking.
+The rebuilt CLI at language commit `d61c11aa5` completed the whole-project
+check in **211.317 seconds with 11 compilation errors**. The
+[receipt](tests/evidence/project-check-stage16.json) identifies the executable
+and every project input; the [raw log](tests/evidence/project-check-stage16.log)
+preserves the diagnostics. The remaining errors concern spawned handles,
+protocol implementation bounds, `IoResult` pattern checking, HTTP response
+fields and transducer types. Context-declaration warnings also remain.
+The registry does not yet pass project checking.
+
+The previous `b12135c9f` product reported **64 errors in 217.97 seconds**;
+its [receipt](tests/evidence/project-check-stage15.json) and
+[log](tests/evidence/project-check-stage15.log) remain available. Every input
+in that earlier receipt is byte-identical in the new run; the publication
+envelope module and its fixture were added. The
+[comparison](tests/evidence/stage16-comparison.json) records that boundary.
+Multiple compiler changes separate the products, so these results do not
+isolate the effect of one fix. The new
+[build receipt](tests/evidence/compiler-stage16.json) and
+[build log](tests/evidence/compiler-stage16.log) preserve the fresh automatic
+standard-library bake and executable identity.
+
+The separate typed publication-metadata candidate at `399cc41` was run with
+that same compiler. It failed compilation with **18 errors in 69.97 seconds**:
+one forward-reference error for a variant payload and seventeen mismatches
+when a borrowed JSON object is passed to a typed map helper. The
+[component receipt](tests/evidence/publication-metadata-stage16/result.json)
+and [diagnostics](tests/evidence/publication-metadata-stage16/stderr.log)
+preserve its unchanged production sources and fixture identity. The fixture
+did not execute; this candidate has not been integrated into the registry
+main branch. Passing standalone strict JSON controls in the language
+repository does not establish typed metadata or publication admission.
 
 The earlier [whole-project baseline](tests/evidence/project-check-stage14.json)
 reached its 600-second deadline without a verdict on identical registry
