@@ -69,11 +69,11 @@ annotation, generated page or successful process exit alone cannot close it.
 | Boundary | Required observable result | Current work |
 | --- | --- | --- |
 | Authentication and upload | An authorized publisher uploads one source cog; missing, revoked and wrong-scope credentials are refused without mutation. The CLI and server agree on metadata and archive framing. | T1636, T1639 |
-| Immutable publication | `name + exact version` identifies one release. Identical content is idempotent; different content is refused after newer versions, cache eviction and restart. Authority changes preserve original attribution. | T1632 covers in-memory history; durable history remains open. |
-| Artifact storage and recovery | Stored bytes match the accepted digest. Acknowledgement follows a durable commit; interrupted writes and concurrent conflicting publishes cannot expose partial or rewritten releases. | Storage and recovery acceptance remains open. |
+| Immutable publication | `name + exact version` identifies one release. Identical content is idempotent; different content is refused after newer versions, cache eviction and restart. Authority changes preserve original attribution. | T1632 covers in-memory history; T1647 covers durable history. |
+| Artifact storage and recovery | Stored bytes match the accepted digest. Acknowledgement follows a durable commit; interrupted writes and concurrent conflicting publishes cannot expose partial or rewritten releases. | T1647 |
 | Exact resolution and download | Metadata, archive and lockfile identify the configured registry and the same release. Corrupt bytes and unavailable releases are refused explicitly. | T1634, T1642 |
 | Install, mount and run | A fresh project installs the published cog, mounts its exported function and runs it. Cache contents alone do not satisfy this boundary. | T1637, T1638 |
-| Trust evidence | The client verifies actual signatures and log proofs over canonical content. Invalid signatures, changed bytes and altered upstream provenance are refused. | Current evidence records model these relationships; cryptographic acceptance remains open. |
+| Trust evidence | The client verifies actual signatures and log proofs over canonical content. Invalid signatures, changed bytes and altered upstream provenance are refused. | T1648 replaces the current evidence model with cryptographic verification. |
 | Generated specifications | Contracts describe the implementation. Proof status is backed by a complete verification result tied to source and tool identity. | T1633, T1640, T1641 |
 
 Run the complete flow against a temporary local service and empty client
