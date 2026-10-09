@@ -39,23 +39,32 @@ These commands have different purposes:
 - The census counts source constructs. Counts establish neither runtime
   coverage nor correct implementations of those constructs.
 
-The rebuilt CLI at language commit `d61c11aa5` completed the whole-project
-check in **211.317 seconds with 11 compilation errors**. The
-[receipt](tests/evidence/project-check-stage16.json) identifies the executable
-and every project input; the [raw log](tests/evidence/project-check-stage16.log)
+The rebuilt CLI at language commit `faabbe696` completed the whole-project
+check in **216.409 seconds with 9 compilation errors**, exit 101. The
+[receipt](tests/evidence/project-check-stage18.json) identifies the executable
+and every project input; the [raw log](tests/evidence/project-check-stage18.log)
 preserves the diagnostics. The remaining errors concern spawned handles,
-protocol implementation bounds, `IoResult` pattern checking, HTTP response
-fields and transducer types. Context-declaration warnings also remain.
-The registry does not yet pass project checking.
+protocol implementation bounds, `IoResult` pattern checking and an HTTP response
+field. Context-declaration warnings also remain. The registry does not yet
+pass project checking.
+
+The earlier `d61c11aa5` product reported
+[11 errors in 211.317 seconds](tests/evidence/project-check-stage16.json).
+Every earlier source input is unchanged; three standalone task-handle controls
+were added outside `src`. The [comparison](tests/evidence/stage18-comparison.json)
+records the exact boundary. The current reader's
+[build receipt](tests/evidence/publication-metadata-stage18/build-manifest.json)
+identifies the reused standard-library producer artifacts. These checks do not
+establish runtime, AOT or deployment acceptance.
 
 The previous `b12135c9f` product reported **64 errors in 217.97 seconds**;
 its [receipt](tests/evidence/project-check-stage15.json) and
 [log](tests/evidence/project-check-stage15.log) remain available. Every input
-in that earlier receipt is byte-identical in the new run; the publication
+in that earlier receipt was byte-identical in stage16; the publication
 envelope module and its fixture were added. The
 [comparison](tests/evidence/stage16-comparison.json) records that boundary.
 Multiple compiler changes separate the products, so these results do not
-isolate the effect of one fix. The new
+isolate the effect of one fix. The stage16
 [build receipt](tests/evidence/compiler-stage16.json) and
 [build log](tests/evidence/compiler-stage16.log) preserve the fresh automatic
 standard-library bake and executable identity.
