@@ -153,6 +153,14 @@ Metadata runtime acceptance remains pending; the fixture covers envelope
 composition and strict JSON schema decoding, without establishing semantic
 name/version/checksum admission, archive validity, authentication or persistence.
 
+This integration combines the decoder and component runner from `399cc41`
+with the lazy diagnostic-path change and controls from `24bc455`, without
+further algorithm changes. Both original candidates remain preserved for
+independent replay. The stage19 failure above remains a baseline for its
+identified inputs; it is not acceptance of this integrated source. The
+complete metadata component still requires an identified ordinary runtime
+pass before the implementation can be accepted.
+
 The exact-release catalog candidate at `e298e4e` was checked as a complete
 project with its catalog control installed as the entry module. The same
 `b12135c9f` CLI returned **49 compilation errors in 235.28 seconds**, including
