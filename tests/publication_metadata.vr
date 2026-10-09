@@ -46,7 +46,7 @@ fn wrong(source: &Text, path: &Text, expected: &Text) {
     }
 }
 
-fn unknown(source: &Text, path: &Text) {
+fn expect_unknown(source: &Text, path: &Text) {
     match failure(source) {
         MetadataError.UnknownField(actual) => assert_eq(actual, path),
         _ => panic("expected an unknown field refusal"),
@@ -181,7 +181,7 @@ fn schema_refusals() {
     wrong(&changed(&"\"features\":{}", &"\"features\":{\"default\":false}"), &"features.default", &"array of strings");
     wrong(&changed(&"\"features\":{}", &"\"features\":{\"default\":[1]}"), &"features.default[0]", &"string");
     for key in ["authority", "as_authority", "published_at", "signature", "proofs", "artifacts", "cbgr_profiles", "ipfs_hash", "unknown"] {
-        unknown(&changed(&"\"name\":", &f"\"{key}\":null,\"name\":"), &key);
+        expect_unknown(&changed(&"\"name\":", &f"\"{key}\":null,\"name\":"), &key);
     }
 
     wrong(&dependency_document(&"false"), &"dependencies.codec", &"string or object");
@@ -192,7 +192,7 @@ fn schema_refusals() {
     wrong(&dependency_document(&"""{"version":"*","optional":"true"}"""), &"dependencies.codec.optional", &"boolean or null");
     wrong(&dependency_document(&"""{"version":"*","default_features":0}"""), &"dependencies.codec.default_features", &"boolean or null");
     for key in ["path", "git", "branch", "tag", "rev", "registry", "package", "workspace", "default-features", "optonal"] {
-        unknown(&dependency_document(&f"{{\"version\":\"*\",\"{key}\":null}}"), &f"dependencies.codec.{key}");
+        expect_unknown(&dependency_document(&f"{{\"version\":\"*\",\"{key}\":null}}"), &f"dependencies.codec.{key}");
     }
 }
 
@@ -205,7 +205,7 @@ fn strict_parser_boundary() {
         .replace(&"\"dependencies\":{}", &"\"dependencies\":{\"default\":\"*\"}")
         .replace(&"\"features\":{}", &"\"features\":{\"default\":[]}");
     assert_eq(decoded(&independent).dependencies.len(), 1);
-    let escaped = changed(&"\"name\":", &"\"\\u006eame\":" );
+    let escaped = changed(&"\"name\":", &"\"\\u006eame\":");
     assert_eq(decoded(&escaped).name_spelling, "codec");
     match decode_source_metadata(&baseline(), 0) {
         Result.Err(MetadataError.Syntax(error)) => assert(error.kind is JsonErrorKind.DocumentTooLarge),
