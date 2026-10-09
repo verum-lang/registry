@@ -60,22 +60,26 @@ isolate the effect of one fix. The new
 [build log](tests/evidence/compiler-stage16.log) preserve the fresh automatic
 standard-library bake and executable identity.
 
-The separate typed publication-metadata candidate at `399cc41` was replayed
-with language `3821b1961`. It failed compilation with **one error in 75.55
-seconds**: the forward-declared `DecodedDependencyOptions` variant payload.
-All seventeen borrowed JSON object to typed map helper mismatches from the
-[earlier 18-error result](tests/evidence/publication-metadata-stage16/result.json)
-are gone. The [comparison](tests/evidence/publication-metadata-stage17/comparison.json),
-[component receipt](tests/evidence/publication-metadata-stage17/result.json)
-and [diagnostics](tests/evidence/publication-metadata-stage17/stderr.log)
-preserve the byte-identical component inputs. The
-[compiler build](tests/evidence/publication-metadata-stage17/build-manifest.json)
-used the exact earlier standard-library producer artifacts; it rebuilt the
-reader and reported a precompile cache hit.
+The separate typed publication-metadata candidate at `399cc41` now reaches
+interpreter execution with language `faabbe696`. It then fails with
+**`Index out of bounds: index 0 for list of length 0` after 166.19 seconds**,
+exit 1. The [receipt](tests/evidence/publication-metadata-stage18/result.json),
+[runtime log](tests/evidence/publication-metadata-stage18/stderr.log) and
+[comparison](tests/evidence/publication-metadata-stage18/comparison.json)
+preserve source/project hashes identical to the previous run. The
+forward-declared `DecodedDependencyOptions` E101 diagnostic from the
+[one-error stage17 result](tests/evidence/publication-metadata-stage17/result.json)
+is absent. The seventeen borrowed JSON object to typed map helper errors
+from the [earlier result](tests/evidence/publication-metadata-stage16/result.json)
+had already been removed by stage17.
 
-The fixture still did not execute, and this candidate remains separate from
-registry main. Neither standalone strict JSON success nor the smaller diagnostic
-set establishes typed metadata runtime or publication admission.
+The [compiler build](tests/evidence/publication-metadata-stage18/build-manifest.json)
+rebuilt the reader and reused the exact earlier standard-library producer
+artifacts. A separately identified
+[diagnostic trace](tests/evidence/publication-metadata-stage18/README.md)
+narrows the new runtime investigation. The fixture did not complete, and
+the candidate remains separate from registry main. Successful metadata
+decoding and publication admission are still unverified.
 
 The earlier [whole-project baseline](tests/evidence/project-check-stage14.json)
 reached its 600-second deadline without a verdict on identical registry

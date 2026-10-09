@@ -1,0 +1,21 @@
+{
+  "kind": "separate diagnostic execution; not the ordinary acceptance run",
+  "additional_environment": {
+    "VERUM_TRACE_CALLS": "1",
+    "VERUM_TRACE_PC": "schema_values"
+  },
+  "environment_authority": "Flags supplied by the operator for this diagnostic run. The raw runner receipt lists only runner-managed overrides and omits these inherited trace flags.",
+  "raw_runner_receipt_unmodified": true,
+  "ordinary_receipt": "../result.json",
+  "source_project_and_cli_identical_to_ordinary_receipt": true,
+  "status": "failed",
+  "elapsed_seconds": 162.79,
+  "returncode": 1,
+  "final_recorded_call": "JsonValue.as_array, reached from verum_registry.protocol.publication_metadata.text_list",
+  "diagnostic_limit": "The last recorded call narrows investigation; it does not establish the failing instruction or root cause.",
+  "evidence_sha256": {
+    "result.json": "6a8eba954506b859d8cf47109ef2f395d693fe69b9d33ae96a2b190ee66457c5",
+    "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr.log": "b64546b3717d3c359f766d63b1ecfbb661f38c567492e990e39f25f90da4a908"
+  }
+}
