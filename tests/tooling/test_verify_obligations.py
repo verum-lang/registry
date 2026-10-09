@@ -196,9 +196,12 @@ class ObligationRunnerTests(unittest.TestCase):
         self.assertIn("helper", result.stdout)
 
     def test_process_timeout_is_runner_failure(self):
-        result = self.run_runner("process_timeout", extra=("--timeout", "0.1"))
+        result = self.run_runner("process_timeout", extra=("--timeout", "1"))
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("RUNNER ERROR", result.stderr)
+        self.assertIn("control ok", result.stdout)
+        self.assertIn("first.vr: verifier invocation exceeded", result.stderr)
+        self.assertEqual(list(self.scratch.iterdir()), [])
 
     def test_missing_verifier_is_runner_failure(self):
         self.verifier.unlink()
