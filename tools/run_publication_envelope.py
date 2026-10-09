@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run the exact publication framing module in an isolated interpreter project.
+"""Run a selected publication component in an isolated interpreter project.
 
-This component gate does not check the whole registry, HTTP admission, JSON,
-digest/archive validity, authentication, persistence, or AOT execution.
+The envelope component remains the default. Metadata also includes the typed
+source-metadata decoder; neither component establishes service admission.
 """
 
 import argparse
@@ -19,13 +19,38 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE = Path("src/protocol/publication.vr")
-FIXTURE = Path("tests/publication_envelope.vr")
-EXPECTED = Path("tests/publication_envelope.expected")
 RUNNER = Path("tools/run_publication_envelope.py")
-OLD_HEADER = b"module verum_registry.tests.publication_envelope;\n"
 NEW_HEADER = b"module verum_registry.main;\n"
 MANIFEST = b'[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n'
+COMPONENTS = {
+    "envelope": {
+        "task": "T1652",
+        "modules": (Path("src/protocol/publication.vr"),),
+        "fixture": Path("tests/publication_envelope.vr"),
+        "expected": Path("tests/publication_envelope.expected"),
+        "header": b"module verum_registry.tests.publication_envelope;\n",
+        "scope": (
+            "Run the exact publication framing module in an isolated interpreter project.\n\n"
+            "This component gate does not check the whole registry, HTTP admission, JSON,\n"
+            "digest/archive validity, authentication, persistence, or AOT execution."
+        ),
+    },
+    "metadata": {
+        "task": "T1666",
+        "modules": (Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr")),
+        "fixture": Path("tests/publication_metadata.vr"),
+        "expected": Path("tests/publication_metadata.expected"),
+        "header": b"module verum_registry.tests.publication_metadata;\n",
+        "scope": (
+            "Run the exact publication framing and typed source-metadata modules "
+            "in an isolated interpreter project.\n\n"
+            "This component checks envelope composition and strict JSON schema decoding; "
+            "it does not establish semantic name/version/checksum admission, "
+            "archive validity, authentication, persistence, AOT, or whole-registry acceptance."
+        ),
+    },
+}
 
 
 def digest(contents):
@@ -59,6 +84,11 @@ def stop(process):
 
 
 def run(args):
+    component = COMPONENTS[args.component]
+    modules = component["modules"]
+    fixture = component["fixture"]
+    expected = component["expected"]
+    old_header = component["header"]
     if os.name != "posix":
         raise ValueError("this runner requires POSIX process-group cancellation")
     verum = Path(args.verum).resolve(strict=True)
@@ -70,14 +100,15 @@ def run(args):
     if args.expected_cli_sha256 and cli_hash != args.expected_cli_sha256:
         raise ValueError("the supplied CLI does not match --expected-cli-sha256")
 
-    sources = {path: (ROOT / path).read_bytes() for path in (MODULE, FIXTURE, EXPECTED, RUNNER)}
-    if sources[FIXTURE].count(OLD_HEADER) != 1:
-        raise ValueError("fixture must contain exactly one expected entry module header")
-    if not sources[EXPECTED].strip():
-        raise ValueError("the expected output must be nonempty")
+    sources = {path: (ROOT / path).read_bytes()
+               for path in (*modules, fixture, expected, RUNNER)}
+    if sources[fixture].count(old_header) != 1:
+        raise ValueError(f"{fixture} must contain exactly one expected entry module header")
+    if not sources[expected].strip():
+        raise ValueError(f"{expected} must be nonempty")
     inputs = {
-        MODULE: sources[MODULE],
-        Path("src/main.vr"): sources[FIXTURE].replace(OLD_HEADER, NEW_HEADER, 1),
+        **{path: sources[path] for path in modules},
+        Path("src/main.vr"): sources[fixture].replace(old_header, NEW_HEADER, 1),
         Path("verum.toml"): MANIFEST,
     }
     source_hashes = {str(path): digest(contents) for path, contents in sources.items()}
@@ -85,7 +116,7 @@ def run(args):
     evidence = Path(args.evidence_dir).resolve()
     evidence.mkdir()  # A new directory is mandatory: never overwrite a previous run.
 
-    with tempfile.TemporaryDirectory(prefix="verum-publication-envelope-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=f"verum-publication-{args.component}-") as temporary:
         project = Path(temporary).resolve()
         for path, contents in inputs.items():
             destination = project / path
@@ -95,8 +126,9 @@ def run(args):
                      "TMPDIR": str(project.parent)}
         command = [str(verum), "run", "--tier", "interpret"]
         record = {
-            "task": "T1652",
-            "scope": __doc__.strip(),
+            "task": component["task"],
+            "component": args.component,
+            "scope": component["scope"],
             "source_inputs": source_hashes,
             "project_inputs": input_hashes,
             "entry_transformation": "Only replace the fixture's module header with verum_registry.main.",
@@ -143,7 +175,7 @@ def run(args):
         with (evidence / "stdout.log").open("rb") as stdout:
             # Reading one extra byte detects additional output without loading
             # an unbounded process log into memory.
-            output_matches = stdout.read(len(sources[EXPECTED]) + 1) == sources[EXPECTED]
+            output_matches = stdout.read(len(sources[expected]) + 1) == sources[expected]
         checks = {
             "exit_zero": returncode == 0,
             "within_deadline": not timed_out and not interrupted,
@@ -165,13 +197,15 @@ def run(args):
                      for name in ("stdout.log", "stderr.log")},
         }
         write_json(evidence / "result.json", result)
-    print(f"publication envelope component: {status}; evidence: {evidence}", flush=True)
+    print(f"publication {args.component} component: {status}; evidence: {evidence}", flush=True)
     return 0 if passed else 124 if timed_out else 130 if interrupted else 2 if runner_error else 1
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", help="path to the ordinary Verum executable; no build is performed")
+    parser.add_argument("--component", choices=COMPONENTS, default="envelope",
+                        help="publication component to execute (default: envelope)")
     parser.add_argument("--language-commit", required=True, help="full source commit for that executable")
     parser.add_argument("--expected-cli-sha256", help="optional pinned SHA-256 of the executable")
     parser.add_argument("--evidence-dir", required=True, help="new directory beneath an existing parent")
@@ -186,7 +220,7 @@ def main():
     try:
         return run(args)
     except (OSError, ValueError) as error:
-        parser.exit(2, f"RUNNER ERROR: {error}\n")
+        parser.exit(2, f"RUNNER ERROR: publication {args.component} component: {error}\n")
 
 
 if __name__ == "__main__":

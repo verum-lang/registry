@@ -136,6 +136,23 @@ and [188.95-second completion](tests/evidence/publication-envelope-stage15-exten
 retain the original fixture's results separately; they do not measure a
 performance change.
 
+Select the metadata component with the same runner:
+
+```sh
+python3 tools/run_publication_envelope.py /absolute/path/to/verum \
+  --component metadata --language-commit FULL_SOURCE_COMMIT \
+  --expected-cli-sha256 EXECUTABLE_SHA256 \
+  --evidence-dir /absolute/path/to/new-metadata-evidence-directory
+```
+
+This requires a CLI whose standard library includes `parse_strict`. It copies
+both `publication.vr` and `publication_metadata.vr` unchanged and runs the
+metadata fixture with the same input, output and deadline checks. The receipt
+identifies metadata decoding separately from the default envelope component.
+Metadata runtime acceptance remains pending; the fixture covers envelope
+composition and strict JSON schema decoding, without establishing semantic
+name/version/checksum admission, archive validity, authentication or persistence.
+
 The exact-release catalog candidate at `e298e4e` was checked as a complete
 project with its catalog control installed as the entry module. The same
 `b12135c9f` CLI returned **49 compilation errors in 235.28 seconds**, including

@@ -25,18 +25,26 @@ import sys
 import time
 
 assert sys.argv[1:] == ["run", "--tier", "interpret"]
+Path(os.environ["INVOCATION_MARKER"]).write_text("invoked")
 original = Path(os.environ["FIXTURE_REPOSITORY"])
-module = Path("src/protocol/publication.vr")
-assert module.read_bytes() == (original / module).read_bytes()
-fixture = (original / "tests/publication_envelope.vr").read_bytes()
+component = os.environ["EXPECTED_COMPONENT"]
+modules = [Path("src/protocol/publication.vr")]
+if component == "metadata":
+    modules.append(Path("src/protocol/publication_metadata.vr"))
+for module in modules:
+    assert module.read_bytes() == (original / module).read_bytes()
+assert set(Path("src").rglob("*.vr")) == set(modules) | {Path("src/main.vr")}
+fixture_path = Path(f"tests/publication_{component}.vr")
+expected_path = Path(f"tests/publication_{component}.expected")
+fixture = (original / fixture_path).read_bytes()
 assert Path("src/main.vr").read_bytes() == fixture.replace(
-    b"module verum_registry.tests.publication_envelope;\n",
+    f"module verum_registry.tests.publication_{component};\n".encode(),
     b"module verum_registry.main;\n", 1)
 assert Path("verum.toml").read_bytes() == (
     b'[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n')
 assert os.environ["VERUM_NO_OBJECT_CACHE"] == "1"
 scenario = os.environ.get("SCENARIO", "success")
-expected = (original / "tests/publication_envelope.expected").read_bytes()
+expected = (original / expected_path).read_bytes()
 print("simulated CLI diagnostic", file=sys.stderr)
 if scenario == "timeout":
     sentinel = Path(os.environ["CHILD_SENTINEL"])
@@ -50,22 +58,32 @@ if scenario == "empty":
 if scenario == "stderr_only":
     sys.stderr.buffer.write(expected)
     sys.exit(0)
+if scenario == "wrong_component_output":
+    sys.stdout.buffer.write(b"publication_envelope: passed\n")
+    sys.exit(0)
 sys.stdout.buffer.write(expected)
 if scenario == "extra":
     sys.stdout.buffer.write(b"unexpected extra output\n")
 if scenario == "duplicate":
     sys.stdout.buffer.write(expected)
-if scenario == "source_changed":
-    path = original / module
+changed_source = {
+    "source_changed": modules[-1],
+    "shared_source_changed": modules[0],
+    "fixture_changed": fixture_path,
+    "runner_changed": Path("tools/run_publication_envelope.py"),
+}.get(scenario)
+if changed_source is not None:
+    path = original / changed_source
     path.write_bytes(path.read_bytes() + b"\n// changed during execution\n")
 if scenario == "expected_changed":
-    (original / "tests/publication_envelope.expected").write_bytes(b"changed\n")
-if scenario == "project_changed":
+    (original / expected_path).write_bytes(b"changed\n")
+if scenario in ("project_changed", "shared_project_changed"):
+    module = modules[0] if scenario == "shared_project_changed" else modules[-1]
     module.write_bytes(module.read_bytes() + b"\n// changed during execution\n")
 if scenario == "project_added":
     Path("src/extra.vr").write_text("module unexpected;\n")
 if scenario == "project_deleted":
-    module.unlink()
+    modules[-1].unlink()
 if scenario == "executable_changed":
     path = Path(sys.argv[0])
     path.write_bytes(path.read_bytes() + b"\n# changed executable\n")
@@ -73,14 +91,19 @@ sys.exit(101 if scenario == "nonzero" else 0)
 '''
 
 
-class PublicationEnvelopeRunnerTests(unittest.TestCase):
+class PublicationRunnerControls:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="publication-runner-test-")
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.project = self.base / "repository with spaces"
-        for name in ("tools/run_publication_envelope.py", "src/protocol/publication.vr",
-                     "tests/publication_envelope.vr", "tests/publication_envelope.expected"):
+        self.modules = ["src/protocol/publication.vr"]
+        if self.component == "metadata":
+            self.modules.append("src/protocol/publication_metadata.vr")
+        self.fixture = f"tests/publication_{self.component}.vr"
+        self.expected = f"tests/publication_{self.component}.expected"
+        for name in ("tools/run_publication_envelope.py", *self.modules,
+                     self.fixture, self.expected):
             destination = self.project / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, destination)
@@ -92,12 +115,15 @@ class PublicationEnvelopeRunnerTests(unittest.TestCase):
 
     def invoke(self, scenario="success", extra=()):
         evidence = self.base / f"evidence-{scenario}"
+        selection = () if self.component == "envelope" else ("--component", self.component)
         result = subprocess.run(
             [sys.executable, str(self.project / "tools/run_publication_envelope.py"),
              str(self.executable), "--language-commit", "a" * 40,
-             "--evidence-dir", str(evidence), *extra],
+             "--evidence-dir", str(evidence), *selection, *extra],
             env={**os.environ, "TMPDIR": str(self.scratch), "SCENARIO": scenario,
                  "FIXTURE_REPOSITORY": str(self.project),
+                 "EXPECTED_COMPONENT": self.component,
+                 "INVOCATION_MARKER": str(self.base / "invoked"),
                  "CHILD_SENTINEL": str(self.base / "child-survived"),
                  "TIMEOUT_READY": str(self.base / "timeout-ready")},
             capture_output=True, text=True, timeout=10,
@@ -111,11 +137,18 @@ class PublicationEnvelopeRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         receipt = json.loads((evidence / "result.json").read_text())
         self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(receipt["component"], self.component)
+        self.assertIn(f"publication {self.component} component: passed", result.stdout)
         self.assertTrue(all(receipt["checks"].values()))
         self.assertEqual(receipt["cli_sha256"], cli_hash)
         self.assertEqual(receipt["cli_sha256_after"], cli_hash)
-        self.assertEqual(receipt["source_inputs"]["src/protocol/publication.vr"],
-                         receipt["project_inputs"]["src/protocol/publication.vr"])
+        self.assertEqual(set(receipt["source_inputs"]),
+                         {*self.modules, self.fixture, self.expected,
+                          "tools/run_publication_envelope.py"})
+        self.assertEqual(set(receipt["project_inputs"]),
+                         {*self.modules, "src/main.vr", "verum.toml"})
+        for module in self.modules:
+            self.assertEqual(receipt["source_inputs"][module], receipt["project_inputs"][module])
         self.assertEqual(receipt["source_inputs"], receipt["source_inputs_after"])
         self.assertEqual(receipt["project_inputs"], receipt["project_inputs_after"])
         self.assertFalse(Path(receipt["working_directory"]).exists())
@@ -139,7 +172,7 @@ class PublicationEnvelopeRunnerTests(unittest.TestCase):
         self.assertFalse(receipt["checks"]["exit_zero"])
 
     def test_changed_sources_and_expected_output_invalidate_result(self):
-        for scenario in ("source_changed", "expected_changed"):
+        for scenario in ("source_changed", "expected_changed", "fixture_changed", "runner_changed"):
             with self.subTest(scenario=scenario):
                 result, evidence = self.invoke(scenario)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -187,13 +220,24 @@ class PublicationEnvelopeRunnerTests(unittest.TestCase):
         self.assertFalse(evidence.exists())
 
     def test_missing_or_duplicate_entry_header_refuses_invocation(self):
-        fixture = self.project / "tests/publication_envelope.vr"
+        fixture = self.project / self.fixture
         for contents in (b"fn main() {}\n",
-                         b"module verum_registry.tests.publication_envelope;\n" * 2):
+                         f"module verum_registry.tests.publication_{self.component};\n".encode() * 2):
             fixture.write_bytes(contents)
             result, evidence = self.invoke()
             self.assertEqual(result.returncode, 2)
             self.assertFalse(evidence.exists())
+            self.assertIn(f"publication {self.component} component", result.stderr)
+            self.assertIn(self.fixture, result.stderr)
+            self.assertFalse((self.base / "invoked").exists())
+
+    def test_empty_expected_output_refuses_invocation(self):
+        (self.project / self.expected).write_bytes(b" \n")
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(self.expected, result.stderr)
+        self.assertFalse(evidence.exists())
+        self.assertFalse((self.base / "invoked").exists())
 
     def test_invalid_deadline_cannot_disable_the_bound(self):
         for timeout in ("0", "-1", "nan", "inf", "601"):
@@ -201,6 +245,77 @@ class PublicationEnvelopeRunnerTests(unittest.TestCase):
                 result, evidence = self.invoke(extra=("--timeout", timeout))
                 self.assertEqual(result.returncode, 2)
                 self.assertFalse(evidence.exists())
+
+
+class PublicationEnvelopeRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "envelope"
+
+    def test_explicit_envelope_selection_preserves_default_inputs_and_scope(self):
+        default, default_evidence = self.invoke()
+        explicit, explicit_evidence = self.invoke("explicit", ("--component", "envelope"))
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        default_receipt = json.loads((default_evidence / "result.json").read_text())
+        explicit_receipt = json.loads((explicit_evidence / "result.json").read_text())
+        for field in ("task", "component", "scope", "source_inputs", "project_inputs"):
+            self.assertEqual(default_receipt[field], explicit_receipt[field])
+        self.assertEqual(default_receipt["task"], "T1652")
+        self.assertIn("does not check the whole registry, HTTP admission, JSON", default_receipt["scope"])
+
+    def test_unknown_component_refuses_invocation(self):
+        result, evidence = self.invoke(extra=("--component", "whole-registry"))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice", result.stderr)
+        self.assertFalse(evidence.exists())
+        self.assertFalse((self.base / "invoked").exists())
+
+
+class PublicationMetadataRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "metadata"
+
+    def test_metadata_receipts_identify_decoding_without_admission(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        started = json.loads((evidence / "started.json").read_text())
+        for record in (receipt, started):
+            self.assertEqual(record["task"], "T1666")
+            self.assertEqual(record["component"], "metadata")
+            self.assertIn("strict JSON schema decoding", record["scope"])
+            self.assertIn("does not establish semantic name/version/checksum admission", record["scope"])
+            self.assertNotIn("tests/publication_envelope.vr", record["source_inputs"])
+
+    def test_envelope_output_cannot_satisfy_metadata_component(self):
+        result, evidence = self.invoke("wrong_component_output")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertFalse(receipt["checks"]["exact_stdout"])
+        self.assertEqual(receipt["status"], "failed")
+
+    def test_shared_envelope_source_and_project_mutations_invalidate_metadata(self):
+        for scenario, failed_check in (("shared_source_changed", "source_unchanged"),
+                                       ("shared_project_changed", "project_unchanged")):
+            with self.subTest(scenario=scenario):
+                result, evidence = self.invoke(scenario)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                receipt = json.loads((evidence / "result.json").read_text())
+                self.assertFalse(receipt["checks"][failed_check])
+
+    def test_missing_metadata_inputs_refuse_instead_of_falling_back_to_envelope(self):
+        for name in ("src/protocol/publication_metadata.vr", self.fixture, self.expected):
+            with self.subTest(name=name):
+                path = self.project / name
+                contents = path.read_bytes()
+                path.unlink()
+                try:
+                    result, evidence = self.invoke()
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("publication metadata component", result.stderr)
+                    self.assertIn(name, result.stderr)
+                    self.assertFalse(evidence.exists())
+                    self.assertFalse((self.base / "invoked").exists())
+                finally:
+                    path.write_bytes(contents)
 
 
 if __name__ == "__main__":
