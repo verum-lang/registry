@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "tasks": [
+    "T1666",
+    "T1685"
+  ],
+  "original_candidate": "399cc4156769bfd1df0ca76120da4e84a8d06931",
+  "lazy_candidate": "24bc45543d2396f5bfd4ccf9b9f84056f5f10237",
+  "prepared_integration": "1b5c74a2c974745527984632029ba3975a4a1f62",
+  "ordinary_language_commit": "9b9c04a8a7364d35534a9e15dcfe7d9942c47420",
+  "cli_sha256": "ebb60204de9bf5b7895f43a30cc50fcdc82427734bfe4807948834cb98577426",
+  "original_inputs_equal_stage19": true,
+  "integration_component_inputs_equal_tested_lazy_candidate": true,
+  "original_seconds": 210.71,
+  "lazy_seconds": 213.26,
+  "tooling": "Prepared integration64/64 Python tests pass; identity receipt retained. No tooling code changed after that gate.",
+  "scope": "Complete source-metadata component and bounded lazy diagnostic-path controls pass in the ordinary interpreter. No timing/allocation improvement is inferred from these separate fixtures. No semantic publication admission, digest/archive validation, authentication, persistence, AOT or whole-service acceptance.",
+  "file_sha256": {
+    "build-manifest.json": "9e2884dfe1d7f3078b81e7b0b20eaf2ebf25c97fbf9c365412d0df3162040943",
+    "cli-build.log": "0c1db83f187ce13a1e0521d463b88378864cc5b7ee2821f3cebc0cb59db32911",
+    "integration-identity.json": "150d7fd6d980a51ccf2489f7151410f4ef4f76b159c5694470e57517331f7d6b",
+    "lazy/result.json": "34e7b591d033681497222fee7d31881ee7ace8eb599d6a01d3feb4876adc1bf6",
+    "lazy/stderr.log": "836cb9137d089d27fb0b8865cbe531bf723cad83afb13eb06553099d80fffe8c",
+    "lazy/stdout.log": "b7309ae13ce11747d197e71ab474f5d5217ba3daac7b3fdf481a1d2ac7f5f590",
+    "original/result.json": "167d3abcec13524f2db619d85c20e74d32312a24a93abbbff9fe4186ed1fd1f9",
+    "original/stderr.log": "cd4a1d19b5a7bb24db367ac0c58f4a4c4ded01889b9c490ee40bc5dfb6d3d4b4",
+    "original/stdout.log": "b7309ae13ce11747d197e71ab474f5d5217ba3daac7b3fdf481a1d2ac7f5f590"
+  }
+}

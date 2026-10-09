@@ -69,23 +69,35 @@ isolate the effect of one fix. The stage16
 [build log](tests/evidence/compiler-stage16.log) preserve the fresh automatic
 standard-library bake and executable identity.
 
-The separate typed publication-metadata candidate at `399cc41` now passes
-its valid-value checks with language `22a061ae6`, including nonempty arrays
-and detailed dependency options. It then fails a rejection oracle with
-**`Panic: source schema negative was accepted` after 174.83 seconds**,
-exit 1. The [receipt](tests/evidence/publication-metadata-stage19/result.json),
-[runtime log](tests/evidence/publication-metadata-stage19/stderr.log) and
-[comparison](tests/evidence/publication-metadata-stage19/comparison.json)
-preserve source/project hashes identical to stage18. The accepted document
-still needs diagnosis; this does not establish whether input construction,
-schema validation or runtime result handling is responsible.
+The complete typed publication-metadata component passes with the fresh
+`9b9c04a8a` interpreter. The original `399cc41` candidate passed in **210.71
+seconds**; the accepted lazy diagnostic-path candidate `24bc455` passed in
+**213.26 seconds**. Both require exact stdout and unchanged source, generated
+project and executable hashes. Their
+[comparison](tests/evidence/publication-metadata-stage20/comparison.json),
+[original receipt](tests/evidence/publication-metadata-stage20/original/result.json)
+and [accepted-source receipt](tests/evidence/publication-metadata-stage20/lazy/result.json)
+retain the complete results and fresh compiler identity. The integrated
+production modules, fixture and runner are byte-identical to the tested lazy
+candidate. The prepared integration also passed all 64 Python tooling tests.
 
-The [earlier array-reference crash](tests/evidence/publication-metadata-stage18/result.json)
-is absent. The forward-declared payload error had already disappeared by
-stage18. The [compiler build](tests/evidence/publication-metadata-stage19/build-manifest.json)
-reused the same standard-library producer artifacts. The complete fixture
-still fails, and the candidate remains separate from registry main. Full
-metadata decoding and publication admission remain unverified.
+This checks strict JSON/schema decoding, required-field and duplicate-key
+refusals, typed dependency options, null/empty/false preservation, framing and
+archive-byte preservation. The bounded lazy-path controls retain exact
+nonzero-index diagnostic paths without constructing them for successful list
+items. The run times above do not measure a performance improvement.
+Semantic name/version/checksum admission, digest and archive validation,
+authentication, durable storage, AOT and the whole service remain separate.
+
+The earlier `22a061ae6` product passed valid-value checks but accepted a document
+missing the required nullable description. Its
+[174.83-second failure](tests/evidence/publication-metadata-stage19/result.json)
+and [diagnostics](tests/evidence/publication-metadata-stage19/stderr.log)
+remain preserved. The original fixture and both production modules are
+unchanged in the passing replay. The language repair separates a callable's
+residual return type from a record field's temporary type hint. The preceding
+[array-reference failure](tests/evidence/publication-metadata-stage18/result.json)
+is also retained as its own boundary.
 
 The earlier [whole-project baseline](tests/evidence/project-check-stage14.json)
 reached its 600-second deadline without a verdict on identical registry
@@ -149,17 +161,17 @@ This requires a CLI whose standard library includes `parse_strict`. It copies
 both `publication.vr` and `publication_metadata.vr` unchanged and runs the
 metadata fixture with the same input, output and deadline checks. The receipt
 identifies metadata decoding separately from the default envelope component.
-Metadata runtime acceptance remains pending; the fixture covers envelope
-composition and strict JSON schema decoding, without establishing semantic
-name/version/checksum admission, archive validity, authentication or persistence.
+The complete component passes on the identified `9b9c04a8a` interpreter.
+It covers envelope composition and strict JSON schema decoding, without
+establishing semantic name/version/checksum admission, archive validity,
+authentication or persistence.
 
 This integration combines the decoder and component runner from `399cc41`
 with the lazy diagnostic-path change and controls from `24bc455`, without
 further algorithm changes. Both original candidates remain preserved for
 independent replay. The stage19 failure above remains a baseline for its
-identified inputs; it is not acceptance of this integrated source. The
-complete metadata component still requires an identified ordinary runtime
-pass before the implementation can be accepted.
+identified inputs. The passing original and lazy replays establish the
+component boundary for the exact integrated code and fixtures.
 
 The exact-release catalog candidate at `e298e4e` was checked as a complete
 project with its catalog control installed as the entry module. The same
