@@ -1,14 +1,6 @@
-# =============================================================================
-# verum.toml — the federated registry node
-# =============================================================================
-# One programme, two roles. An official node and a private one differ by
-# configuration and trust anchors, never by code path — see
-# docs/architecture/registry-federated-design.md §2.
-#
-# This is a rewrite, not an evolution of the earlier prototype: that one
-# was written against a standard library that does not exist, and its
-# value is as a record of the domain vocabulary rather than as code.
-# =============================================================================
+# Official and private nodes share the application and differ by explicit
+# configuration and trust anchors. See README.md for launch acceptance and
+# ARCHITECTURE.md for the current implementation boundaries.
 
 [cog]
 name        = "verum-registry"
@@ -16,8 +8,3 @@ version     = "0.1.0"
 edition     = "2026"
 description = "Federated package registry — one node, two roles"
 license     = "Apache-2.0"
-
-[build]
-# Every module states its architectural obligations; the audit gates on
-# them. See docs/architecture/registry-federation-protocol.md §6.
-arch-check = "strict"

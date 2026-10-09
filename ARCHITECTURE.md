@@ -93,9 +93,9 @@ uncalled by the composition root. They are candidates for integration
 when their domain boundary becomes part of the service. Their presence
 must not be presented as end-to-end concurrency or durability acceptance.
 
-The sources carry `@arch_module` annotations. The current manifest's
-`[build] arch-check = "strict"` has no corresponding CLI configuration
-consumer and does not enable an enforcement gate. An architectural gate
+The sources carry `@arch_module` annotations. The CLI does not implement a
+`[build] arch-check` setting, so the manifest does not claim to enable one.
+An architectural gate
 needs an actual command, meaningful assertions and a deliberately invalid
 module edge as a negative control.
 
