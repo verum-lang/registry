@@ -38,10 +38,18 @@ These commands have different purposes:
 - The census counts source constructs. Counts establish neither runtime
   coverage nor correct implementations of those constructs.
 
-The whole-project baseline recorded in
-[tests/evidence/project-check-stage14.json](tests/evidence/project-check-stage14.json)
-reached its 600-second deadline without a verdict. It uses the recorded
-older CLI product; current-source acceptance remains pending.
+The rebuilt CLI at language commit `b12135c9f` completed the whole-project
+check in **217.97 seconds with 64 compilation errors**. The
+[receipt](tests/evidence/project-check-stage15.json) identifies the executable
+and every project input; the [raw log](tests/evidence/project-check-stage15.log)
+preserves the diagnostics. They include explicitly mounted project types
+resolving to unrelated standard-library types, tracked by T1212. The
+registry does not yet pass project checking.
+
+The earlier [whole-project baseline](tests/evidence/project-check-stage14.json)
+reached its 600-second deadline without a verdict on identical registry
+`.vr` sources. The rebuilt product contains several language changes;
+these two runs do not isolate the performance effect of one fix.
 
 The runner's real three-theorem control passed on the same identified
 CLI: both false theorems failed and the true theorem proved. Its
@@ -54,7 +62,7 @@ was refused because `src/node/cache.vr` failed compilation before producing
 a verification report. No registry proof totals were accepted. The
 [project-mode publication control](tests/evidence/publication-project-stage14.json)
 also reached its 180-second deadline before runtime. These recorded
-failures remain pending replay with a rebuilt CLI.
+proof and publication controls remain pending replay with the rebuilt CLI.
 
 The demonstration in `src/main.vr` uses a frozen clock and fixed local
 configuration. Its default scenes access `/tmp/verum-registry-store`.
