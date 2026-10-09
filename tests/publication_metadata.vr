@@ -196,6 +196,59 @@ fn schema_refusals() {
     }
 }
 
+fn indexed_list_paths() {
+    // T1685: bounded long-key input with many valid members. The decoder must
+    // retain every value, including empty strings, without needing error paths.
+    let mut key = Text.with_capacity(1024);
+    let mut index = 0;
+    while index < 1024 {
+        key.push_str(&"k");
+        index = index + 1;
+    }
+    let mut members = Text.new();
+    members.push_str(&"[");
+    index = 0;
+    while index < 256 {
+        if index > 0 {
+            members.push_str(&",");
+        }
+        if index % 2 == 0 {
+            members.push_str(&"\"ok\"");
+        } else {
+            members.push_str(&"\"\"");
+        }
+        index = index + 1;
+    }
+    members.push_str(&"]");
+    let source = changed(&"\"features\":{}", &f"\"features\":{{\"{key}\":{members}}}");
+    assert(source.as_bytes().len() < 4096);
+    let metadata = decoded(&source);
+    assert_eq(metadata.features.len(), 1);
+    let values = match metadata.features.get(&key) {
+        Maybe.Some(values) => values,
+        Maybe.None => panic("long feature key must be retained"),
+    };
+    assert_eq(values.len(), 256);
+    index = 0;
+    while index < values.len() {
+        if index % 2 == 0 {
+            assert_eq(values[index], "ok");
+        } else {
+            assert_eq(values[index], "");
+        }
+        index = index + 1;
+    }
+
+    // The lazy refusal must retain the original path, including an index
+    // after successful members and a publisher-supplied long feature key.
+    wrong(&changed(&"\"authors\":[]", &"\"authors\":[\"A\",\"B\",false]"),
+        &"authors[2]", &"string");
+    wrong(&changed(&"\"features\":{}", &f"\"features\":{{\"{key}\":[\"A\",\"B\",false]}}"),
+        &f"features.{key}[2]", &"string");
+    wrong(&dependency_document(&"""{"version":"*","features":["A","B",false]}"""),
+        &"dependencies.codec.features[2]", &"string");
+}
+
 fn strict_parser_boundary() {
     duplicate(&changed(&"\"name\":\"codec\"", &"\"name\":\"codec\",\"name\":\"other\""));
     duplicate(&changed(&"\"name\":\"codec\"", &"\"name\":\"codec\",\"\\u006eame\":\"other\""));
@@ -270,6 +323,7 @@ fn envelope_composition() {
 fn main() {
     schema_values();
     schema_refusals();
+    indexed_list_paths();
     strict_parser_boundary();
     envelope_composition();
     print("publication_metadata: passed");
