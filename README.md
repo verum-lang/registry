@@ -29,8 +29,9 @@ These commands have different purposes:
 
 - Argument-less `verum check` checks the whole project. A successful check
   of one source file cannot replace it.
-- The Python tests exercise the verification runner, including invalid
-  reports. They do not execute the registry or establish theorem proofs.
+- The Python tests exercise the verification and component runners,
+  including invalid reports and execution results. They do not execute
+  the registry or establish theorem proofs.
 - The obligation runner requires two false controls to fail and a true
   control to prove, then accounts for every declared obligation. Exit `0`
   means all measured obligations proved, `1` means open obligations, and
@@ -63,6 +64,37 @@ a verification report. No registry proof totals were accepted. The
 [project-mode publication control](tests/evidence/publication-project-stage14.json)
 also reached its 180-second deadline before runtime. These recorded
 proof and publication controls remain pending replay with the rebuilt CLI.
+
+The publication envelope component passes with the identified `b12135c9f`
+interpreter. Its [receipt](tests/evidence/publication-envelope-stage15-retained/result.json),
+[stdout](tests/evidence/publication-envelope-stage15-retained/stdout.log) and
+[diagnostics](tests/evidence/publication-envelope-stage15-retained/stderr.log)
+record the exact production module, fixture and executable hashes. The
+179.91-second run checks UTF-8 and binary-byte fidelity, every truncated
+prefix, malformed lengths, configured limits and trailing bytes. It also
+retains one decoded result while changing the request: the retained result
+stays unchanged and a second decode sees the changed metadata and archive.
+This component result does not validate JSON schema, archive contents or
+digests, authentication, persistence, AOT, or the complete service.
+
+Replay it with an ordinary CLI and its full 40-digit source commit:
+
+```sh
+python3 tools/run_publication_envelope.py /absolute/path/to/verum \
+  --language-commit FULL_SOURCE_COMMIT \
+  --evidence-dir /absolute/path/to/new-evidence-directory
+```
+
+The evidence directory's parent must exist; the directory itself must be
+new. The runner copies the production module byte for byte into a temporary
+minimal project and changes only the fixture's entry module header. It
+requires exact stdout, exit `0`, unchanged inputs and executable, and
+completion within 600 seconds. Use `--expected-cli-sha256` to pin an
+executable and `--timeout` to shorten the deadline. The earlier
+[180-second timeout](tests/evidence/publication-envelope-stage15-timeout.json)
+and [188.95-second completion](tests/evidence/publication-envelope-stage15-extended.json)
+retain the original fixture's results separately; they do not measure a
+performance change.
 
 The demonstration in `src/main.vr` uses a frozen clock and fixed local
 configuration. Its default scenes access `/tmp/verum-registry-store`.
