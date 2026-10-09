@@ -6,3 +6,7 @@ target/
 
 # Z3 writes this beside the working directory when a proof runs.
 .z3-trace
+
+# Python tooling tests may import their helpers.
+__pycache__/
+*.py[cod]

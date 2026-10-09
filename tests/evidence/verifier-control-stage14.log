@@ -1,0 +1,17 @@
+         --> Verifying /private/tmp/verum-T1633-real-control-fg6rctr5/control.vr
+2026-10-09T13:01:30.984542Z  WARN theorem 'every_bool_is_true' verification failed: 1 unproved goal(s)
+2026-10-09T13:01:30.987889Z  WARN theorem 'every_int_is_zero' verification failed: 1 unproved goal(s)
+
+Verification Report:
+============================================================
+  ✓ is_false: Proved in 0.00s
+  ✓ always_zero: Proved in 0.00s
+  ✗ theorem every_bool_is_true: Failed in 0.02s
+      unproved goal: is_false(b) (hint: tactic 'auto' failed: no structural tactic applies and SMT fallback: TacticFailed(Text { inner: "SMT: the goal does not follow — the solver found a counterexample, or could not decide within its budget" }))
+  ✗ theorem every_int_is_zero: Failed in 0.00s
+      unproved goal: always_zero(n) (hint: tactic 'auto' failed: no structural tactic applies and SMT fallback: TacticFailed(Text { inner: "SMT: the goal does not follow — the solver found a counterexample, or could not decide within its budget" }))
+  ✓ theorem a_bool_equals_itself: Proved in 0.00s
+  ✓ main: Proved in 0.00s
+
+Summary: 4 proved, 2 failed, 0 timeout, 0 skipped
+error: Verification failed

@@ -43,6 +43,12 @@ The whole-project baseline recorded in
 reached its 600-second deadline without a verdict. It uses the recorded
 older CLI product; current-source acceptance remains pending.
 
+The runner's real three-theorem control passed on the same identified
+CLI: both false theorems failed and the true theorem proved. Its
+[receipt](tests/evidence/verifier-control-stage14.json) and
+[complete report](tests/evidence/verifier-control-stage14.log) validate
+the report contract; they do not establish the registry's proof outcomes.
+
 The demonstration in `src/main.vr` uses a frozen clock and fixed local
 configuration. Its default scenes access `/tmp/verum-registry-store`.
 Its `serve` mode binds a local development listener; it is not a production
