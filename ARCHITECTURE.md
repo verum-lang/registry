@@ -70,6 +70,40 @@ Production persistence needs an unambiguous versioned encoding, bounded
 parsing, integrity checks and atomic recovery. The development listener
 starts with an empty cache and does not restore published releases.
 
+## Advisory read contract
+
+After exact-version metadata, the CLI requests
+`GET /api/v1/security/vulnerabilities/<name>/<version>` from the same
+configured registry before downloading the archive. The response contains
+`package`, `version` and `vulnerabilities`; its coordinate must exactly
+match the selected release. The source authorities are
+[`RegistryClient::check_vulnerabilities`](https://github.com/verum-lang/verum/blob/main/crates/verum_cli/src/registry/client.rs),
+[`VulnerabilityReport`](https://github.com/verum-lang/verum/blob/main/crates/verum_cli/src/registry/types.rs)
+and [`install_from_registry`](https://github.com/verum-lang/verum/blob/main/crates/verum_cli/src/cog.rs).
+
+An empty report is valid only after an actual configured authoritative
+advisory query answers that no known vulnerabilities are recorded for this
+coordinate. An absent route, unavailable source or failed query must remain
+an explicit error; none may be converted into a successful empty report.
+A matching report describes advisory data and does not authenticate the
+publisher or certify the package. A nonempty valid report currently causes
+the CLI to warn and continue, rather than reject installation automatically.
+
+Service acceptance must exercise a real successful empty query and a real
+nonempty query, then unavailable service, malformed JSON, missing required
+report fields and independently wrong package/version controls. Non-success
+HTTP responses, transport failures and rejected report bodies must stop the
+actual install handler before archive download, extraction or manifest and
+lockfile changes. Cache-directory initialization alone is outside that
+mutation guarantee. Retain the archive request count and project state as
+observable controls; a mocked empty response cannot establish the registry's
+advisory query path.
+
+This read contract is required in addition to authenticated publication,
+durable archive admission and exact-byte download. The development listener
+does not implement the advisory route, so neither its existing routes nor
+standalone client tests establish publication-to-installation acceptance.
+
 ## Language mechanisms and their acceptance
 
 Use each mechanism where its semantics express a registry requirement.
