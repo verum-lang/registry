@@ -1,0 +1,23 @@
+// T1678 control: the same source handle survives a typed record field.
+module task_handle_record;
+
+mount core.async.task.{JoinError, JoinHandle};
+
+type HeldVerification is {
+    handle: JoinHandle<Result<Int, Text>>,
+};
+
+async fn verdict_child() -> Result<Int, Text> {
+    Result.Err("evidence")
+}
+
+async fn main() {
+    let held = HeldVerification { handle: spawn(verdict_child()) };
+    let completed: Result<Result<Int, Text>, JoinError> = held.handle.await;
+    match completed {
+        Result.Ok(Result.Err(reason)) => assert_eq(reason, "evidence"),
+        Result.Ok(Result.Ok(_)) => panic("child evidence refusal was lost"),
+        Result.Err(_) => panic("ordinary child became a task failure"),
+    }
+    print("task-handle-record: ok");
+}
