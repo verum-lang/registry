@@ -60,16 +60,22 @@ isolate the effect of one fix. The new
 [build log](tests/evidence/compiler-stage16.log) preserve the fresh automatic
 standard-library bake and executable identity.
 
-The separate typed publication-metadata candidate at `399cc41` was run with
-that same compiler. It failed compilation with **18 errors in 69.97 seconds**:
-one forward-reference error for a variant payload and seventeen mismatches
-when a borrowed JSON object is passed to a typed map helper. The
-[component receipt](tests/evidence/publication-metadata-stage16/result.json)
-and [diagnostics](tests/evidence/publication-metadata-stage16/stderr.log)
-preserve its unchanged production sources and fixture identity. The fixture
-did not execute; this candidate has not been integrated into the registry
-main branch. Passing standalone strict JSON controls in the language
-repository does not establish typed metadata or publication admission.
+The separate typed publication-metadata candidate at `399cc41` was replayed
+with language `3821b1961`. It failed compilation with **one error in 75.55
+seconds**: the forward-declared `DecodedDependencyOptions` variant payload.
+All seventeen borrowed JSON object to typed map helper mismatches from the
+[earlier 18-error result](tests/evidence/publication-metadata-stage16/result.json)
+are gone. The [comparison](tests/evidence/publication-metadata-stage17/comparison.json),
+[component receipt](tests/evidence/publication-metadata-stage17/result.json)
+and [diagnostics](tests/evidence/publication-metadata-stage17/stderr.log)
+preserve the byte-identical component inputs. The
+[compiler build](tests/evidence/publication-metadata-stage17/build-manifest.json)
+used the exact earlier standard-library producer artifacts; it rebuilt the
+reader and reported a precompile cache hit.
+
+The fixture still did not execute, and this candidate remains separate from
+registry main. Neither standalone strict JSON success nor the smaller diagnostic
+set establishes typed metadata runtime or publication admission.
 
 The earlier [whole-project baseline](tests/evidence/project-check-stage14.json)
 reached its 600-second deadline without a verdict on identical registry
