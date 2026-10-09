@@ -16,7 +16,7 @@ fn limits(metadata: Int, archive: Int) -> PublicationLimits {
 fn main() {
     // Metadata is {"x":"λ"} (ten UTF-8 bytes); the five archive bytes
     // deliberately include NUL, 0xff and CR. Archive validation is separate.
-    let body: List<Byte> = [
+    let mut body: List<Byte> = [
         10_u8, 0_u8, 0_u8, 0_u8,
         123_u8, 34_u8, 120_u8, 34_u8, 58_u8, 34_u8, 206_u8, 187_u8, 34_u8, 125_u8,
         5_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8,
@@ -81,5 +81,26 @@ fn main() {
     assert(publication_limits(1, 67108865) is Err(EnvelopeError.InvalidLimits));
     assert_eq(publication_body_limit(&limits(1048576, 67108864)), 68157452);
     assert_eq(publication_body_limit(&limits(262144, 67108864)), 67371020);
+
+    // Retain the first result while changing the original request storage.
+    // The second decode must see those writes; the first must own its bytes.
+    body[6] = 121_u8;
+    body[22] = 42_u8;
+    let changed = match decode_publication_envelope(&body, &bound) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("mutated exact-length envelope must decode"),
+    };
+    assert_eq(changed.metadata, "{\"y\":\"λ\"}");
+    assert_eq(changed.archive.len(), 5);
+    assert_eq(changed.archive[0], 42_u8);
+    assert_eq(decoded.metadata, "{\"x\":\"λ\"}");
+    assert_eq(decoded.archive.len(), 5);
+    assert_eq(decoded.archive[0], 31_u8);
+    let mut index = 1;
+    while index < 5 {
+        assert_eq(decoded.archive[index], body[22 + index]);
+        assert_eq(changed.archive[index], body[22 + index]);
+        index = index + 1;
+    }
     print("publication_envelope: passed");
 }
