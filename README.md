@@ -39,18 +39,38 @@ These commands have different purposes:
 - The census counts source constructs. Counts establish neither runtime
   coverage nor correct implementations of those constructs.
 
-The fresh CLI at language commit `9b9c04a8a` completed the whole-project
-check in **218.477 seconds with 5 compilation errors**, exit 101. The
-[receipt](tests/evidence/project-check-stage20.json) identifies the executable
-and every project input; the [raw log](tests/evidence/project-check-stage20.log)
-preserves the diagnostics. Two errors concern `IoResult` patterns, one concerns
-HTTP response field assignment, and two concern spawned-handle types and their
-result pattern. Context-declaration warnings remain. The registry still does
-not pass whole-project checking.
+The latest complete-project check evaluates authentication candidate
+`c02238261` with the freshly baked CLI from language commit `49559a042`.
+It completes in **349.31 seconds with 2 compilation errors**, exit 101:
+the slice importer disagrees with the language's spawned-handle and await
+result types (T1681). The earlier response-field assignment and two IoResult
+pattern errors are absent; context-declaration warnings remain. The
+[receipt](tests/evidence/publication-stage21/whole-project/result.json) and
+[diagnostics](tests/evidence/publication-stage21/whole-project/stderr.log.gz)
+identify the exact candidate, tool and inputs. Registry main has not been
+relabelled as that tested candidate.
+
+The [comparison](tests/evidence/publication-stage21/comparison.json) records all
+33 unchanged inputs from the preceding five-error check and 16 added
+compilation inputs, including three authentication/preparation modules.
+Several compiler changes separate the products; totals and run times do not
+isolate one fix or establish a performance improvement. The previous
+[five-error receipt](tests/evidence/project-check-stage20.json) and
+[raw log](tests/evidence/project-check-stage20.log) remain available.
+
+The actual authentication component now passes using configuration, SHA-256,
+authority and scope validation. The public prepared-value consumption control
+also passes, and a second consuming use is refused with E310. However, four
+external private-field access/construction controls are incorrectly accepted
+(T1713), and compiled field visibility also needs repair (T1714). Preparation,
+credential-file loading and bounds fixtures stop before runtime on compiler
+ownership errors. The [boundary report](tests/evidence/publication-stage21/README.md)
+retains these distinct outcomes. The authentication candidate remains separate
+from main; public upload and durable publication are not ready.
 
 The previous `faabbe696` check reported
 [9 errors in 216.409 seconds](tests/evidence/project-check-stage18.json).
-Its four source-protocol bound errors are absent in the current result.
+Its four source-protocol bound errors were absent in the subsequent five-error result.
 The [comparison](tests/evidence/stage20-comparison.json) records every common,
 changed and added input, including the newly integrated publication decoder.
 Several compiler changes and source additions separate the checks; the
