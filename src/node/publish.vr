@@ -161,16 +161,16 @@ public fn publish(
         Ok(resolved) => {
             // An upstream-attributed name is not ours to publish, even
             // when we hold a perfectly good artefact for it.
-            if resolved.role is Upstream {
+            if resolved.role() is Upstream {
                 return Result.Err(PublishError.NotOurName(
                     request.as_authority.clone(),
-                    resolved.authority_id.clone(),
+                    resolved.authority_id(),
                 ));
             }
-            if resolved.authority_id != request.as_authority.clone() {
+            if resolved.authority_id() != request.as_authority.clone() {
                 return Result.Err(PublishError.NotOurName(
                     request.as_authority.clone(),
-                    resolved.authority_id.clone(),
+                    resolved.authority_id(),
                 ));
             }
         }

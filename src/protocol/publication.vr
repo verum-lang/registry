@@ -4,8 +4,8 @@ module verum_registry.protocol.publication;
 /// A framed upload. JSON schema, digest, archive contents, credentials and
 /// durable publication must be validated by subsequent admission stages.
 public type PublicationEnvelope is {
-    metadata: Text,
-    archive: List<Byte>,
+    public metadata: Text,
+    public archive: List<Byte>,
 };
 
 /// Configured bounds can only be constructed through publication_limits.

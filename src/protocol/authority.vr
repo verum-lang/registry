@@ -50,10 +50,11 @@ public type AuthorityRole is
 /// `owns` is EXPLICIT and has no default. A node that lists nothing owns
 /// nothing and therefore cannot publish — which is exactly right for a
 /// pure mirror, and is the safe direction to be wrong in.
+/// These fields are operator configuration, not publication authority.
 public type Authority is {
-    id: Text,
-    role: AuthorityRole,
-    owns: List<NamePattern>,
+    public id: Text,
+    public role: AuthorityRole,
+    public owns: List<NamePattern>,
 };
 
 // -----------------------------------------------------------------------------
@@ -66,10 +67,16 @@ public type Authority is {
 /// so a code path cannot lose the attribution by forgetting to carry it —
 /// it would have nothing to construct.
 public type Resolved is {
-    name: PackageName,
-    authority_id: Text,
-    role: AuthorityRole,
+    private name: PackageName,
+    private authority_id: Text,
+    private role: AuthorityRole,
 };
+
+implement Resolved {
+    /// Read the selected configured owner without exposing mutable attribution.
+    public fn authority_id(&self) -> Text { self.authority_id.clone() }
+    public fn role(&self) -> AuthorityRole { self.role.clone() }
+}
 
 /// Why a resolution did not produce exactly one answer.
 ///

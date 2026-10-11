@@ -124,7 +124,7 @@ fn shadowing_node() -> List<Authority> {
 fn describe(label: &Text, authorities: &List<Authority>, name: &Text) {
     let n = PackageName(name.clone());
     match resolve_authority(authorities, &n) {
-        Ok(r) => print(f"{label}: {name} -> {r.authority_id}"),
+        Ok(r) => print(f"{label}: {name} -> {r.authority_id()}"),
         Err(ResolutionError.AmbiguousAuthority(who)) =>
             print(f"{label}: {name} -> refused, claimed by {who.len()}"),
         Err(ResolutionError.NoAuthority) =>

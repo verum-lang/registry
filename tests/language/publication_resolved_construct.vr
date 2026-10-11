@@ -1,0 +1,8 @@
+// T1722 negative: configuration data cannot forge a resolution result.
+module verum_registry.tests.publication_resolved_construct;
+mount verum_registry.protocol.authority.{Resolved, PackageName, AuthorityRole};
+
+fn forged_resolution() -> Resolved {
+    Resolved { name: PackageName("widget"), authority_id: "local", role: AuthorityRole.Local }
+}
+fn main() {}

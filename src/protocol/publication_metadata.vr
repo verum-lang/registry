@@ -14,36 +14,36 @@ public type DecodedDependency is
     | Detailed(DecodedDependencyOptions);
 
 public type DecodedDependencyOptions is {
-    version_spelling: Text,
-    features: Maybe<List<Text>>,
-    optional: Maybe<Bool>,
-    default_features: Maybe<Bool>,
+    public version_spelling: Text,
+    public features: Maybe<List<Text>>,
+    public optional: Maybe<Bool>,
+    public default_features: Maybe<Bool>,
 };
 
 /// Typed wire data, not an admitted publication. Name, exact version and
 /// checksum spellings must become validated domain values during admission.
 /// Source text confers no authority, timestamp, signature or proof status.
 public type DecodedSourceMetadata is {
-    name_spelling: Text,
-    version_spelling: Text,
-    description: Maybe<Text>,
-    authors: List<Text>,
-    license: Maybe<Text>,
-    repository: Maybe<Text>,
-    homepage: Maybe<Text>,
-    keywords: List<Text>,
-    categories: List<Text>,
-    readme: Maybe<Text>,
-    dependencies: Map<Text, DecodedDependency>,
-    features: Map<Text, List<Text>>,
-    checksum_spelling: Text,
+    public name_spelling: Text,
+    public version_spelling: Text,
+    public description: Maybe<Text>,
+    public authors: List<Text>,
+    public license: Maybe<Text>,
+    public repository: Maybe<Text>,
+    public homepage: Maybe<Text>,
+    public keywords: List<Text>,
+    public categories: List<Text>,
+    public readme: Maybe<Text>,
+    public dependencies: Map<Text, DecodedDependency>,
+    public features: Map<Text, List<Text>>,
+    public checksum_spelling: Text,
 };
 
 /// The next admission stage receives decoded source metadata and exact bytes.
 /// No catalog or storage mutation has occurred, and no capability is minted.
 public type DecodedPublication is {
-    metadata: DecodedSourceMetadata,
-    archive: List<Byte>,
+    public metadata: DecodedSourceMetadata,
+    public archive: List<Byte>,
 };
 
 public type MetadataError is
