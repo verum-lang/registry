@@ -23,6 +23,20 @@ RUNNER = Path("tools/run_publication_envelope.py")
 NEW_HEADER = b"module verum_registry.main;\n"
 MANIFEST = b'[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n'
 COMPONENTS = {
+    "manifest": {
+        "task": "T1759",
+        "modules": (Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr"),
+                    Path("src/node/publication_manifest.vr")),
+        "fixture": Path("tests/publication_manifest.vr"),
+        "expected": Path("tests/publication_manifest.expected"),
+        "header": b"module verum_registry.tests.publication_manifest;\n",
+        "scope": (
+            "Check manifest/source-metadata agreement with shared TOML and SemVer, "
+            "including exact dependency option presence. This does not establish "
+            "archive validity, checksum, README content, authentication, storage or AOT."
+        ),
+    },
     "envelope": {
         "task": "T1652",
         "modules": (Path("src/protocol/publication.vr"),),
