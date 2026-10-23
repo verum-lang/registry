@@ -1,0 +1,79 @@
+module verum_registry.tests.publication_encoding;
+
+mount verum_registry.protocol.publication_metadata.{DecodedSourceMetadata, decode_source_metadata};
+mount verum_registry.protocol.publication_encoding.{MetadataEncodingError, encode_source_metadata};
+
+fn baseline() -> Text {
+    """{"name":"codec","version":"1.2.3","description":null,"authors":[],"license":null,"repository":null,"homepage":null,"keywords":[],"categories":[],"readme":null,"dependencies":{},"features":{},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}"""
+}
+
+fn decoded(source: &Text) -> DecodedSourceMetadata {
+    match decode_source_metadata(source, 1048576) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("valid source metadata must decode"),
+    }
+}
+
+fn encoded(source: &Text) -> Text {
+    match encode_source_metadata(&decoded(source), 1048576) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("bounded source metadata must encode"),
+    }
+}
+
+fn main() {
+    let simple = baseline();
+    assert_eq(encoded(&simple), simple);
+    let full = simple
+        .replace(&"\"description\":null", &"\"description\":\"quoted \\\"λ\\\"\\nline\\tend\\u0000\"")
+        .replace(&"\"authors\":[]", &"\"authors\":[\"first\",\"second\"]")
+        .replace(&"\"license\":null", &"\"license\":\"MIT\"")
+        .replace(&"\"repository\":null", &"\"repository\":\"https://example.invalid/repo\"")
+        .replace(&"\"homepage\":null", &"\"homepage\":\"https://example.invalid/\"")
+        .replace(&"\"keywords\":[]", &"\"keywords\":[\"json\",\"bytes\"]")
+        .replace(&"\"categories\":[]", &"\"categories\":[\"encoding\"]")
+        .replace(&"\"readme\":null", &"\"readme\":\"line1\\r\\nline2\\\\path\"")
+        .replace(&"\"dependencies\":{}", &"\"dependencies\":{\"z\":\"*\",\"a\":{\"version\":\"^1\",\"features\":[],\"optional\":false,\"default_features\":true}}")
+        .replace(&"\"features\":{}", &"\"features\":{\"z\":[\"a\",\"z\"],\"a\":[]}");
+    let stable = encoded(&full);
+    assert_eq(encoded(&stable), stable);
+    assert(stable.contains(&"\"dependencies\":{\"a\":{\"version\":\"^1\",\"features\":[],\"optional\":false,\"default_features\":true},\"z\":\"*\"}"));
+    assert(stable.contains(&"\"features\":{\"a\":[],\"z\":[\"a\",\"z\"]}"));
+    let restored = decoded(&stable);
+    assert_eq(restored.authors[0], "first");
+    assert_eq(restored.authors[1], "second");
+    assert_eq(restored.keywords[1], "bytes");
+    assert_eq(restored.categories[0], "encoding");
+    match restored.license { Maybe.Some(text) => assert_eq(text, "MIT"), _ => panic("license was lost") }
+    match restored.repository { Maybe.Some(text) => assert_eq(text, "https://example.invalid/repo"), _ => panic("repository was lost") }
+    match restored.homepage { Maybe.Some(text) => assert_eq(text, "https://example.invalid/"), _ => panic("homepage was lost") }
+    match restored.description {
+        Maybe.Some(text) => assert_eq(text, "quoted \"λ\"\nline\tend\0"),
+        _ => panic("description was lost"),
+    }
+    match restored.readme {
+        Maybe.Some(text) => assert_eq(text, "line1\r\nline2\\path"),
+        _ => panic("readme was lost"),
+    }
+    let reordered = full
+        .replace(&"\"name\":\"codec\",\"version\":\"1.2.3\"", &"\"version\" : \"1.2.3\", \"name\":\"codec\"")
+        .replace(&"{\"z\":[\"a\",\"z\"],\"a\":[]}", &"{\"a\":[],\"z\":[\"a\",\"z\"]}")
+        .replace(&"\"version\":\"^1\",\"features\":[],\"optional\":false,\"default_features\":true", &"\"default_features\":true,\"optional\":false,\"features\":[],\"version\":\"^1\"");
+    assert_eq(encoded(&reordered), stable);
+    // Lists and option values remain significant even when object order does not.
+    assert(encoded(&full.replace(&"[\"first\",\"second\"]", &"[\"second\",\"first\"]")) != stable);
+    assert(encoded(&full.replace(&"\"optional\":false", &"\"optional\":null")) != stable);
+    assert(encoded(&full.replace(&"\"features\":[]", &"\"features\":null")) != stable);
+    let absent_options = simple.replace(&"\"dependencies\":{}", &"\"dependencies\":{\"a\":{\"version\":\"^1\"}}");
+    assert(encoded(&absent_options).contains(&"{\"version\":\"^1\",\"features\":null,\"optional\":null,\"default_features\":null}"));
+    let value = decoded(&full);
+    match encode_source_metadata(&value, stable.len()) {
+        Result.Ok(text) => assert_eq(text, stable),
+        _ => panic("exact byte budget must fit"),
+    }
+    assert(encode_source_metadata(&value, stable.len() - 1) is Result.Err(MetadataEncodingError.TooLarge));
+    assert(encode_source_metadata(&value, 1) is Result.Err(MetadataEncodingError.TooLarge));
+    assert(encode_source_metadata(&value, 0) is Result.Err(MetadataEncodingError.InvalidLimit));
+    assert(encode_source_metadata(&value, 1048577) is Result.Err(MetadataEncodingError.InvalidLimit));
+    print("publication-encoding: ok");
+}

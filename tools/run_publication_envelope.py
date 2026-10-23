@@ -50,6 +50,20 @@ COMPONENTS = {
             "archive validity, authentication, persistence, AOT, or whole-registry acceptance."
         ),
     },
+    "encoding": {
+        "task": "T1647",
+        "modules": (Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr"),
+                    Path("src/protocol/publication_encoding.vr")),
+        "fixture": Path("tests/publication_encoding.vr"),
+        "expected": Path("tests/publication_encoding.expected"),
+        "header": b"module verum_registry.tests.publication_encoding;\n",
+        "scope": (
+            "Run bounded, stable source-metadata serialization and strict decoding.\n\n"
+            "Checks field retention, object ordering, escaping and exact byte limits; "
+            "does not establish archive admission, persistence or HTTP publication."
+        ),
+    },
     "auth": {
         "task": "T1636",
         "modules": (Path("src/protocol/authority.vr"),
