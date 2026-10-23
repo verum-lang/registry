@@ -1,0 +1,204 @@
+module verum_registry.node.publication_archive;
+
+mount core.archive.tar.{EntryType, TarReadLimits, TarReadError, read_archive_strict};
+mount core.base.semver.SemVer;
+mount core.compress.CompressError;
+mount core.compress.mod_gzip.Gzip;
+mount verum_registry.protocol.publication_metadata.DecodedPublication;
+mount verum_registry.node.publication_manifest.{ManifestAgreementError, verify_manifest_metadata};
+mount verum_registry.node.publication_record.publication_checksum;
+
+public type ArchiveAdmissionLimits is {
+    public expanded_bytes: Int,
+    public entries: Int,
+    public entry_bytes: Int,
+    public manifest_bytes: Int,
+    public path_bytes: Int,
+};
+
+public fn default_archive_limits() -> ArchiveAdmissionLimits {
+    ArchiveAdmissionLimits {
+        expanded_bytes: 268435456, entries: 16384, entry_bytes: 67108864,
+        manifest_bytes: 1048576, path_bytes: 4096,
+    }
+}
+
+public type ArchiveAdmissionError is
+    | InvalidLimits | InvalidName | InvalidVersion | InvalidChecksum
+    | ChecksumMismatch | TooLarge | Compression | Tar
+    | UnsafePath | DuplicatePath | UnsupportedEntry
+    | MissingManifest | ManifestEncoding | Manifest(ManifestAgreementError)
+    | ReadmeMismatch;
+
+fn valid_limits(limits: &ArchiveAdmissionLimits) -> Bool {
+    limits.expanded_bytes >= 1024 && limits.expanded_bytes <= 268435456
+        && limits.entries > 0 && limits.entries <= 16384
+        && limits.entry_bytes > 0 && limits.entry_bytes <= 67108864
+        && limits.manifest_bytes > 0 && limits.manifest_bytes <= 1048576
+        && limits.path_bytes > 0 && limits.path_bytes <= 4096
+}
+
+/// Source v1 uses the CLI's unscoped name grammar. Scoped federation names
+/// require their own client/server protocol support before publication.
+public fn valid_publication_name(name: &Text) -> Bool {
+    if name.len() == 0 || name.len() > 4096 || name.starts_with(&"-") || name.ends_with(&"-") {
+        return false;
+    }
+    for character in name.chars() {
+        if !character.is_alphanumeric() && character != '_' && character != '-' { return false; }
+    }
+    true
+}
+
+public fn valid_publication_version(version: &Text) -> Bool {
+    if version.len() == 0 || version.len() > 4096 { return false; }
+    SemVer.parse(version) is Result.Ok(_)
+}
+
+fn checksum_valid(checksum: &Text) -> Bool {
+    if checksum.len() != 64 { return false; }
+    for byte in checksum.bytes() {
+        if !((byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)) { return false; }
+    }
+    true
+}
+
+fn component_valid(component: &Text) -> Bool {
+    if component.len() == 0 || component == "." || component == ".."
+        || component.ends_with(&".") || component.ends_with(&" ") { return false; }
+    for byte in component.bytes() {
+        if byte < 0x20 || byte == 0x7f || byte == 0x5c || byte == 0x3a
+            || byte == 0x2a || byte == 0x3f || byte == 0x22 || byte == 0x3c || byte == 0x3e || byte == 0x7c {
+            return false;
+        }
+    }
+    // Device aliases remain special on Windows even with a file extension.
+    let pieces = component.split(&".");
+    let stem = pieces[0].to_ascii_lowercase();
+    if stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" { return false; }
+    if stem.len() == 4 && (stem.starts_with(&"com") || stem.starts_with(&"lpt")) {
+        let last = stem.as_bytes()[3];
+        if last >= 0x31 && last <= 0x39 { return false; }
+    }
+    true
+}
+
+fn register_path(
+    path: &Text, directory: Bool, seen: &mut Map<Text, Bool>, parents: &mut Map<Text, Bool>,
+) -> Result<Text, ArchiveAdmissionError> {
+    let normalized = if directory && path.ends_with(&"/") {
+        path.slice(0, path.len() - 1)
+    } else { path.clone() };
+    let components = normalized.split(&"/");
+    let mut prefix = Text.new();
+    let mut index = 0;
+    while index < components.len() {
+        let component = &components[index];
+        if !component_valid(component) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
+        if index > 0 { prefix.push_str(&"/"); }
+        prefix.push_str(component);
+        if index + 1 < components.len() {
+            if seen.get(&prefix) is Maybe.Some(false) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
+            parents.insert(prefix.clone(), true);
+        }
+        index = index + 1;
+    }
+    if seen.contains_key(&normalized) { return Result.Err(ArchiveAdmissionError.DuplicatePath); }
+    if !directory && parents.contains_key(&normalized) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
+    seen.insert(normalized.clone(), directory);
+    Result.Ok(normalized)
+}
+
+/// Validate the entire compressed archive before mutation. This pure check
+/// returns no authentication capability and cannot create a publication receipt.
+/// Only regular files/directories are admitted; extraction is never performed.
+public fn validate_publication_archive(
+    publication: &DecodedPublication, limits: &ArchiveAdmissionLimits,
+) -> Result<(), ArchiveAdmissionError> {
+    if !valid_limits(limits) { return Result.Err(ArchiveAdmissionError.InvalidLimits); }
+    let metadata = &publication.metadata;
+    if !valid_publication_name(&metadata.name_spelling) { return Result.Err(ArchiveAdmissionError.InvalidName); }
+    if !valid_publication_version(&metadata.version_spelling) { return Result.Err(ArchiveAdmissionError.InvalidVersion); }
+    if !checksum_valid(&metadata.checksum_spelling) { return Result.Err(ArchiveAdmissionError.InvalidChecksum); }
+    if publication.archive.len() > 67108864 { return Result.Err(ArchiveAdmissionError.TooLarge); }
+    if publication_checksum(publication.archive.as_slice()) != metadata.checksum_spelling {
+        return Result.Err(ArchiveAdmissionError.ChecksumMismatch);
+    }
+    let mut expanded: List<Byte> = List.new();
+    match Gzip.decode_single(publication.archive.as_slice(), limits.expanded_bytes, &mut expanded) {
+        Result.Ok(_) => {},
+        Result.Err(CompressError.OutputTooLarge { .. }) => return Result.Err(ArchiveAdmissionError.TooLarge),
+        Result.Err(_) => return Result.Err(ArchiveAdmissionError.Compression),
+    }
+    let tar_limits = TarReadLimits {
+        max_input_bytes: limits.expanded_bytes, max_entries: limits.entries,
+        max_entry_bytes: limits.entry_bytes, max_total_content_bytes: limits.expanded_bytes,
+        max_extensions: limits.entries * 2, max_extension_bytes: 8388608,
+        max_text_bytes: limits.path_bytes, max_trailing_padding_bytes: 1048576,
+    };
+    let entries = match read_archive_strict(expanded.as_slice(), &tar_limits) {
+        Result.Ok(value) => value,
+        Result.Err(TarReadError.LimitExceeded(_)) => return Result.Err(ArchiveAdmissionError.TooLarge),
+        Result.Err(_) => return Result.Err(ArchiveAdmissionError.Tar),
+    };
+    let mut seen: Map<Text, Bool> = Map.new();
+    let mut parents: Map<Text, Bool> = Map.new();
+    let mut manifest: Maybe<Text> = Maybe.None;
+    let mut readme_matches = false;
+    for entry in entries.iter() {
+        let directory = match entry.entry_type() {
+            EntryType.RegularFile => false,
+            EntryType.Directory => true,
+            _ => return Result.Err(ArchiveAdmissionError.UnsupportedEntry),
+        };
+        let path = register_path(entry.path(), directory, &mut seen, &mut parents)?;
+        if path == "Verum.toml" {
+            if directory { return Result.Err(ArchiveAdmissionError.MissingManifest); }
+            if entry.content().len() > limits.manifest_bytes { return Result.Err(ArchiveAdmissionError.TooLarge); }
+            let source = match Text.from_utf8(entry.content().as_slice()) {
+                Result.Ok(value) => value,
+                Result.Err(_) => return Result.Err(ArchiveAdmissionError.ManifestEncoding),
+            };
+            manifest = Maybe.Some(source);
+        }
+        // Null is valid even with an archived README (the CLI's default).
+        // A claimed README body must actually occur in a recognized root file.
+        if !directory && (path == "README.md" || path == "README.txt" || path == "README") {
+            match &metadata.readme {
+                Maybe.Some(expected) => {
+                    if entry.content().len() == expected.len() {
+                        match Text.from_utf8(entry.content().as_slice()) {
+                            Result.Ok(actual) => { if actual == expected { readme_matches = true; } },
+                            Result.Err(_) => {},
+                        }
+                    }
+                },
+                Maybe.None => {},
+            }
+        }
+    }
+    let source = match manifest {
+        Maybe.Some(value) => value,
+        Maybe.None => return Result.Err(ArchiveAdmissionError.MissingManifest),
+    };
+    match verify_manifest_metadata(&source, metadata, limits.manifest_bytes) {
+        Result.Ok(()) => {},
+        Result.Err(error) => return Result.Err(ArchiveAdmissionError.Manifest(error)),
+    }
+    if (metadata.readme is Maybe.Some(_)) && !readme_matches {
+        return Result.Err(ArchiveAdmissionError.ReadmeMismatch);
+    }
+    Result.Ok(())
+}
+
+implement ArchiveAdmissionError {
+    public fn status_code(&self) -> Int {
+        match self {
+            ArchiveAdmissionError.InvalidLimits => 500,
+            ArchiveAdmissionError.InvalidName | ArchiveAdmissionError.InvalidVersion
+                | ArchiveAdmissionError.InvalidChecksum => 400,
+            ArchiveAdmissionError.TooLarge => 413,
+            _ => 422,
+        }
+    }
+}
