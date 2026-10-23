@@ -1,0 +1,235 @@
+// T1636: actual request preparation without publication or storage mutation.
+module verum_registry.tests.publication_prepare;
+
+mount core.net.http.{Method, Headers};
+mount core.net.weft.handler.WeftRequest;
+mount core.encoding.json.JsonErrorKind;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+mount verum_registry.protocol.publication.{PublicationLimits, EnvelopeError, publication_limits};
+mount verum_registry.protocol.publication_metadata.{DecodedDependency, MetadataError, PublicationDecodeError};
+mount verum_registry.node.publication_auth.{CredentialStore, decode_credentials};
+mount verum_registry.node.publication_prepare.{PreparedContents, PreparationError, prepare_publication};
+
+fn token() -> Text { "vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }
+
+fn authorities() -> List<Authority> {
+    [Authority { id: "local", role: AuthorityRole.Local, owns: [
+        NamePattern.Exact("widget"), NamePattern.Exact("other-widget"),
+    ] }]
+}
+
+fn credentials() -> CredentialStore {
+    let source = """{"version":1,"principals":[{"id":"alice","grants":[{"authority":"local","names":[{"exact":"widget"}]}]}],"credentials":[{"id":"active","principal":"alice","token_sha256":"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee","active":true}]}""";
+    match decode_credentials(&source, &authorities()) {
+        Result.Ok(store) => store, _ => panic("fixture credential configuration"),
+    }
+}
+
+fn metadata() -> Text {
+    """{"name":"widget","version":"1.2.3","description":"λ","authors":["Alice"],"license":null,"repository":null,"homepage":null,"keywords":[],"categories":[],"readme":null,"dependencies":{"codec":{"version":"^1","features":[],"optional":false,"default_features":false}},"features":{"default":["fast"]},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}"""
+}
+
+fn limits(metadata_bytes: Int, archive_bytes: Int) -> PublicationLimits {
+    match publication_limits(metadata_bytes, archive_bytes) {
+        Result.Ok(value) => value, _ => panic("fixture publication limits"),
+    }
+}
+
+fn frame(source: &Text) -> List<Byte> {
+    let mut body: List<Byte> = List.new();
+    let mut length = source.as_bytes().len();
+    let mut width = 0;
+    while width < 4 {
+        body.push((length % 256) as Byte);
+        length = length / 256;
+        width = width + 1;
+    }
+    for byte in source.bytes() { body.push(byte); }
+    for byte in [5_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8,
+                 31_u8, 139_u8, 0_u8, 255_u8, 13_u8] { body.push(byte); }
+    body
+}
+
+fn request(source: &Text) -> WeftRequest {
+    let mut headers = Headers.new();
+    headers.set(&"content-type", &"application/vnd.verum.cog-publish.v1");
+    headers.set(&"authorization", &f"Bearer {token()}");
+    WeftRequest.new(Method.Post, "/api/v1/cogs/publish", Maybe.None, headers, frame(source))
+}
+
+fn prepared(req: &WeftRequest) -> PreparedContents {
+    match prepare_publication(req, &credentials(), &authorities(), &limits(1024, 5)) {
+        Result.Ok(value) => value.into_parts(),
+        Result.Err(_) => panic("valid authenticated request refused"),
+    }
+}
+
+fn failure(req: &WeftRequest) -> PreparationError {
+    match prepare_publication(req, &credentials(), &authorities(), &limits(1024, 5)) {
+        Result.Err(error) => error,
+        Result.Ok(_) => panic("request negative accepted"),
+    }
+}
+
+fn status(req: &WeftRequest, expected: Int) {
+    let error = failure(req);
+    assert_eq(error.status_code(), expected);
+    let response = error.response();
+    assert(response.is_error());
+    assert_eq(response.body_text(), "publication request refused");
+    match response.content_type() {
+        Maybe.Some(value) => assert_eq(value, "text/plain; charset=utf-8"),
+        _ => panic("refusal content type"),
+    }
+}
+
+fn owned_preparation() {
+    let mut source = metadata();
+    let mut req = request(&source);
+    let result = prepared(&req);
+    // Mutate every source byte after preparation, including metadata/archive.
+    let mut index = 0;
+    while index < req.body.len() { req.body[index] = 0_u8; index = index + 1; }
+    req.headers.set(&"authorization", &"Bearer changed");
+    source = "changed";
+    assert_eq(source, "changed");
+    assert_eq(result.principal_id(), "alice");
+    assert_eq(result.credential_id(), "active");
+    assert_eq(result.authority_id(), "local");
+    let publication = result.publication_snapshot();
+    assert_eq(publication.metadata.name_spelling, "widget");
+    assert_eq(publication.metadata.version_spelling, "1.2.3");
+    assert_eq(publication.metadata.authors[0], "Alice");
+    match publication.metadata.description {
+        Maybe.Some(value) => assert_eq(value, "λ"), _ => panic("owned description"),
+    }
+    match publication.metadata.dependencies.get(&"codec") {
+        Maybe.Some(DecodedDependency.Detailed(value)) => {
+            assert_eq(value.version_spelling, "^1");
+            assert(value.optional is Maybe.Some(false));
+            assert(value.default_features is Maybe.Some(false));
+            match value.features {
+                Maybe.Some(values) => assert_eq(values.len(), 0), _ => panic("owned empty option"),
+            }
+        },
+        _ => panic("owned dependency options"),
+    }
+    match publication.metadata.features.get(&"default") {
+        Maybe.Some(values) => assert_eq(values[0], "fast"), _ => panic("owned feature members"),
+    }
+    let expected: List<Byte> = [31_u8, 139_u8, 0_u8, 255_u8, 13_u8];
+    assert_eq(publication.archive.len(), expected.len());
+    let mut byte_index = 0;
+    while byte_index < expected.len() {
+        assert_eq(publication.archive[byte_index], expected[byte_index]);
+        byte_index = byte_index + 1;
+    }
+}
+
+fn transport_refusals() {
+    let mut req = request(&metadata());
+    req.path = "/api/v1/cogs/publish/";
+    assert(failure(&req) is PreparationError.NotPublicationRoute);
+    status(&req, 404);
+    req = request(&metadata()); req.method = Method.Get;
+    assert(failure(&req) is PreparationError.MethodNotAllowed);
+    status(&req, 405);
+    req = request(&metadata()); req.raw_query = Maybe.Some("authority=local");
+    assert(failure(&req) is PreparationError.MalformedRequest);
+    req = request(&metadata()); req.raw_query = Maybe.Some("");
+    assert_eq(prepared(&req).principal_id(), "alice");
+    req = request(&metadata()); req.headers.append(&"Authorization", &f"Bearer {token()}");
+    assert(failure(&req) is PreparationError.MalformedRequest);
+    status(&req, 400);
+    req = request(&metadata()); req.headers.append(&"Content-Type", &"application/vnd.verum.cog-publish.v1");
+    assert(failure(&req) is PreparationError.MalformedRequest);
+    req = request(&metadata()); req.headers.remove(&"content-type");
+    assert(failure(&req) is PreparationError.UnsupportedMediaType);
+    status(&req, 415);
+    for media in ["application/json", "application/vnd.verum.cog-publish.v1; charset=utf-8",
+                  " application/vnd.verum.cog-publish.v1", "application/vnd.verum.cog-publiſh.v1",
+                  "", " \t "] {
+        req = request(&metadata()); req.headers.set(&"content-type", &media);
+        assert(failure(&req) is PreparationError.UnsupportedMediaType);
+    }
+    req = request(&metadata()); req.headers.set(&"content-encoding", &"identity");
+    assert(failure(&req) is PreparationError.UnsupportedMediaType);
+    req = request(&metadata()); req.headers.set(&"content-type", &"\tAPPLICATION/VND.VERUM.COG-PUBLISH.V1 \t");
+    assert_eq(prepared(&req).principal_id(), "alice");
+    req = request(&metadata());
+    while req.body.len() <= 1024 + 5 + 12 { req.body.push(0_u8); }
+    assert(failure(&req) is PreparationError.RequestTooLarge);
+    status(&req, 413);
+}
+
+fn authentication_refusals() {
+    let mut req = request(&metadata());
+    let changed_token = token().replace(&"1f", &"1e");
+    req.headers.remove(&"authorization");
+    assert(failure(&req) is PreparationError.Unauthenticated);
+    status(&req, 401);
+    for value in ["", " ", "\t \t", "Basic x", "Bearer", "Bearer  ", "Bearer\tvrp1_x",
+                  "abcdeλ payload", "Beareλ payload", "Bear€ payload", f"Bearer {token()},x",
+                  f"Bearer {token()} x", f" Bearer {token()}", f"Bearer {token()} ",
+                  f"Bearer {changed_token}"] {
+        req = request(&metadata()); req.headers.set(&"authorization", &value);
+        assert(failure(&req) is PreparationError.Unauthenticated);
+    }
+    req = request(&metadata()); req.headers.set(&"authorization", &f" \tbeAreR  {token()}\t ");
+    assert_eq(prepared(&req).principal_id(), "alice");
+    let padding = " ".repeat(180);
+    let at_limit = f"Bearer {token()}{padding}";
+    assert_eq(at_limit.len(), 256);
+    req = request(&metadata()); req.headers.set(&"authorization", &at_limit);
+    assert_eq(prepared(&req).principal_id(), "alice");
+    req.headers.set(&"authorization", &f"{at_limit} ");
+    assert(failure(&req) is PreparationError.Unauthenticated);
+    // Authentication precedes schema decoding for a received body.
+    req = request(&"not-json"); req.headers.set(&"authorization", &"Bearer invalid");
+    assert(failure(&req) is PreparationError.Unauthenticated);
+}
+
+fn typed_decode_and_scope_refusals() {
+    let req = request(&metadata().replace(&"\"widget\"", &"\"other-widget\""));
+    assert(failure(&req) is PreparationError.Forbidden);
+    status(&req, 403);
+    let mut local_names: List<NamePattern> = List.new();
+    local_names.push(NamePattern.Exact("widget"));
+    let mut other_names: List<NamePattern> = List.new();
+    other_names.push(NamePattern.Exact("widget"));
+    let mut owners: List<Authority> = List.new();
+    owners.push(Authority { id: "local", role: AuthorityRole.Local, owns: local_names });
+    owners.push(Authority { id: "another", role: AuthorityRole.Local, owns: other_names });
+    match prepare_publication(&request(&metadata()), &credentials(), &owners, &limits(1024, 5)) {
+        Result.Err(PreparationError.AuthorityConflict) => {}, _ => panic("ambiguous authority"),
+    }
+    assert_eq(PreparationError.AuthorityConflict.status_code(), 409);
+    let mut req = request(&metadata()); req.body = List.new();
+    assert(failure(&req) is PreparationError.Decode(PublicationDecodeError.Envelope(EnvelopeError.Truncated)));
+    let forbidden_field = metadata().replace(&"\"name\":", &"\"as_authority\":\"local\",\"name\":");
+    match failure(&request(&forbidden_field)) {
+        PreparationError.Decode(PublicationDecodeError.Metadata(MetadataError.UnknownField(path))) => assert_eq(path, "as_authority"),
+        _ => panic("body authority must remain an unknown source field"),
+    }
+    let missing = metadata().replace(&"\"description\":\"λ\",", &"");
+    assert(failure(&request(&missing)) is PreparationError.Decode(PublicationDecodeError.Metadata(MetadataError.MissingField("description"))));
+    let duplicate = metadata().replace(&"\"name\":\"widget\"", &"\"name\":\"widget\",\"\\u006eame\":\"widget\"");
+    match failure(&request(&duplicate)) {
+        PreparationError.Decode(PublicationDecodeError.Metadata(MetadataError.Syntax(error))) => assert(error.kind is JsonErrorKind.DuplicateKey),
+        _ => panic("strict duplicate-key evidence must survive preparation"),
+    }
+    match prepare_publication(&request(&metadata()), &credentials(), &authorities(), &limits(8, 5)) {
+        Result.Err(PreparationError.RequestTooLarge) => {}, _ => panic("body bound before parsing"),
+    }
+    req = request(&metadata()); req.body = [1_u8, 4_u8, 0_u8, 0_u8];
+    assert(failure(&req) is PreparationError.Decode(PublicationDecodeError.Envelope(EnvelopeError.MetadataTooLarge)));
+    status(&req, 413);
+}
+
+fn main() {
+    owned_preparation();
+    transport_refusals();
+    authentication_refusals();
+    typed_decode_and_scope_refusals();
+    print("publication-prepare: ok");
+}

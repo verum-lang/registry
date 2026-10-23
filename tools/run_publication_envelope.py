@@ -50,6 +50,128 @@ COMPONENTS = {
             "archive validity, authentication, persistence, AOT, or whole-registry acceptance."
         ),
     },
+    "auth": {
+        "task": "T1636",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/node/publication_auth.vr")),
+        "fixture": Path("tests/publication_auth.vr"),
+        "expected": Path("tests/publication_auth.expected"),
+        "header": b"module verum_registry.tests.publication_auth;\n",
+        "scope": (
+            "Run unmodified credential configuration, actual SHA-256 authentication "
+            "and authority/scope modules in an isolated interpreter project.\n\n"
+            "This component does not establish file loading, request preparation, "
+            "HTTP receive bounds, timing resistance, semantic publication admission, "
+            "persistence, private-field/affine enforcement, or AOT acceptance."
+        ),
+    },
+    "prepare": {
+        "task": "T1636",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr"),
+                    Path("src/node/publication_auth.vr"),
+                    Path("src/node/publication_prepare.vr")),
+        "fixture": Path("tests/publication_prepare.vr"),
+        "expected": Path("tests/publication_prepare.expected"),
+        "header": b"module verum_registry.tests.publication_prepare;\n",
+        "scope": (
+            "Run unmodified authentication and request-preparation modules with the "
+            "actual strict metadata/envelope decoder in an isolated interpreter project.\n\n"
+            "This component checks in-memory request refusals and owned prepared inputs; "
+            "it does not establish HTTP receive limits, file loading, timing resistance, "
+            "semantic admission, persistence, private-field/affine enforcement, or AOT. "
+            "The preparation path produces no successful publication response."
+        ),
+    },
+    "prepare_copy": {
+        "task": "T1722",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr"),
+                    Path("src/node/publication_auth.vr"),
+                    Path("src/node/publication_prepare.vr")),
+        "fixture": Path("tests/publication_prepare_copy.vr"),
+        "expected": Path("tests/publication_prepare_copy.expected"),
+        "header": b"module verum_registry.tests.publication_prepare_copy;\n",
+        "scope": (
+            "Run explicit owned publication snapshot controls through unmodified "
+            "authentication, preparation and strict metadata/envelope modules.\n\n"
+            "Each copy mutation must take effect while retained contents and attribution "
+            "remain unchanged. This is a domain isolation requirement, not a general "
+            "deep-copy contract. It does not establish direct-borrow privacy refusals, "
+            "HTTP receive limits, semantic admission, persistence, or AOT."
+        ),
+    },
+    "prepare_snapshot": {
+        "task": "T1722",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr"),
+                    Path("src/node/publication_auth.vr"),
+                    Path("src/node/publication_prepare.vr")),
+        "fixture": Path("tests/publication_prepare_snapshot.vr"),
+        "expected": Path("tests/publication_prepare_snapshot.expected"),
+        "header": b"module verum_registry.tests.publication_prepare_snapshot;\n",
+        "scope": (
+            "Run independent snapshot shape, option-presence and long UTF-8 mutation "
+            "controls through unmodified production modules.\n\n"
+            "Two snapshots and retained contents must remain independent after actual "
+            "nested edits. Attribution scalar and scope reads are also mutated and "
+            "checked. This separate component does not replace prepare_copy's five "
+            "comparable mutation oracles. It establishes neither general recursive "
+            "language copies nor single-use admission, HTTP service, persistence or AOT."
+        ),
+    },
+    "credentials_file": {
+        "task": "T1636",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/node/publication_auth.vr"),
+                    Path("src/node/publication_credentials_file.vr")),
+        "assets": (Path("tests/fixtures/publication_auth/credentials-v1.json"),),
+        "fixture": Path("tests/publication_credentials_file.vr"),
+        "expected": Path("tests/publication_credentials_file.expected"),
+        "header": b"module verum_registry.tests.publication_credentials_file;\n",
+        "scope": (
+            "Run the unmodified typed credential-file loader, real File/Read path and "
+            "deterministic reader controls with an exact hashed test credential asset.\n\n"
+            "This component does not establish startup wiring, filesystem ownership, "
+            "hot reload, live HTTP publication, durable admission, or AOT."
+        ),
+    },
+    "auth_bounds": {
+        "task": "T1636",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/node/publication_auth.vr")),
+        "fixture": Path("tests/publication_auth_bounds.vr"),
+        "expected": Path("tests/publication_auth_bounds.expected"),
+        "header": b"module verum_registry.tests.publication_auth_bounds;\n",
+        "scope": (
+            "Run exact principal/credential/grant/name collection limits through the "
+            "unmodified credential decoder in an isolated interpreter project.\n\n"
+            "This includes 1024 distinct credentials; a timeout remains incomplete. "
+            "It is no configuration performance or timing-resistance acceptance, "
+            "and does not establish HTTP publication, durable admission, or AOT."
+        ),
+    },
+    "auth_isolation": {
+        "task": "T1636",
+        "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/node/publication_auth.vr")),
+        "appended_fragments": {
+            Path("src/node/publication_auth.vr"): Path("tests/fragments/publication_auth_isolation.vr"),
+        },
+        "fixture": Path("tests/publication_auth_isolation.vr"),
+        "expected": Path("tests/publication_auth_isolation.expected"),
+        "header": b"module verum_registry.tests.publication_auth_isolation;\n",
+        "scope": (
+            "Run private-state ownership controls in a deliberately assembled auth "
+            "module: exact production bytes, one newline, then the hashed test fragment.\n\n"
+            "No production function is replaced. This is distinct from the unmodified "
+            "public auth/prepare components and cannot establish private-field "
+            "enforcement, HTTP publication, durable admission, or AOT."
+        ),
+    },
 }
 
 
@@ -86,6 +208,8 @@ def stop(process):
 def run(args):
     component = COMPONENTS[args.component]
     modules = component["modules"]
+    assets = component.get("assets", ())
+    fragments = component.get("appended_fragments", {})
     fixture = component["fixture"]
     expected = component["expected"]
     old_header = component["header"]
@@ -101,16 +225,27 @@ def run(args):
         raise ValueError("the supplied CLI does not match --expected-cli-sha256")
 
     sources = {path: (ROOT / path).read_bytes()
-               for path in (*modules, fixture, expected, RUNNER)}
+               for path in (*modules, *assets, *fragments.values(), fixture, expected, RUNNER)}
     if sources[fixture].count(old_header) != 1:
         raise ValueError(f"{fixture} must contain exactly one expected entry module header")
     if not sources[expected].strip():
         raise ValueError(f"{expected} must be nonempty")
     inputs = {
-        **{path: sources[path] for path in modules},
+        **{path: sources[path] for path in (*modules, *assets)},
         Path("src/main.vr"): sources[fixture].replace(old_header, NEW_HEADER, 1),
         Path("verum.toml"): MANIFEST,
     }
+    assemblies = []
+    for target, fragment in fragments.items():
+        if target not in modules:
+            raise ValueError(f"fragment target {target} must be a selected production module")
+        inputs[target] = sources[target] + b"\n" + sources[fragment]
+        assemblies.append({
+            "target": str(target), "production_sha256": digest(sources[target]),
+            "fragment": str(fragment), "fragment_sha256": digest(sources[fragment]),
+            "separator_hex": "0a", "assembled_sha256": digest(inputs[target]),
+            "transformation": "Append only: preserve every production byte, then newline and exact test fragment.",
+        })
     source_hashes = {str(path): digest(contents) for path, contents in sources.items()}
     input_hashes = {str(path): digest(contents) for path, contents in inputs.items()}
     evidence = Path(args.evidence_dir).resolve()
@@ -132,6 +267,7 @@ def run(args):
             "source_inputs": source_hashes,
             "project_inputs": input_hashes,
             "entry_transformation": "Only replace the fixture's module header with verum_registry.main.",
+            "module_assemblies": assemblies,
             "cli_sha256": cli_hash,
             "expected_cli_sha256": args.expected_cli_sha256,
             "language_source_commit_supplied": args.language_commit,
@@ -169,6 +305,12 @@ def run(args):
         sources_after = {str(path): file_digest(ROOT / path) for path in sources}
         # Include any added source file: a changed project cannot retain a pass.
         paths_after = set(project.rglob("*.vr")) | {project / "verum.toml"}
+        # Track missing, changed and additional data files in each declared
+        # fixture directory, without treating compiler caches as test inputs.
+        for asset in assets:
+            paths_after.add(project / asset)
+            paths_after.update(path for path in (project / asset.parent).rglob("*")
+                               if path.is_file())
         inputs_after = {str(path.relative_to(project)): file_digest(path)
                         for path in sorted(paths_after)}
         cli_after = file_digest(verum)

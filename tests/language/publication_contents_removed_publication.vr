@@ -1,0 +1,9 @@
+// T1722 negative: the old borrowed publication method is not available.
+module verum_registry.tests.publication_contents_removed_publication;
+mount verum_registry.protocol.publication_metadata.DecodedPublication;
+mount verum_registry.node.publication_prepare.PreparedContents;
+
+fn borrowed_publication(contents: &PreparedContents) -> &DecodedPublication {
+    contents.publication()
+}
+fn main() {}

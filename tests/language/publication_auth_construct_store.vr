@@ -1,0 +1,8 @@
+// T1636 negative: private fields prevent a caller manufacturing a store.
+module verum_registry.tests.publication_auth_construct_store;
+mount verum_registry.node.publication_auth.CredentialStore;
+
+fn forged_store() -> CredentialStore {
+    CredentialStore { principals: List.new(), credentials: List.new() }
+}
+fn main() {}

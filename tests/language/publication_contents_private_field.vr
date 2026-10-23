@@ -1,0 +1,6 @@
+// T1722 negative: consumed preparation still exposes no raw private fields.
+module verum_registry.tests.publication_contents_private_field;
+mount verum_registry.node.publication_prepare.PreparedContents;
+
+fn archive_size(contents: &PreparedContents) -> Int { contents.publication.archive.len() }
+fn main() {}

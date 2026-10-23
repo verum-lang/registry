@@ -36,8 +36,24 @@ component = os.environ["EXPECTED_COMPONENT"]
 modules = [Path("src/protocol/publication.vr")]
 if component == "metadata":
     modules.append(Path("src/protocol/publication_metadata.vr"))
+elif component in ("auth", "auth_bounds", "auth_isolation"):
+    modules = [Path("src/protocol/authority.vr"), Path("src/node/publication_auth.vr")]
+elif component in ("prepare", "prepare_copy", "prepare_snapshot"):
+    modules = [Path("src/protocol/authority.vr"), Path("src/protocol/publication.vr"),
+               Path("src/protocol/publication_metadata.vr"), Path("src/node/publication_auth.vr"),
+               Path("src/node/publication_prepare.vr")]
+elif component == "credentials_file":
+    modules = [Path("src/protocol/authority.vr"), Path("src/node/publication_auth.vr"),
+               Path("src/node/publication_credentials_file.vr")]
+assets = [Path("tests/fixtures/publication_auth/credentials-v1.json")] if component == "credentials_file" else []
+fragments = {Path("src/node/publication_auth.vr"): Path("tests/fragments/publication_auth_isolation.vr")} if component == "auth_isolation" else {}
+for asset in assets:
+    assert asset.read_bytes() == (original / asset).read_bytes()
 for module in modules:
-    assert module.read_bytes() == (original / module).read_bytes()
+    wanted = (original / module).read_bytes()
+    if module in fragments:
+        wanted += b"\n" + (original / fragments[module]).read_bytes()
+    assert module.read_bytes() == wanted
 assert set(Path("src").rglob("*.vr")) == set(modules) | {Path("src/main.vr")}
 fixture_path = Path(f"tests/publication_{component}.vr")
 expected_path = Path(f"tests/publication_{component}.expected")
@@ -66,6 +82,12 @@ if scenario == "stderr_only":
 if scenario == "wrong_component_output":
     sys.stdout.buffer.write(b"publication_envelope: passed\n")
     sys.exit(0)
+if scenario == "preparation_output":
+    sys.stdout.buffer.write(b"publication-prepare: ok\n")
+    sys.exit(0)
+if scenario == "copy_output":
+    sys.stdout.buffer.write(b"publication-prepare-copy: ok\n")
+    sys.exit(0)
 sys.stdout.buffer.write(expected)
 if scenario == "extra":
     sys.stdout.buffer.write(b"unexpected extra output\n")
@@ -92,6 +114,17 @@ if scenario == "project_deleted":
 if scenario == "executable_changed":
     path = Path(sys.argv[0])
     path.write_bytes(path.read_bytes() + b"\n# changed executable\n")
+if scenario == "asset_source_changed":
+    (original / assets[0]).write_bytes(b"{}")
+if scenario == "asset_project_changed":
+    assets[0].write_bytes(b"{}")
+if scenario == "asset_project_deleted":
+    assets[0].unlink()
+if scenario == "asset_project_added":
+    (assets[0].parent / "unexpected.json").write_bytes(b"{}")
+if scenario == "fragment_changed":
+    path = original / next(iter(fragments.values()))
+    path.write_bytes(path.read_bytes() + b"\n// changed fragment\n")
 sys.exit(101 if scenario == "nonzero" else 0)
 '''
 
@@ -105,9 +138,20 @@ class PublicationRunnerControls:
         self.modules = ["src/protocol/publication.vr"]
         if self.component == "metadata":
             self.modules.append("src/protocol/publication_metadata.vr")
+        elif self.component in ("auth", "auth_bounds", "auth_isolation"):
+            self.modules = ["src/protocol/authority.vr", "src/node/publication_auth.vr"]
+        elif self.component in ("prepare", "prepare_copy", "prepare_snapshot"):
+            self.modules = ["src/protocol/authority.vr", "src/protocol/publication.vr",
+                            "src/protocol/publication_metadata.vr", "src/node/publication_auth.vr",
+                            "src/node/publication_prepare.vr"]
+        elif self.component == "credentials_file":
+            self.modules = ["src/protocol/authority.vr", "src/node/publication_auth.vr",
+                            "src/node/publication_credentials_file.vr"]
+        self.assets = ["tests/fixtures/publication_auth/credentials-v1.json"] if self.component == "credentials_file" else []
+        self.fragments = {"src/node/publication_auth.vr": "tests/fragments/publication_auth_isolation.vr"} if self.component == "auth_isolation" else {}
         self.fixture = f"tests/publication_{self.component}.vr"
         self.expected = f"tests/publication_{self.component}.expected"
-        for name in ("tools/run_publication_envelope.py", *self.modules,
+        for name in ("tools/run_publication_envelope.py", *self.modules, *self.assets, *self.fragments.values(),
                      self.fixture, self.expected):
             destination = self.project / name
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -151,12 +195,16 @@ class PublicationRunnerControls:
         self.assertEqual(receipt["cli_sha256"], cli_hash)
         self.assertEqual(receipt["cli_sha256_after"], cli_hash)
         self.assertEqual(set(receipt["source_inputs"]),
-                         {*self.modules, self.fixture, self.expected,
+                         {*self.modules, *self.assets, *self.fragments.values(), self.fixture, self.expected,
                           "tools/run_publication_envelope.py"})
         self.assertEqual(set(receipt["project_inputs"]),
-                         {*self.modules, "src/main.vr", "verum.toml"})
-        for module in self.modules:
-            self.assertEqual(receipt["source_inputs"][module], receipt["project_inputs"][module])
+                         {*self.modules, *self.assets, "src/main.vr", "verum.toml"})
+        for module in (*self.modules, *self.assets):
+            if module in self.fragments:
+                assembled = (self.project / module).read_bytes() + b"\n" + (self.project / self.fragments[module]).read_bytes()
+                self.assertEqual(receipt["project_inputs"][module], hashlib.sha256(assembled).hexdigest())
+            else:
+                self.assertEqual(receipt["source_inputs"][module], receipt["project_inputs"][module])
         self.assertEqual(receipt["source_inputs"], receipt["source_inputs_after"])
         self.assertEqual(receipt["project_inputs"], receipt["project_inputs_after"])
         self.assertFalse(Path(receipt["working_directory"]).exists())
@@ -361,6 +409,213 @@ class PublicationMetadataRunnerTests(PublicationRunnerControls, unittest.TestCas
                     self.assertFalse((self.base / "invoked").exists())
                 finally:
                     path.write_bytes(contents)
+
+
+class PublicationAuthRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "auth"
+
+    def test_auth_receipt_preserves_unmodified_modules_and_narrow_scope(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertEqual(receipt["task"], "T1636")
+        self.assertIn("unmodified", receipt["scope"])
+        self.assertIn("does not establish file loading", receipt["scope"])
+        self.assertIn("timing resistance", receipt["scope"])
+        self.assertNotIn("src/protocol/publication_metadata.vr", receipt["project_inputs"])
+        for path in self.modules:
+            self.assertEqual(receipt["project_inputs"][path], receipt["source_inputs"][path])
+
+    def test_missing_auth_source_cannot_fall_back_to_metadata(self):
+        path = self.project / "src/node/publication_auth.vr"
+        path.unlink()
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(evidence.exists())
+        self.assertFalse((self.base / "invoked").exists())
+
+    def test_changed_authority_source_invalidates_authentication_result(self):
+        result, evidence = self.invoke("shared_source_changed")
+        self.assertEqual(result.returncode, 1)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertFalse(receipt["checks"]["source_unchanged"])
+
+
+class PublicationPreparationRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "prepare"
+
+    def test_preparation_records_unmodified_sources_without_service_acceptance(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertIn("owned prepared inputs", receipt["scope"])
+        self.assertIn("does not establish HTTP receive limits", receipt["scope"])
+        self.assertIn("no successful publication response", receipt["scope"])
+        self.assertNotIn("src/node/publication_credentials_file.vr", receipt["project_inputs"])
+
+    def test_missing_preparation_source_refuses_instead_of_running_auth(self):
+        (self.project / "src/node/publication_prepare.vr").unlink()
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("publication prepare component", result.stderr)
+        self.assertFalse(evidence.exists())
+        self.assertFalse((self.base / "invoked").exists())
+
+
+class PublicationPreparationCopyRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "prepare_copy"
+
+    def test_copy_component_preserves_sources_and_distinguishes_domain_contract(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertEqual(receipt["task"], "T1722")
+        self.assertIn("unmodified", receipt["scope"])
+        self.assertIn("not a general deep-copy contract", receipt["scope"])
+        self.assertIn("explicit owned publication snapshot", receipt["scope"])
+        self.assertIn("retained contents and attribution", receipt["scope"])
+        self.assertNotIn("tests/publication_prepare.vr", receipt["source_inputs"])
+        for module in self.modules:
+            self.assertEqual(receipt["project_inputs"][module], receipt["source_inputs"][module])
+
+    def test_ordinary_prepare_stdout_does_not_satisfy_copy_component(self):
+        result, evidence = self.invoke("preparation_output")
+        self.assertEqual(result.returncode, 1)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertFalse(receipt["checks"]["exact_stdout"])
+        self.assertEqual(receipt["status"], "failed")
+
+    def test_missing_copy_inputs_refuse_before_any_fallback_execution(self):
+        for name in (self.fixture, self.expected, "src/node/publication_prepare.vr"):
+            with self.subTest(name=name):
+                source = self.project / name
+                contents = source.read_bytes()
+                source.unlink()
+                try:
+                    result, evidence = self.invoke()
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("publication prepare_copy component", result.stderr)
+                    self.assertFalse(evidence.exists())
+                    self.assertFalse((self.base / "invoked").exists())
+                finally:
+                    source.write_bytes(contents)
+
+
+class PublicationPreparationSnapshotRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "prepare_snapshot"
+
+    def test_snapshot_component_retains_exact_sources_and_separate_scope(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertEqual(receipt["task"], "T1722")
+        self.assertIn("option-presence and long UTF-8 mutation", receipt["scope"])
+        self.assertIn("does not replace prepare_copy", receipt["scope"])
+        self.assertIn("single-use admission", receipt["scope"])
+        self.assertNotIn("tests/publication_prepare_copy.vr", receipt["source_inputs"])
+        for module in self.modules:
+            self.assertEqual(receipt["project_inputs"][module], receipt["source_inputs"][module])
+
+    def test_copy_success_cannot_satisfy_snapshot_component(self):
+        result, evidence = self.invoke("copy_output")
+        self.assertEqual(result.returncode, 1)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertFalse(receipt["checks"]["exact_stdout"])
+        self.assertEqual(receipt["status"], "failed")
+
+    def test_missing_snapshot_input_refuses_before_execution(self):
+        for name in (self.fixture, self.expected, "src/node/publication_prepare.vr"):
+            with self.subTest(name=name):
+                source = self.project / name
+                contents = source.read_bytes()
+                source.unlink()
+                try:
+                    result, evidence = self.invoke()
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("publication prepare_snapshot component", result.stderr)
+                    self.assertFalse(evidence.exists())
+                    self.assertFalse((self.base / "invoked").exists())
+                finally:
+                    source.write_bytes(contents)
+
+
+class PublicationCredentialsFileRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "credentials_file"
+
+    def test_file_component_tracks_actual_loader_and_test_asset(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertIn("real File/Read path", receipt["scope"])
+        self.assertIn("does not establish startup wiring", receipt["scope"])
+        self.assertNotIn("src/node/publication_prepare.vr", receipt["project_inputs"])
+
+    def test_missing_asset_refuses_before_executing_cli(self):
+        (self.project / self.assets[0]).unlink()
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(evidence.exists())
+        self.assertFalse((self.base / "invoked").exists())
+
+    def test_changed_deleted_or_added_asset_invalidates_component(self):
+        original = (self.project / self.assets[0]).read_bytes()
+        for scenario, check in (("asset_source_changed", "source_unchanged"),
+                                ("asset_project_changed", "project_unchanged"),
+                                ("asset_project_deleted", "project_unchanged"),
+                                ("asset_project_added", "project_unchanged")):
+            with self.subTest(scenario=scenario):
+                (self.project / self.assets[0]).write_bytes(original)
+                result, evidence = self.invoke(scenario)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                receipt = json.loads((evidence / "result.json").read_text())
+                self.assertFalse(receipt["checks"][check])
+
+
+class PublicationAuthBoundsRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "auth_bounds"
+
+    def test_bounds_component_records_the_distinct_expensive_gate(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertIn("1024 distinct credentials", receipt["scope"])
+        self.assertIn("timeout remains incomplete", receipt["scope"])
+        self.assertEqual(receipt["module_assemblies"], [])
+
+
+class PublicationAuthIsolationRunnerTests(PublicationRunnerControls, unittest.TestCase):
+    component = "auth_isolation"
+
+    def test_isolation_records_exact_production_prefix_and_appended_test_fragment(self):
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertIn("deliberately assembled", receipt["scope"])
+        self.assertIn("cannot establish private-field enforcement", receipt["scope"])
+        self.assertEqual(len(receipt["module_assemblies"]), 1)
+        assembly = receipt["module_assemblies"][0]
+        target, fragment = next(iter(self.fragments.items()))
+        self.assertEqual(assembly["target"], target)
+        self.assertEqual(assembly["fragment"], fragment)
+        self.assertEqual(assembly["production_sha256"], receipt["source_inputs"][target])
+        self.assertEqual(assembly["fragment_sha256"], receipt["source_inputs"][fragment])
+        self.assertEqual(assembly["assembled_sha256"], receipt["project_inputs"][target])
+        self.assertEqual(assembly["separator_hex"], "0a")
+        started = json.loads((evidence / "started.json").read_text())
+        self.assertEqual(started["module_assemblies"], receipt["module_assemblies"])
+
+    def test_changed_fragment_invalidates_the_result(self):
+        result, evidence = self.invoke("fragment_changed")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        receipt = json.loads((evidence / "result.json").read_text())
+        self.assertFalse(receipt["checks"]["source_unchanged"])
+
+    def test_missing_fragment_does_not_run_public_auth_as_a_substitute(self):
+        (self.project / next(iter(self.fragments.values()))).unlink()
+        result, evidence = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(evidence.exists())
+        self.assertFalse((self.base / "invoked").exists())
 
 
 if __name__ == "__main__":

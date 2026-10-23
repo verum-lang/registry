@@ -1,0 +1,9 @@
+// T1636 positive: public ownership transfer remains available exactly once.
+module verum_registry.tests.publication_prepare_consume;
+mount verum_registry.node.publication_prepare.PreparedPublication;
+
+fn consume_once(prepared: PreparedPublication) -> Int {
+    let contents = prepared.into_parts();
+    contents.publication_snapshot().archive.len()
+}
+fn main() {}
