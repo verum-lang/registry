@@ -321,15 +321,21 @@ public fn decode_credentials(source: &Text, authorities: &List<Authority>) -> Re
     let values = array(&credential_values, &"credentials")?;
     if values.len() > 1024 { return Result.Err(CredentialConfigError.InvalidSchema("credentials")); }
     let mut credentials: List<StoredCredential> = List.with_capacity(values.len());
+    let mut credential_ids: Map<Text, Bool> = Map.new();
+    let mut credential_digests: Map<Text, Bool> = Map.new();
     for value in values.iter() {
         let credential = read_credential(value, &principals)?;
-        for earlier in credentials.iter() {
-            let before = earlier.digest.bytes;
-            let after = credential.digest.bytes;
-            if earlier.id.value == credential.id.value || constant_time_eq(&before[..], &after[..]) {
-                return Result.Err(CredentialConfigError.InvalidSchema("credentials"));
-            }
+        // Configuration validation is separate from bearer verification. The
+        // validated digest spelling is canonical lowercase hex, so an index
+        // detects duplicate digests without quadratic byte comparisons.
+        let fields = object(value, &"credentials")?;
+        let digest_key = text_field(fields, &"token_sha256")?;
+        if credential_ids.get(&credential.id.value) is Maybe.Some(_)
+            || credential_digests.get(&digest_key) is Maybe.Some(_) {
+            return Result.Err(CredentialConfigError.InvalidSchema("credentials"));
         }
+        credential_ids.insert(credential.id.value.clone(), true);
+        credential_digests.insert(digest_key, true);
         credentials.push(credential);
     }
     Result.Ok(CredentialStore { principals: principals, credentials: credentials })
