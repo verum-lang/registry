@@ -1,0 +1,99 @@
+module verum_registry.tests.publication_record;
+
+mount verum_registry.protocol.publication_metadata.{DecodedSourceMetadata, decode_source_metadata};
+mount verum_registry.node.publication_record.{
+    DecodedPublicationRecord, publication_checksum, publication_record_key,
+    encode_publication_record, decode_publication_record, same_publication_record,
+};
+
+fn record(credential: Text, timestamp: Int) -> DecodedPublicationRecord {
+    let archive: List<Byte> = [0_u8, 255_u8, 128_u8, 65_u8, 0_u8, 10_u8];
+    let source = """{"name":"widget","version":"1.2.3","description":"λ\nrecord","authors":["Alice"],"license":null,"repository":null,"homepage":null,"keywords":[],"categories":[],"readme":null,"dependencies":{},"features":{},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}""";
+    let mut metadata = decode_source_metadata(&source, 4096).unwrap();
+    metadata.checksum_spelling = publication_checksum(archive.as_slice());
+    DecodedPublicationRecord {
+        principal: "alice", credential: credential, authority: "local",
+        scope_kind: "exact", scope: "widget", published_at: timestamp,
+        metadata: metadata, archive: archive,
+    }
+}
+
+fn roundtrip_and_retry_identity() {
+    let original = record("first", 1729000000);
+    let bytes = encode_publication_record(&original).unwrap();
+    let decoded = decode_publication_record(&bytes).unwrap();
+    assert_eq(decoded.principal, "alice");
+    assert_eq(decoded.credential, "first");
+    assert_eq(decoded.authority, "local");
+    assert_eq(decoded.scope_kind, "exact");
+    assert_eq(decoded.scope, "widget");
+    assert_eq(decoded.published_at, 1729000000);
+    assert_eq(decoded.archive.len(), 6);
+    assert_eq(decoded.archive[1], 255_u8);
+    assert_eq(decoded.archive[2], 128_u8);
+    assert_eq(decoded.metadata.description, Maybe.Some("λ\nrecord"));
+    let repeated = encode_publication_record(&decoded).unwrap();
+    assert_eq(bytes.len(), repeated.len());
+    let mut index = 0;
+    while index < bytes.len() { assert_eq(bytes[index], repeated[index]); index = index + 1; }
+    let mut retry = record("rotated", 1729000900);
+    retry.scope_kind = "scope";
+    retry.scope = "@publisher";
+    if !same_publication_record(&decoded, &retry) { panic("credential rotation changed retry identity"); }
+    retry.principal = "mallory";
+    if same_publication_record(&decoded, &retry) { panic("principal conflict accepted"); }
+    retry = record("first", 1729000000);
+    retry.authority = "other";
+    if same_publication_record(&decoded, &retry) { panic("authority conflict accepted"); }
+    retry = record("first", 1729000000);
+    retry.metadata.readme = Maybe.Some("changed");
+    if same_publication_record(&decoded, &retry) { panic("metadata conflict accepted"); }
+    retry = record("first", 1729000000);
+    retry.archive[4] = 1_u8;
+    retry.metadata.checksum_spelling = publication_checksum(retry.archive.as_slice());
+    if same_publication_record(&decoded, &retry) { panic("archive conflict accepted"); }
+    if publication_record_key(&"ab", &"c") == publication_record_key(&"a", &"bc") { panic("coordinate delimiter collision"); }
+    if publication_record_key(&"widget", &"1.2.3") == publication_record_key(&"widget", &"1.2.4") { panic("coordinate version collision"); }
+}
+
+fn corruption_is_refused() {
+    let original = record("first", 1729000000);
+    let encoded = encode_publication_record(&original).unwrap();
+    let mut index = 0;
+    while index < 32 {
+        let mut prefix: List<Byte> = List.new();
+        let mut offset = 0;
+        while offset < index { prefix.push(encoded[offset]); offset = offset + 1; }
+        assert(decode_publication_record(&prefix) is Result.Err(_));
+        index = index + 1;
+    }
+    let mut damaged = encode_publication_record(&original).unwrap();
+    damaged[0] = 0_u8;
+    assert(decode_publication_record(&damaged) is Result.Err(_));
+    damaged = encode_publication_record(&original).unwrap();
+    damaged[8] = 255_u8; damaged[9] = 255_u8; damaged[10] = 255_u8; damaged[11] = 255_u8;
+    assert(decode_publication_record(&damaged) is Result.Err(_));
+    damaged = encode_publication_record(&original).unwrap();
+    damaged[12] = 255_u8;
+    assert(decode_publication_record(&damaged) is Result.Err(_));
+    damaged = encode_publication_record(&original).unwrap();
+    damaged[damaged.len() - 1] = 99_u8;
+    assert(decode_publication_record(&damaged) is Result.Err(_));
+    damaged = encode_publication_record(&original).unwrap();
+    damaged.push(0_u8);
+    assert(decode_publication_record(&damaged) is Result.Err(_));
+    let mut invalid = record("first", -1);
+    assert(encode_publication_record(&invalid) is Result.Err(_));
+    invalid = record("first", 1);
+    invalid.metadata.checksum_spelling = "wrong";
+    assert(encode_publication_record(&invalid) is Result.Err(_));
+    invalid = record("first", 1);
+    invalid.principal = "";
+    assert(encode_publication_record(&invalid) is Result.Err(_));
+}
+
+fn main() {
+    roundtrip_and_retry_identity();
+    corruption_is_refused();
+    print("publication-record: ok");
+}

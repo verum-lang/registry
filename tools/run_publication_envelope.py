@@ -23,6 +23,21 @@ RUNNER = Path("tools/run_publication_envelope.py")
 NEW_HEADER = b"module verum_registry.main;\n"
 MANIFEST = b'[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n'
 COMPONENTS = {
+    "record": {
+        "task": "T1647",
+        "modules": (Path("src/protocol/publication.vr"),
+                    Path("src/protocol/publication_metadata.vr"),
+                    Path("src/protocol/publication_encoding.vr"),
+                    Path("src/node/publication_record.vr")),
+        "fixture": Path("tests/publication_record.vr"),
+        "expected": Path("tests/publication_record.expected"),
+        "header": b"module verum_registry.tests.publication_record;\n",
+        "scope": (
+            "Check bounded complete publication record serialization, provenance "
+            "retention, corruption refusals and retry identity. This codec does "
+            "not establish archive admission, authentication, persistence or HTTP success."
+        ),
+    },
     "manifest": {
         "task": "T1759",
         "modules": (Path("src/protocol/publication.vr"),
