@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import signal
 import socket
 import subprocess
@@ -16,7 +15,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
-from test_publication_admission import COMMON, TRANSACTION, ROOT, unpack_record
+from test_publication_admission import ROOT, unpack_record
 from test_publication_storage import run
 
 TOKEN = "vrp1_" + bytes(range(32)).hex()
@@ -43,15 +42,6 @@ def main():
         parser.error("use a clean unsigned test profile: the CLI signing-key locations must be absent")
     with tempfile.TemporaryDirectory(prefix="registry-publication-http-") as temporary:
         project = Path(temporary)
-        for module in COMMON + TRANSACTION + ("node/publication_credentials_file", "node/publication_service", "node/publication_start"):
-            target = project / f"src/{module}.vr"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / f"src/{module}.vr", target)
-        (project / "Verum.toml").write_text('[cog]\nname="verum-registry"\nversion="0.1.0"\nedition="2026"\n')
-        source = (ROOT / "tests/publication_http.vr").read_text()
-        header = "module verum_registry.tests.publication_http;"
-        assert source.count(header) == 1
-        (project / "src/main.vr").write_text(source.replace(header, "module verum_registry.main;", 1))
         storage = project / "store"
         storage.mkdir()
         credentials = project / "credentials.json"
@@ -64,7 +54,8 @@ def main():
             port = probe.getsockname()[1]
         base = f"http://127.0.0.1:{port}"
         client = build_opener(ProxyHandler({}))
-        environment = {**os.environ, "NO_COLOR": "1", "VERUM_REGISTRY_LISTEN": f"127.0.0.1:{port}",
+        environment = {**os.environ, "NO_COLOR": "1", "VERUM_NO_OBJECT_CACHE": "1",
+                       "VERUM_REGISTRY_LISTEN": f"127.0.0.1:{port}",
                        "VERUM_REGISTRY_STORE": str(storage), "VERUM_REGISTRY_CREDENTIALS": str(credentials),
                        "VERUM_REGISTRY_AUTHORITY": "local", "VERUM_REGISTRY_OWNED_NAMES": "widget"}
 
@@ -104,7 +95,7 @@ def main():
         def start():
             nonlocal process
             with output.open("ab") as log:
-                process = subprocess.Popen([executable, "run", "--tier", "interpret"], cwd=project,
+                process = subprocess.Popen([executable, "run", "--tier", "interpret", "--", "serve-publications"], cwd=ROOT,
                                            stdout=log, stderr=log, env=environment, start_new_session=True)
             deadline = time.monotonic() + options.timeout
             while time.monotonic() < deadline:
@@ -162,7 +153,15 @@ def main():
 
             status, _, body = request("/api/v1/cogs/publish", envelope(source_metadata, archive), True)
             assert status == 200 and json.loads(body)["checksum"] == source_metadata["checksum"]
-            conflicting = {**source_metadata, "readme": "# Widget\n"}
+            # A valid token grants only configured names. Even a well-framed
+            # request must be refused before any immutable record is created.
+            forbidden = {**source_metadata, "name": "unowned-widget"}
+            expect_status(403, "/api/v1/cogs/publish", envelope(forbidden, archive), True)
+            assert list(storage.glob("*.publication")) == [accepted]
+            corrupted = archive[:-1] + bytes([archive[-1] ^ 1])
+            expect_status(422, "/api/v1/cogs/publish", envelope(source_metadata, corrupted), True)
+            conflicting = {**source_metadata,
+                           "readme": None if source_metadata.get("readme") is not None else "# Widget\n"}
             assert request("/api/v1/cogs/publish", envelope(conflicting, archive), True)[0] == 409
             assert accepted.read_bytes() == original
             stop()
