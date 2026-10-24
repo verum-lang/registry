@@ -71,6 +71,7 @@ mount core.encoding.json.{decode, stringify};
 mount core.net.http.{Headers, Method, StatusCode};
 mount core.net.weft.handler.{WeftRequest};
 mount verum_registry.node.serve.{NodeHandler, serve_forever};
+mount verum_registry.node.publication_start.run_publication_node;
 mount core.shell.script.{args};
 mount verum_registry.protocol.wire.{
     decode_publish_request, encode_publish_request, missing_field_is_named,
@@ -776,6 +777,16 @@ fn revocation_scene(label: &Text) {
 /// the "all-or-nothing" comment in `import_slice` as a claim nobody can
 /// check.
 async fn main() {
+    let argv = args();
+    for argument in argv.iter() {
+        if argument == "serve-publications" {
+            match run_publication_node().await {
+                Result.Ok(()) => {},
+                Result.Err(error) => panic(f"publication listener failed: {error}"),
+            }
+            return;
+        }
+    }
     // --- the composition root ---
     // The ONLY place in the program that names a concrete backend.
     // Everything below runs against the CONTEXTS, so the same rules
@@ -801,7 +812,6 @@ async fn main() {
     // up with its own providers would be a second configuration that
     // nothing checks — which is the failure the context system exists
     // to prevent.
-    let argv = args();
     let mut wants_serve = false;
     for a in argv.iter() {
         if a.clone() == "serve" {

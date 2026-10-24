@@ -1,0 +1,45 @@
+module verum_registry.node.publication_start;
+
+mount core.base.env.var;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+mount verum_registry.node.publication_archive.valid_publication_name;
+mount verum_registry.node.publication_service.serve_publications;
+
+fn required(name: &Text) -> Result<Text, Text> {
+    match var(name) {
+        Result.Ok(value) => {
+            if value.len() == 0 { Result.Err(f"{name} must not be empty") }
+            else { Result.Ok(value) }
+        },
+        Result.Err(_) => Result.Err(f"{name} is required"),
+    }
+}
+
+/// Explicit local ownership is separate from credential grants. A grant cannot
+/// make an upstream or an unconfigured package locally publishable.
+public fn publication_authorities(id: &Text, names: &Text) -> Result<List<Authority>, Text> {
+    if id.len() == 0 || id.len() > 128 { return Result.Err("invalid local authority identifier"); }
+    let mut owned: List<NamePattern> = List.new();
+    let mut seen: Map<Text, Bool> = Map.new();
+    for name in names.split(&",") {
+        if !valid_publication_name(&name) || seen.contains_key(&name) {
+            return Result.Err("owned package names must be valid, distinct, and comma-separated");
+        }
+        seen.insert(name.clone(), true);
+        owned.push(NamePattern.Exact(name));
+    }
+    if owned.len() == 0 { return Result.Err("at least one owned package name is required"); }
+    Result.Ok([Authority { id: id.clone(), role: AuthorityRole.Local, owns: owned }])
+}
+
+/// Launch only from complete operator configuration; errors propagate to the
+/// executable so a failed startup is not reported as a clean server shutdown.
+public async fn run_publication_node() -> Result<(), Text> {
+    let address = required(&"VERUM_REGISTRY_LISTEN")?;
+    let directory = required(&"VERUM_REGISTRY_STORE")?;
+    let credentials = required(&"VERUM_REGISTRY_CREDENTIALS")?;
+    let authority = required(&"VERUM_REGISTRY_AUTHORITY")?;
+    let names = required(&"VERUM_REGISTRY_OWNED_NAMES")?;
+    let authorities = publication_authorities(&authority, &names)?;
+    serve_publications(&address, &directory, &credentials, authorities).await
+}
