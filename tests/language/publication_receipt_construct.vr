@@ -1,0 +1,12 @@
+module verum_registry.tests.publication_receipt_construct;
+
+mount verum_registry.node.publication_commit.PublicationReceipt;
+
+// Knowing a coordinate and checksum must not manufacture a durable receipt.
+fn forged_receipt() -> PublicationReceipt {
+    PublicationReceipt {
+        name: "widget", version: "1.2.3", checksum: "known", created: true,
+    }
+}
+
+fn main() {}

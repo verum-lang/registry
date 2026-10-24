@@ -1,0 +1,141 @@
+module verum_registry.tests.publication_commit;
+
+mount core.base.env.var;
+mount core.io.file.File;
+mount core.io.protocols.Read;
+mount core.net.http.{Headers, Method};
+mount core.net.weft.handler.WeftRequest;
+mount core.encoding.json.parse_strict;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+mount verum_registry.protocol.publication.publication_limits;
+mount verum_registry.protocol.publication_metadata.{DecodedPublication, decode_source_metadata};
+mount verum_registry.protocol.publication_encoding.encode_source_metadata;
+mount verum_registry.node.publication_auth.decode_credentials;
+mount verum_registry.node.publication_prepare.{PreparedPublication, prepare_publication};
+mount verum_registry.node.publication_record.publication_checksum;
+mount verum_registry.node.publication_archive.default_archive_limits;
+mount verum_registry.node.publication_storage.PublicationStorage;
+mount verum_registry.node.publication_commit.{
+    PublicationReceipt, PublicationCommitError, commit_prepared_publication, load_publication,
+};
+
+fn fixture(name: &Text, include_readme: Bool) -> DecodedPublication {
+    let directory = var(&"VERUM_PUBLICATION_FIXTURES").unwrap();
+    let mut file: File = File.open(&f"{directory}/{name}.gz").unwrap();
+    let mut archive: List<Byte> = List.new();
+    let mut buffer: [Byte; 4096] = [0_u8; 4096];
+    loop {
+        let count = file.read(&mut buffer[..]).unwrap();
+        if count == 0 { break; }
+        let mut index = 0;
+        while index < count { archive.push(buffer[index]); index = index + 1; }
+    }
+    let source = """{"name":"widget","version":"1.2.3","description":null,"authors":[],"license":null,"repository":null,"homepage":null,"keywords":[],"categories":[],"readme":null,"dependencies":{},"features":{},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}""";
+    let mut metadata = decode_source_metadata(&source, 4096).unwrap();
+    metadata.checksum_spelling = publication_checksum(archive.as_slice());
+    if include_readme { metadata.readme = Maybe.Some("# Widget\n"); }
+    DecodedPublication { metadata: metadata, archive: archive }
+}
+
+fn prepare(publication: &DecodedPublication, principal: &Text, credential: &Text, authority: &Text)
+    -> PreparedPublication
+{
+    let authorities: List<Authority> = [Authority {
+        id: authority.clone(), role: AuthorityRole.Local, owns: [NamePattern.Exact("widget")],
+    }];
+    let template = """{"version":1,"principals":[{"id":"alice","grants":[{"authority":"local","names":[{"exact":"widget"}]}]}],"credentials":[{"id":"active","principal":"alice","token_sha256":"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee","active":true}]}""";
+    let source = template.replace(&"alice", principal).replace(&"local", authority)
+        .replace(&"\"id\":\"active\"", &f"\"id\":\"{credential}\"");
+    let credentials = decode_credentials(&source, &authorities).unwrap();
+    let metadata = encode_source_metadata(&publication.metadata, 1048576).unwrap();
+    let mut body: List<Byte> = List.new();
+    let mut length = metadata.len();
+    let mut index = 0;
+    while index < 4 { body.push((length % 256) as Byte); length = length / 256; index = index + 1; }
+    for byte in metadata.bytes() { body.push(byte); }
+    length = publication.archive.len(); index = 0;
+    while index < 8 { body.push((length % 256) as Byte); length = length / 256; index = index + 1; }
+    for byte in publication.archive.iter() { body.push(*byte); }
+    let mut headers = Headers.new();
+    headers.set(&"content-type", &"application/vnd.verum.cog-publish.v1");
+    headers.set(&"authorization", &"Bearer vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    let request = WeftRequest.new(Method.Post, "/api/v1/cogs/publish", Maybe.None, headers, body);
+    prepare_publication(&request, &credentials, &authorities, &publication_limits(1048576, 67108864).unwrap()).unwrap()
+}
+
+fn check_receipt(receipt: &PublicationReceipt, expected_status: Int, publication: &DecodedPublication) {
+    assert_eq(receipt.status_code(), expected_status);
+    let response = receipt.response();
+    assert(response.is_success());
+    assert_eq(response.content_type().unwrap(), "application/json");
+    let body = response.body_text();
+    assert(body.len() <= 65536);
+    let json = parse_strict(&body, 65536).unwrap();
+    let fields = json.as_object().unwrap();
+    assert_eq(fields.len(), 3);
+    assert_eq(fields.get(&"name").unwrap().as_string().unwrap(), publication.metadata.name_spelling);
+    assert_eq(fields.get(&"version").unwrap().as_string().unwrap(), publication.metadata.version_spelling);
+    assert_eq(fields.get(&"checksum").unwrap().as_string().unwrap(), publication.metadata.checksum_spelling);
+}
+
+fn main() {
+    let directory = var(&"VERUM_PUBLICATION_STORE").unwrap();
+    let phase = var(&"VERUM_PUBLICATION_PHASE").unwrap();
+    let storage = PublicationStorage.open(&directory, 100663296).unwrap();
+    let limits = default_archive_limits();
+    let publication = fixture(&"readme", false);
+    if phase == "create" {
+        let invalid = prepare(&fixture(&"traversal", false), &"alice", &"active", &"local");
+        assert(commit_prepared_publication(invalid, &storage, &limits)
+            is Result.Err(PublicationCommitError.Admission(_)));
+        assert(load_publication(&storage, &"widget", &"1.2.3") is Result.Ok(Maybe.None));
+        let tiny = PublicationStorage.open(&directory, 1).unwrap();
+        let valid = prepare(&publication, &"alice", &"active", &"local");
+        assert(commit_prepared_publication(valid, &tiny, &limits) is Result.Err(PublicationCommitError.Storage(_)));
+        assert(load_publication(&storage, &"widget", &"1.2.3") is Result.Ok(Maybe.None));
+        let valid = prepare(&publication, &"alice", &"active", &"local");
+        let receipt = commit_prepared_publication(valid, &storage, &limits).unwrap();
+        check_receipt(&receipt, 201, &publication);
+        print("publication-commit: created");
+    } else if phase == "restart" {
+        let original = load_publication(&storage, &"widget", &"1.2.3").unwrap().unwrap();
+        assert_eq(original.credential, "active");
+        assert(original.published_at > 1000000000);
+        let valid = prepare(&publication, &"alice", &"rotated", &"local");
+        let receipt = commit_prepared_publication(valid, &storage, &limits).unwrap();
+        check_receipt(&receipt, 200, &publication);
+        let after = load_publication(&storage, &"widget", &"1.2.3").unwrap().unwrap();
+        assert_eq(after.credential, original.credential);
+        assert_eq(after.published_at, original.published_at);
+        let changed = prepare(&fixture(&"readme", true), &"alice", &"rotated", &"local");
+        assert(commit_prepared_publication(changed, &storage, &limits) is Result.Err(PublicationCommitError.Conflict));
+        let changed = prepare(&fixture(&"gnu", false), &"alice", &"rotated", &"local");
+        assert(commit_prepared_publication(changed, &storage, &limits) is Result.Err(PublicationCommitError.Conflict));
+        let changed = prepare(&publication, &"bob", &"active", &"local");
+        assert(commit_prepared_publication(changed, &storage, &limits) is Result.Err(PublicationCommitError.Conflict));
+        let changed = prepare(&publication, &"alice", &"active", &"other");
+        assert(commit_prepared_publication(changed, &storage, &limits) is Result.Err(PublicationCommitError.Conflict));
+        print("publication-commit: restart and conflicts");
+    } else if phase == "corrupt" {
+        assert(load_publication(&storage, &"widget", &"1.2.3") is Result.Err(_));
+        let valid = prepare(&publication, &"alice", &"active", &"local");
+        let error = match commit_prepared_publication(valid, &storage, &limits) {
+            Result.Err(error) => error,
+            Result.Ok(_) => panic("corrupt storage acknowledged"),
+        };
+        assert_eq(error.status_code(), 500);
+        assert(error.response().is_error());
+        print("publication-commit: corruption refused");
+    } else if phase == "race-a" || phase == "race-b" {
+        let contender = fixture(&"readme", phase == "race-b");
+        let valid = prepare(&contender, &"alice", &"active", &"local");
+        match commit_prepared_publication(valid, &storage, &limits) {
+            Result.Ok(receipt) => {
+                check_receipt(&receipt, 201, &contender);
+                print("publication-commit: race created");
+            },
+            Result.Err(PublicationCommitError.Conflict) => print("publication-commit: race conflict"),
+            _ => panic("unexpected competing publication result"),
+        }
+    } else { panic("unknown publication phase"); }
+}
