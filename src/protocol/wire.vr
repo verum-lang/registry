@@ -340,10 +340,10 @@ public pure fn missing_field_is_named(body: &Text, expected_path: &Text) -> Bool
 /// support.
 public fn encode_verified(v: &Verified) -> JsonValue {
     let mut fields: Map<Text, JsonValue> = Map.new();
-    fields.insert("manifest", encode_manifest(&v.manifest));
-    fields.insert("authority_id", json_string(v.authority_id.clone()));
-    fields.insert("role", json_string(role_name(&v.role)));
-    fields.insert("log_id", json_string(v.log_id.clone()));
+    fields.insert("manifest", encode_manifest(&v.manifest()));
+    fields.insert("authority_id", json_string(v.authority_id()));
+    fields.insert("role", json_string(role_name(&v.role())));
+    fields.insert("log_id", json_string(v.log_id()));
     json_object(fields)
 }
 

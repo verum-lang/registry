@@ -79,6 +79,10 @@ public type Resolution is {
     via: Text,
 };
 
+implement Resolution {
+    public fn via(&self) -> Text { self.via.clone() }
+}
+
 // -----------------------------------------------------------------------------
 // The walk
 // -----------------------------------------------------------------------------

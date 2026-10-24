@@ -72,8 +72,9 @@ mount core.net.weft.app.{WeftApp};
 mount core.net.http.{Response, StatusCode};
 mount core.net.weft.error.{WeftError};
 mount verum_registry.node.cache.{Cache};
+mount verum_registry.node.ambient.{Clock, NodeIdentity, Uplink};
 mount verum_registry.node.publish.{
-    publish, PublishError, PublishSlot, Published,
+    publish_request, PublishError, Published,
 };
 mount verum_registry.protocol.wire.{decode_publish_request, encode_search_answer, WireError};
 mount verum_registry.node.resolution.{resolve, ResolveError};
@@ -128,9 +129,9 @@ implement NodeHandler {
         for b in text.bytes() {
             body.push(b);
         }
-        let mut resp = Response.new(status);
-        resp.body = body;
-        resp
+        Response.new(status)
+            .header("Content-Length", f"{body.len()}")
+            .body(body)
     }
 
     /// The empty query admits everything the node holds. That
@@ -138,7 +139,7 @@ implement NodeHandler {
     /// language where "ask nothing" means "get nothing" surprises
     /// people at exactly the wrong moment, and `node/search.vr` already
     /// decided it the other way.
-    fn route_search(&self, req: &WeftRequest) -> Response {
+    public fn route_search(&self, req: &WeftRequest) -> Response {
         // THE QUERY IS A CONJUNCTION, and the URL says so plainly:
         // `?name=X&from=Y` means both, in the order the clauses are
         // pushed. `protocol/query.vr` deliberately has no disjunction —
@@ -190,7 +191,7 @@ implement NodeHandler {
     /// an operator actually needs: not "yes" but "from where". A
     /// resolution that cannot say which source answered is the failure
     /// `node/resolution.vr` was written to prevent.
-    fn route_resolve(&self, req: &WeftRequest) -> Response {
+    public fn route_resolve(&self, req: &WeftRequest) -> Response {
         match req.query_param(&"name") {
             Maybe.None => NodeHandler.text_response(
                 StatusCode.bad_request(),
@@ -200,7 +201,7 @@ implement NodeHandler {
                 let name = PackageName(raw);
                 match resolve(&self.sources, &name, self.require_audit) {
                     Result.Ok(found) => {
-                        NodeHandler.text_response(StatusCode.ok(), &found.via)
+                        NodeHandler.text_response(StatusCode.ok(), &found.via())
                     }
                     // Three refusals, three answers — see the header.
                     Result.Err(ResolveError.NoSourceHasIt(what)) => {
@@ -263,14 +264,10 @@ implement NodeHandler {
     ///                                    is how a retry after a dropped
     ///                                    response behaves
     ///
-    /// THE SLOT IS MINTED HERE, per request, for the authority the body
-    /// claims. `PublishSlot` is `affine`, and `publish` takes it BY
-    /// VALUE, so this route cannot retry a publication by spending the
-    /// same slot twice — that would not compile. A slot minted for one
-    /// authority and spent on another is refused inside `publish` by
-    /// comparing `for_authority` against the request; the mint here does
-    /// not make the route trusted.
-    fn route_publish(&mut self, req: &WeftRequest) -> Response
+    /// `publish_request` checks local name ownership before issuing an
+    /// affine slot and consuming it through `publish`. Request fields
+    /// cannot construct a slot or bypass the authority check.
+    public fn route_publish(&mut self, req: &WeftRequest) -> Response
         using [Clock, NodeIdentity, Uplink]
     {
         // `Text.from_utf8` returns a Result, not a Maybe — a body that
@@ -304,15 +301,14 @@ implement NodeHandler {
             Ok(r) => r,
         };
 
-        let slot = PublishSlot { for_authority: request.as_authority.clone() };
-        match publish(&mut self.cache, slot, &request) {
+        match publish_request(&mut self.cache, &request) {
             Ok(Published.Accepted(v)) => NodeHandler.text_response(
                 StatusCode.created(),
-                &f"published {v.manifest.version}",
+                &f"published {v.manifest().version}",
             ),
             Ok(Published.AlreadyIdentical(v)) => NodeHandler.text_response(
                 StatusCode.ok(),
-                &f"already held, identical at {v.manifest.version}",
+                &f"already held, identical at {v.manifest().version}",
             ),
             Err(PublishError.NotOurName(claimed, owner)) =>
                 NodeHandler.text_response(

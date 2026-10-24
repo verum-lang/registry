@@ -79,7 +79,7 @@ public type Clause is
 /// them separately can tell an operator which half matched. An `Or`
 /// variant would let one query return a set nobody can attribute.
 public type Query is {
-    clauses: List<Clause>,
+    public clauses: List<Clause>,
 };
 
 // -----------------------------------------------------------------------------
@@ -112,10 +112,10 @@ public pure fn clause_cost(c: &Clause) -> Int{it >= 0} {
 /// query means.
 public pure fn clause_holds(c: &Clause, v: &Verified) -> Bool {
     match c {
-        Clause.Named(n) => v.manifest.name.0 == n.0,
-        Clause.From(a) => v.authority_id == a.clone(),
-        Clause.InRole(r) => role_eq(&v.role, r),
-        Clause.AtVersion(k) => match parse(&v.manifest.version) {
+        Clause.Named(n) => v.manifest().name.0 == n.0,
+        Clause.From(a) => v.authority_id() == a.clone(),
+        Clause.InRole(r) => role_eq(&v.role(), r),
+        Clause.AtVersion(k) => match parse(&v.manifest().version) {
             Ok(ver) => satisfies(&ver, k),
             // A version this node holds and cannot parse fails every
             // version clause. It does NOT halt: the coordinate came from

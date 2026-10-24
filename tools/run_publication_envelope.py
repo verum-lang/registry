@@ -23,6 +23,14 @@ RUNNER = Path("tools/run_publication_envelope.py")
 NEW_HEADER = b"module verum_registry.main;\n"
 MANIFEST = b'[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n'
 COMPONENTS = {
+    "evidence_snapshot": {
+        "task": "T1790",
+        "modules": (Path("src/protocol/authority.vr"), Path("src/protocol/evidence.vr")),
+        "fixture": Path("tests/evidence_snapshot.vr"),
+        "expected": Path("tests/evidence_snapshot.expected"),
+        "header": b"module verum_registry.tests.evidence_snapshot;\n",
+        "scope": "Check detached evidence input and observer snapshots; this does not establish cryptographic verification.",
+    },
     "record": {
         "task": "T1647",
         "modules": (Path("src/protocol/publication.vr"),

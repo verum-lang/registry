@@ -55,7 +55,7 @@ module verum_registry.protocol.hash;
 /// A raw hash of exactly `N` bytes, where `N` is one of the widths this
 /// protocol admits.
 public type Hash<N: meta USize {it == 32 || it == 64}> is {
-    bytes: [Byte; N],
+    public bytes: [Byte; N],
 };
 
 /// The two widths, named, so a signature reads as what it means rather

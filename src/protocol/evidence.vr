@@ -36,16 +36,16 @@ public type Digest is (Text);
 /// covered transitively through their digest, so signing this signs the
 /// release.
 public type Manifest is {
-    name: PackageName,
-    version: Text,
-    artefact: Digest,
-    published_at: Int,
+    public name: PackageName,
+    public version: Text,
+    public artefact: Digest,
+    public published_at: Int,
 };
 
 /// A signature over a manifest digest, and the identity that made it.
 public type SignatureBundle is {
-    manifest_digest: Digest,
-    signer: Text,
+    public manifest_digest: Digest,
+    public signer: Text,
 };
 
 /// An inclusion proof placing a manifest digest in an append-only log.
@@ -55,9 +55,9 @@ public type SignatureBundle is {
 /// telling the client the wrong provenance, and the client can see it
 /// because the proof says which log it belongs to.
 public type InclusionProof is {
-    manifest_digest: Digest,
-    log_id: Text,
-    tree_size: Int,
+    public manifest_digest: Digest,
+    public log_id: Text,
+    public tree_size: Int,
 };
 
 // -----------------------------------------------------------------------------
@@ -75,6 +75,30 @@ public type Verified is {
     /// The log the inclusion proof belonged to, kept for the same reason.
     log_id: Text,
 };
+
+fn snapshot_text(value: &Text) -> Text {
+    let mut copy = Text.with_capacity(value.len());
+    copy.push_str(value);
+    copy
+}
+
+implement Manifest {
+    public fn snapshot(&self) -> Manifest {
+        Manifest {
+            name: PackageName(snapshot_text(&self.name.0)),
+            version: snapshot_text(&self.version),
+            artefact: Digest(snapshot_text(&self.artefact.0)),
+            published_at: self.published_at,
+        }
+    }
+}
+
+implement Verified {
+    public fn manifest(&self) -> Manifest { self.manifest.snapshot() }
+    public fn authority_id(&self) -> Text { snapshot_text(&self.authority_id) }
+    public fn role(&self) -> AuthorityRole { self.role.clone() }
+    public fn log_id(&self) -> Text { snapshot_text(&self.log_id) }
+}
 
 /// Why evidence was refused. Each case names something an operator or a
 /// client can act on; none of them is "verification failed".
@@ -124,10 +148,10 @@ public pure fn verify(
     }
 
     Result.Ok(Verified {
-        manifest: manifest,
-        authority_id: authority_id,
+        manifest: manifest.snapshot(),
+        authority_id: snapshot_text(&authority_id),
         role: role,
-        log_id: proof.log_id.clone(),
+        log_id: snapshot_text(&proof.log_id),
     })
 }
 

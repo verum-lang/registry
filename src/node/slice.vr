@@ -35,7 +35,6 @@ mount verum_registry.protocol.evidence.{
 };
 mount verum_registry.node.cache.{Cache};
 mount verum_registry.node.ambient.{Clock};
-mount core.async.{spawn};
 
 // -----------------------------------------------------------------------------
 // What travels
@@ -45,22 +44,22 @@ mount core.async.{spawn};
 /// There is no field for "already checked": the far side checks again,
 /// because the exporter is a party the importer did not choose.
 public type SliceItem is {
-    manifest: Manifest,
-    signature: SignatureBundle,
-    proof: InclusionProof,
+    public manifest: Manifest,
+    public signature: SignatureBundle,
+    public proof: InclusionProof,
     /// The authority that answered when this was fetched — carried, not
     /// re-derived on import.
-    authority_id: Text,
-    role: AuthorityRole,
+    public authority_id: Text,
+    public role: AuthorityRole,
     /// The log the proof belongs to, so the far side can check the same
     /// thing this side did.
-    log_id: Text,
+    public log_id: Text,
     /// What this coordinate needs. Used to decide closure.
-    requires: List<Text>,
+    public requires: List<Text>,
 };
 
 public type Slice is {
-    items: List<SliceItem>,
+    public items: List<SliceItem>,
 };
 
 /// Why an import was refused. Every case names the coordinate, because
@@ -163,7 +162,7 @@ public async fn import_slice(
     // coordinates as an air-gapped site needs, and their verifications
     // are independent by construction — each reads one item and shares
     // nothing.
-    let mut pending: List<Future<Result<Verified, EvidenceError>>> = List.new();
+    let mut pending = List.new();
     let mut names: List<Text> = List.new();
     for item in slice.items.iter() {
         let m = Manifest {
@@ -195,18 +194,22 @@ public async fn import_slice(
     // for the FIRST item whose evidence did not check out, and no item
     // has been stored.
     let mut verified: List<Verified> = List.new();
+    let mut refusal: Maybe<ImportError> = Maybe.None;
     let mut idx = 0;
     for h in pending {
         match h.await {
             Ok(v) => verified.push(v),
             Err(e) => {
-                return Result.Err(ImportError.ItemRefused(
-                    names[idx].clone(),
-                    e,
-                ));
+                if refusal is None {
+                    refusal = Maybe.Some(ImportError.ItemRefused(names[idx].clone(), e));
+                }
             }
         }
         idx = idx + 1;
+    }
+    match refusal {
+        Some(error) => return Result.Err(error),
+        None => {}
     }
 
     // Pass 2 — store, keeping the attribution each item arrived with.
@@ -224,26 +227,22 @@ public async fn import_slice(
 /// with its own identity would be the laundering this rule exists to
 /// prevent, and there is no parameter here that would let it.
 public fn export_item(v: &Verified, requires: List<Text>) -> SliceItem {
-    let d = digest_of(&v.manifest);
+    let manifest = v.manifest();
+    let d = digest_of(&manifest);
     SliceItem {
-        manifest: Manifest {
-            name: PackageName(v.manifest.name.0.clone()),
-            version: v.manifest.version.clone(),
-            artefact: Digest(v.manifest.artefact.0.clone()),
-            published_at: v.manifest.published_at,
-        },
+        manifest: manifest,
         signature: SignatureBundle {
             manifest_digest: Digest(d.0.clone()),
             signer: "exported",
         },
         proof: InclusionProof {
             manifest_digest: Digest(d.0.clone()),
-            log_id: v.log_id.clone(),
+            log_id: v.log_id(),
             tree_size: 1,
         },
-        authority_id: v.authority_id.clone(),
-        role: v.role.clone(),
-        log_id: v.log_id.clone(),
+        authority_id: v.authority_id(),
+        role: v.role(),
+        log_id: v.log_id(),
         requires: requires,
     }
 }

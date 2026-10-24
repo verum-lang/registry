@@ -85,6 +85,11 @@ public type Answer is
 // Lookup (spec §4.1)
 // -----------------------------------------------------------------------------
 
+implement CachedEntry {
+    public fn verified(&self) -> Verified { self.verified.clone() }
+    public fn fetched_at(&self) -> Int { self.fetched_at }
+}
+
 implement Cache {
     public fn empty() -> Cache {
         Cache { entries: Keyed.empty() }
@@ -96,7 +101,7 @@ implement Cache {
     /// that stores an artefact and forgets it, because there is no way
     /// to build a `CachedEntry` without one.
     public fn store(&mut self, verified: Verified) using [Clock] {
-        let key = verified.manifest.name.0.clone();
+        let key = verified.manifest().name.0.clone();
         self.entries.put(key, CachedEntry {
             verified: verified,
             fetched_at: Clock.now(),
@@ -274,7 +279,7 @@ public pure fn absent_for(upstream_reachable: Bool) -> Answer {
 /// modifier was missing and cost this whole obligation its SMT symbol.
 public pure fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -> Bool {
     match a {
-        Hit(e) => e.verified.authority_id == expected_authority.clone(),
+        Hit(e) => e.verified.authority_id() == expected_authority.clone(),
         // The two absences carry no attribution because they carry no
         // artefact. Vacuously true, and stated rather than omitted so
         // the predicate is total over `Answer`.
@@ -315,7 +320,7 @@ public pure fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -
 /// nothing for `lookup` to re-derive. Saying so in a type is better
 /// than proving it about a round trip, and it is already said.
 public pure fn a_hit_keeps_attribution(e: &CachedEntry) -> Bool {
-    let expected = e.verified.authority_id.clone();
+    let expected = e.verified.authority_id();
     answer_keeps_attribution(&hit_for(e), &expected)
 }
 

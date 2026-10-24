@@ -82,7 +82,7 @@ public context Uplink {
 // version of the other.
 
 /// A clock stopped at a stated moment. What a test provides.
-public type FrozenClock is { at: Int };
+public type FrozenClock is { public at: Int };
 
 implement FrozenClock {
     public fn now(&self) -> Int {
@@ -92,8 +92,8 @@ implement FrozenClock {
 
 /// A node's configured identity.
 public type ConfiguredNode is {
-    log: Text,
-    owns: List<Authority>,
+    public log: Text,
+    public owns: List<Authority>,
 };
 
 implement ConfiguredNode {
@@ -117,7 +117,7 @@ implement ConfiguredNode {
 /// `Mutex` is what the standard library offers — and would demonstrate
 /// nothing this one does not, since the rules above it already cannot
 /// tell which they are running against.
-public type FileStore is { path: Text };
+public type FileStore is { public path: Text };
 
 implement FileStore {
     public fn load(&self) -> Result<Maybe<Text>, StoreError> {
@@ -149,7 +149,7 @@ implement FileStore {
             // `NotFound` / `PermissionDenied` / `Other` — so nothing had
             // to be invented, only asked.
             Err(e) => {
-                match e.kind {
+                match e.kind() {
                     NotFound => Result.Ok(Maybe.None),
                     other => Result.Err(StoreError.Unreadable(f"{other}")),
                 }
@@ -169,7 +169,7 @@ implement FileStore {
 
 /// A stated link state. Production replaces this with something that
 /// asks the network; the rules above it do not change.
-public type StatedLink is { up: Bool };
+public type StatedLink is { public up: Bool };
 
 implement StatedLink {
     public fn reachable(&self) -> Bool {

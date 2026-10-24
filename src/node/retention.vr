@@ -71,12 +71,12 @@ public type Verdict is
 /// that reads the time itself cannot be tested against a horizon, and
 /// this is the function the whole policy turns on.
 public pure fn verdict_for(entry: &CachedEntry, horizon: Int) -> Verdict {
-    match entry.verified.role {
+    match entry.verified().role() {
         // The local authority's own coordinates. Nobody upstream holds a
         // copy, so age is not a reason to lose one.
         AuthorityRole.Local => Verdict.KeepOwn,
         AuthorityRole.Upstream => {
-            if entry.fetched_at < horizon {
+            if entry.fetched_at() < horizon {
                 Verdict.Drop
             } else {
                 Verdict.KeepFresh
@@ -136,7 +136,7 @@ public fn horizon_for(window_seconds: Int) -> Int using [Clock] {
 /// analysis over `AuthorityRole` — which is what makes it provable
 /// rather than stated.
 public pure fn own_coordinates_survive(entry: &CachedEntry, horizon: Int) -> Bool {
-    match entry.verified.role {
+    match entry.verified().role() {
         AuthorityRole.Local    => !removes(&verdict_for(entry, horizon)),
         AuthorityRole.Upstream => true,
     }

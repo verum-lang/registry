@@ -36,10 +36,10 @@ public const PROTOCOL_VERSION: Int = 1;
 
 /// What an upstream tells us about itself.
 public type PeerIdentity is {
-    protocol_version: Int,
-    log_public_key: Text,
-    tree_size: Int,
-    capabilities: List<Text>,
+    public protocol_version: Int,
+    public log_public_key: Text,
+    public tree_size: Int,
+    public capabilities: List<Text>,
 };
 
 /// What this node already believes about that upstream, from the last
@@ -65,6 +65,10 @@ public type PeerSession is {
 
 /// Why a handshake was refused. Each names both sides where both matter,
 /// because an operator resolving this needs to see what changed.
+implement PeerSession {
+    public fn capability_count(&self) -> Int { self.capabilities.len() }
+}
+
 public type HandshakeError is
     | VersionMismatch(Int, Int)
     /// The upstream's log key differs from the pinned one. Both are

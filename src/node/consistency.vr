@@ -42,12 +42,12 @@ module verum_registry.node.consistency;
 /// and a node holding heads from several upstreams must not compare
 /// across them.
 public type TreeHead is {
-    log_id: Text,
-    tree_size: Int,
-    root: Text,
+    public log_id: Text,
+    public tree_size: Int,
+    public root: Text,
     /// When this node saw it. Not part of the comparison — kept so a
     /// refusal can say WHEN the divergence entered the record.
-    seen_at: Int,
+    public seen_at: Int,
 };
 
 /// Heads this node has seen, in the order it saw them.

@@ -66,6 +66,11 @@ public type Located is {
     assurance: Assurance,
 };
 
+implement Located {
+    public fn assurance(&self) -> Assurance { self.assurance.clone() }
+    public fn revision(&self) -> Text { self.revision.clone() }
+}
+
 /// Why a source could not answer. `NoSuchCoordinate` is separate from
 /// `Unreachable` for the reason §4.1 gives: "I cannot see" and "it does
 /// not exist" are different facts, and every layer that conflates them
@@ -107,10 +112,10 @@ public type Source is protocol {
 /// A registry: names resolve to versions, and publications land in a log.
 public type RegistrySource is {
     /// The authority whose log this source's proofs belong to.
-    log_id: Text,
+    public log_id: Text,
     /// What it holds, as name → version. Indexed, not scanned: a
     /// registry answers for as many coordinates as it has.
-    versions: Map<Text, Text>,
+    public versions: Map<Text, Text>,
 };
 
 implement Source for RegistrySource {
@@ -138,14 +143,14 @@ implement Source for RegistrySource {
 
 /// A git remote: names resolve to revisions, and there is no log.
 public type GitSource is {
-    remote: Text,
+    public remote: Text,
     /// name → revision. A revision is content-addressed, which is why
     /// this source can promise attribution without a log.
-    revisions: Map<Text, Text>,
+    public revisions: Map<Text, Text>,
     /// Whether the remote can be reached. A git source has no cache of
     /// its own, so being unreachable is its own answer rather than a
     /// degraded one.
-    reachable: Bool,
+    public reachable: Bool,
 };
 
 implement Source for GitSource {

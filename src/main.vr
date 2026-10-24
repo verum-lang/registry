@@ -30,7 +30,7 @@ mount verum_registry.node.ambient.{
 };
 mount verum_registry.node.durable.{RestoreError, Storage, persist, restore};
 mount verum_registry.node.publish.{
-    PublishError, PublishRequest, PublishSlot, Published, publish,
+    PublishError, PublishRequest, Published, publish_request,
 };
 mount verum_registry.node.consistency.{
     Audit, ConsistencyError, HeadLog, TreeHead,
@@ -159,7 +159,7 @@ fn check_evidence(
         tree_size: tree_size,
     };
     match verify(manifest, &sig, &proof, "upstream", AuthorityRole.Upstream, expected_log) {
-        Ok(v) => print(f"{label}: accepted, log={v.log_id}"),
+        Ok(v) => print(f"{label}: accepted, log={v.log_id()}"),
         Err(EvidenceError.SignatureCoversOtherManifest) =>
             print(f"{label}: refused, signature covers another manifest"),
         Err(EvidenceError.ProofCoversOtherManifest) =>
@@ -216,7 +216,7 @@ fn local_sample() -> Maybe<Verified> {
 fn say(label: &Text, answer: Answer) {
     match answer {
         Answer.Hit(e) =>
-            print(f"{label}: hit, attributed to {e.verified.authority_id}"),
+            print(f"{label}: hit, attributed to {e.verified().authority_id()}"),
         Answer.UpstreamUnreachable =>
             print(f"{label}: upstream unreachable"),
         Answer.NotFound =>
@@ -238,7 +238,7 @@ fn peer(version: Int, key: Text) -> PeerIdentity {
 
 fn greet(label: &Text, identity: &PeerIdentity, pinned: &PinnedAnchor) {
     match meet(identity, pinned) {
-        Ok(s) => print(f"{label}: session, {s.capabilities.len()} capability kept"),
+        Ok(s) => print(f"{label}: session, {s.capability_count()} capability kept"),
         Err(HandshakeError.VersionMismatch(ours, theirs)) =>
             print(f"{label}: refused, we speak {ours} and they speak {theirs}"),
         Err(HandshakeError.TrustAnchorChanged(known, seen)) =>
@@ -278,15 +278,11 @@ fn offer(
         },
         as_authority: as_authority.clone(),
     };
-    // ONE SLOT, spent here. It is minted for the authority this
-    // publication claims, and `publish` takes it BY VALUE — so a retry
-    // written into this function would not compile, which is the point.
-    let slot = PublishSlot { for_authority: as_authority.clone() };
-    match publish(cache, slot, &request) {
+    match publish_request(cache, &request) {
         Ok(Published.Accepted(v)) =>
-            print(f"{label}: published {v.manifest.version} as {v.authority_id}"),
+            print(f"{label}: published {v.manifest().version} as {v.authority_id()}"),
         Ok(Published.AlreadyIdentical(v)) =>
-            print(f"{label}: already held, identical at {v.manifest.version}"),
+            print(f"{label}: already held, identical at {v.manifest().version}"),
         Err(PublishError.NotOurName(claimed, owner)) =>
             print(f"{label}: refused, {claimed} does not own it — {owner} does"),
         Err(PublishError.VersionAlreadyPublished(ver)) =>
@@ -306,11 +302,11 @@ fn locate<S: Source>(label: &Text, source: &S, name: &Text) {
     let n = PackageName(name.clone());
     match locate_through(source, &n) {
         Ok(l) => {
-            match l.assurance {
+            match l.assurance() {
                 Assurance.Auditable(log) =>
-                    print(f"{label}: {l.revision} — auditable against {log}"),
+                    print(f"{label}: {l.revision()} — auditable against {log}"),
                 Assurance.Attributable(remote) =>
-                    print(f"{label}: {l.revision} — attributable to {remote}, no log"),
+                    print(f"{label}: {l.revision()} — attributable to {remote}, no log"),
             }
         }
         Err(SourceError.NoSuchCoordinate(who)) =>
@@ -333,7 +329,7 @@ async fn carry(label: &Text, slice: &Slice) {
             let held = PackageName("@acme/widgets");
             match far_side.lookup(&held) {
                 Answer.Hit(e) => print(
-                    f"{label}: imported {n}, still attributed to {e.verified.authority_id}"
+                    f"{label}: imported {n}, still attributed to {e.verified().authority_id()}"
                 ),
                 Answer.UpstreamUnreachable => print(f"{label}: imported {n}, then lost it"),
                 Answer.NotFound => print(f"{label}: imported {n}, then lost it"),
@@ -555,9 +551,9 @@ fn get_resolve(handler: &NodeHandler, label: &Text, name: &Maybe<Text>)
         empty,
     );
     let resp = handler.route_resolve(&req);
-    match Text.from_utf8(&resp.body[..]) {
-        Ok(text) => print(f"{label}: {resp.status.code} {text}"),
-        Err(_) => print(f"{label}: {resp.status.code} <body is not UTF-8>"),
+    match Text.from_utf8(resp.body_bytes()) {
+        Ok(text) => print(f"{label}: {resp.status_code().code()} {text}"),
+        Err(_) => print(f"{label}: {resp.status_code().code()} <body is not UTF-8>"),
     }
 }
 
@@ -574,9 +570,9 @@ fn get_search(handler: &mut NodeHandler, label: &Text)
         empty,
     );
     let resp = handler.route_search(&req);
-    match Text.from_utf8(&resp.body[..]) {
-        Ok(text) => print(f"{label}: {resp.status.code} {text}"),
-        Err(_) => print(f"{label}: {resp.status.code} <body is not UTF-8>"),
+    match Text.from_utf8(resp.body_bytes()) {
+        Ok(text) => print(f"{label}: {resp.status_code().code()} {text}"),
+        Err(_) => print(f"{label}: {resp.status_code().code()} <body is not UTF-8>"),
     }
 }
 
@@ -606,11 +602,9 @@ fn post(handler: &mut NodeHandler, label: &Text, body_text: &Text)
     // `from_utf8` returns a Result and this scene keeps both arms: a
     // route that answered with a non-UTF-8 body would be a defect worth
     // seeing, not worth papering over with a lossy conversion.
-    // T1130: `[..]` for the same reason as in node/serve.vr — a
-    // reference to a record field coerces to an empty slice here.
-    match Text.from_utf8(&resp.body[..]) {
-        Ok(text) => print(f"{label}: {resp.status.code} {text}"),
-        Err(_) => print(f"{label}: {resp.status.code} <body is not UTF-8>"),
+    match Text.from_utf8(resp.body_bytes()) {
+        Ok(text) => print(f"{label}: {resp.status_code().code()} {text}"),
+        Err(_) => print(f"{label}: {resp.status_code().code()} <body is not UTF-8>"),
     }
 }
 
@@ -940,7 +934,7 @@ async fn main() {
     configured.push(Heap.new(reg));
 
     match resolve(&configured, &PackageName("serde"), true) {
-        Ok(r)  => print(f"resolve: serde via {r.via}"),
+        Ok(r)  => print(f"resolve: serde via {r.via()}"),
         Err(ResolveError.NoSourceHasIt(n))   => print(f"resolve: nobody has {n}"),
         Err(ResolveError.OnlyBelowPolicy(w)) => print(f"resolve: only {w}, below policy"),
         Err(ResolveError.SourceFailed(_))    => print("resolve: a source broke"),
@@ -956,7 +950,7 @@ async fn main() {
         reachable: true,
     }));
     match resolve(&git_only, &PackageName("vendored-tool"), true) {
-        Ok(r)  => print(f"resolve: unexpectedly served via {r.via}"),
+        Ok(r)  => print(f"resolve: unexpectedly served via {r.via()}"),
         Err(ResolveError.OnlyBelowPolicy(w)) => print(f"resolve: refused, {w} is below policy"),
         Err(ResolveError.NoSourceHasIt(n))   => print(f"resolve: nobody has {n}"),
         Err(ResolveError.SourceFailed(_))    => print("resolve: a source broke"),
@@ -1153,14 +1147,14 @@ async fn main() {
 
             // Every clause holds: this is what the node has.
             let mut hit: List<Clause> = List.new();
-            hit.push(Clause.Named(v.manifest.name.clone()));
-            hit.push(Clause.InRole(v.role.clone()));
+            hit.push(Clause.Named(v.manifest().name.clone()));
+            hit.push(Clause.InRole(v.role()));
             search_scene(&"search/hit", &shelf, &Query { clauses: hit });
 
             // One clause fails, and the three answers still agree —
             // which is the property, not the count.
             let mut miss: List<Clause> = List.new();
-            miss.push(Clause.Named(v.manifest.name.clone()));
+            miss.push(Clause.Named(v.manifest().name.clone()));
             miss.push(Clause.From("nobody"));
             search_scene(&"search/miss", &shelf, &Query { clauses: miss });
 
