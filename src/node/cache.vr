@@ -44,7 +44,7 @@ module verum_registry.node.cache;
 mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
 mount verum_registry.protocol.evidence.{Manifest, Verified};
 mount verum_registry.node.ambient.{Clock, Uplink};
-mount verum_registry.node.store.{Keyed};
+mount verum_registry.node.store.{Keyed, sweep};
 
 // -----------------------------------------------------------------------------
 // What a cache holds
@@ -68,7 +68,7 @@ public type CachedEntry is {
 /// storage. A container that also knew those things would have to be
 /// rewritten for the next thing this node holds.
 public type Cache is {
-    entries: Keyed<CachedEntry>,
+    private entries: Keyed<CachedEntry>,
 };
 
 /// What a lookup can answer. Note what is NOT here: there is no variant
@@ -180,7 +180,7 @@ implement Cache {
     /// capability splits the two:
     ///
     ///     fn import_slice(cache: &mut Cache with [Store],  …)
-    ///     fn prune_before(cache: &mut Cache with [Evict],  …)
+    ///     fn prune_before(cache: &mut Cache with [ReadOnly, Evict],  …)
     ///
     /// Neither can do the other's job, and no reviewer has to notice.
     /// This is the distinction ownership alone cannot draw — Rust's
@@ -203,18 +203,13 @@ implement Cache {
     public fn len(&self) -> Int{it >= 0} {
         self.entries.len()
     }
+}
 
-    /// The store itself, for a policy that sweeps it.
-    ///
-    /// Handing out `&mut Keyed` looks like handing out the map this
-    /// module spent a paragraph refusing to expose, and it is not: the
-    /// capability rides on the BORROW at the call site
-    /// (`sweep(cache.store_mut() with [Evict], …)`), so a caller still
-    /// cannot store through it. What it does buy is that the two-pass
-    /// traversal is written once, in `node.store`, over any value.
-    public fn store_mut(&mut self) -> &mut Keyed<CachedEntry> {
-        &mut self.entries
-    }
+/// Sweep cached entries without exposing a mutable reference to the backing store.
+public fn sweep_cache(
+    cache: &mut Cache with [ReadOnly, Evict], condemn: fn(&CachedEntry) -> Bool,
+) -> Int{it >= 0} {
+    sweep<CachedEntry>(&mut cache.entries, condemn)
 }
 
 // -----------------------------------------------------------------------------

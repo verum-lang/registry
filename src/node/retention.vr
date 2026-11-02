@@ -27,7 +27,7 @@
 // genuinely different rights over one value, and the type can hold that:
 //
 //     fn import_slice(cache: &mut Cache with [Store], …)
-//     fn prune_before(cache: &mut Cache with [Evict], …)
+//     fn prune_before(cache: &mut Cache with [ReadOnly, Evict], …)
 //
 // Ownership alone cannot draw this line. Rust's `&mut`, Java's `final`,
 // Go's unexported fields all answer "may it be changed"; the question
@@ -43,8 +43,7 @@ module verum_registry.node.retention;
 
 mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
 mount verum_registry.node.ambient.{Clock};
-mount verum_registry.node.cache.{Cache, CachedEntry};
-mount verum_registry.node.store.{sweep};
+mount verum_registry.node.cache.{Cache, CachedEntry, sweep_cache};
 
 // -----------------------------------------------------------------------------
 // What retention decides
@@ -100,11 +99,9 @@ public pure fn removes(v: &Verdict) -> Bool {
 /// value this module computes about itself — the same line the rest of
 /// the programme draws between a refinement and a typed refusal.
 ///
-/// `with [Evict]` is the load-bearing part of the signature: this
-/// function may remove entries and may NOT add them, and neither fact
-/// depends on anyone reading the body.
+/// Reading entries selects the candidates. Eviction removes the ones the policy selects.
 public fn prune_before(
-    cache: &mut Cache with [Evict],
+    cache: &mut Cache with [ReadOnly, Evict],
     horizon: Int,
 ) -> Int{it >= 0} {
     // THE TRAVERSAL IS NOT HERE ANY MORE, and that is the point of the
@@ -114,7 +111,7 @@ public fn prune_before(
     // lives once in `node.store` where any future store gets it. What
     // stays here is the only part that knows the value is a verified
     // coordinate: the verdict.
-    sweep(cache.store_mut(), |entry| removes(&verdict_for(entry, horizon)))
+    sweep_cache(cache, |entry| removes(&verdict_for(entry, horizon)))
 }
 
 /// The horizon for a retention window, read from the clock.

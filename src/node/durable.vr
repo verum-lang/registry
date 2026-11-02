@@ -193,7 +193,7 @@ public fn persist(slice: &Slice) -> Bool using [Storage] {
 /// function waits for it. The property travels up the call chain by
 /// itself — nothing here chose to be asynchronous, it inherited the fact
 /// from what it calls.
-public async fn restore(cache: &mut Cache) -> Result<Int, RestoreError>
+public async fn restore(cache: &mut Cache with [Store]) -> Result<Int, RestoreError>
     using [Storage, Clock]
 {
     // THREE OUTCOMES, NOT TWO. A first run (no store) is `Ok(0)` and a

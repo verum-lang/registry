@@ -667,7 +667,7 @@ fn hash_scene(label: &Text) {
 /// authority for, and only the mirrored one goes.
 ///
 /// The capability is the part worth noticing in the SIGNATURE rather
-/// than the output. `prune_before` takes `&mut Cache with [Evict]`, so
+/// than the output. `prune_before` takes `&mut Cache with [ReadOnly, Evict]`, so
 /// it may remove and may not add; `import_slice` takes
 /// `&mut Cache with [Store]` and is the mirror image. Under a plain
 /// `&mut` both are simply "may change the cache", and the difference

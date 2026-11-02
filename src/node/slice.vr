@@ -131,7 +131,7 @@ implement Slice {
 /// `[Evict]` split the two, and neither can do the other's job:
 ///
 ///     fn import_slice(cache: &mut Cache with [Store], …)
-///     fn prune_before(cache: &mut Cache with [Evict], …)
+///     fn prune_before(cache: &mut Cache with [ReadOnly, Evict], …)
 ///
 /// A caller holding `[Evict]` cannot reach this function, and the
 /// compiler says so at the call rather than a reviewer noticing. This is
