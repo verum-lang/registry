@@ -1,0 +1,91 @@
+module verum_registry.node.publication_storage_contract;
+mount core.io.protocols.StreamError;
+mount core.hash.crypto.sha256.Sha256;
+
+public type PublicationStorageError is
+    | InvalidDirectory
+    | InvalidKey
+    | TooLarge
+    | Corrupt
+    | Conflict
+    | Io(StreamError)
+    | Database;
+
+public type RecordWrite is | Created | Existing;
+
+public fn key_valid(key: &Text) -> Bool {
+    if key.len() != 64 { return false; }
+    for byte in key.bytes() {
+        if !((byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)) {
+            return false;
+        }
+    }
+    true
+}
+
+public fn record_digest(key: &Text, value: &[Byte]) -> [Byte; 32] {
+    let mut hash = Sha256.new();
+    hash.update("VRPUB001".as_bytes());
+    hash.update(key.as_bytes());
+    hash.update(value);
+    hash.finalize()
+}
+
+public fn header(key: &Text, value: &List<Byte>) -> List<Byte> {
+    let mut result: List<Byte> = List.with_capacity(48);
+    for byte in "VRPUB001".bytes() { result.push(byte); }
+    let mut length = value.len();
+    let mut index = 0;
+    while index < 8 {
+        result.push((length % 256) as Byte);
+        length = length / 256;
+        index = index + 1;
+    }
+    for byte in record_digest(key, value.as_slice()) { result.push(byte); }
+    result
+}
+
+public fn validate_record(
+    key: &Text, bytes: &List<Byte>, limit: Int,
+) -> Result<(), PublicationStorageError> {
+    if bytes.len() < 48 { return Result.Err(PublicationStorageError.Corrupt); }
+    let magic = "VRPUB001".as_bytes();
+    let mut index = 0;
+    while index < 8 {
+        if bytes[index] != magic[index] { return Result.Err(PublicationStorageError.Corrupt); }
+        index = index + 1;
+    }
+    let mut length = 0;
+    index = 15;
+    while index >= 8 {
+        let byte = bytes[index] as Int;
+        if byte > limit || length > (limit - byte) / 256 {
+            return Result.Err(PublicationStorageError.Corrupt);
+        }
+        length = length * 256 + byte;
+        index = index - 1;
+    }
+    if length != bytes.len() - 48 { return Result.Err(PublicationStorageError.Corrupt); }
+    let digest = record_digest(key, &bytes[48..]);
+    index = 0;
+    while index < 32 {
+        if digest[index] != bytes[16 + index] {
+            return Result.Err(PublicationStorageError.Corrupt);
+        }
+        index = index + 1;
+    }
+    Result.Ok(())
+}
+
+public fn decode_record(
+    key: &Text, bytes: &List<Byte>, limit: Int,
+) -> Result<List<Byte>, PublicationStorageError> {
+    validate_record(key, bytes, limit)?;
+    let mut value: List<Byte> = List.with_capacity(bytes.len() - 48);
+    let mut index = 48;
+    while index < bytes.len() {
+        value.push(bytes[index]);
+        index = index + 1;
+    }
+    Result.Ok(value)
+}

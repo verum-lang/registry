@@ -26,6 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
     parser.add_argument("--timeout", type=float, default=600)
+    parser.add_argument("--postgres-config", type=Path,
+                        help="private configuration from test_publication_postgres.py")
     options = parser.parse_args()
     if not 0 < options.timeout <= 1800:
         parser.error("timeout must be between 0 and 1800 seconds")
@@ -56,8 +58,66 @@ def main():
         client = build_opener(ProxyHandler({}))
         environment = {**os.environ, "NO_COLOR": "1", "VERUM_NO_OBJECT_CACHE": "1",
                        "VERUM_REGISTRY_LISTEN": f"127.0.0.1:{port}",
+                       "VERUM_REGISTRY_STORAGE": "files",
                        "VERUM_REGISTRY_STORE": str(storage), "VERUM_REGISTRY_CREDENTIALS": str(credentials),
                        "VERUM_REGISTRY_AUTHORITY": "local", "VERUM_REGISTRY_OWNED_NAMES": "widget"}
+
+        postgres = None
+        if options.postgres_config:
+            postgres = json.loads(options.postgres_config.read_text())
+            container = postgres["container"]
+            label = subprocess.check_output(["docker", "inspect", "--format",
+                '{{index .Config.Labels "verum.registry-test"}}', container], text=True).strip()
+            if label != "publication-http":
+                raise RuntimeError("refusing fault injection outside an isolated publication test container")
+            environment["VERUM_REGISTRY_STORAGE"] = "postgres"
+            environment["VERUM_REGISTRY_PG_TLS"] = "disable"
+            environment["VERUM_REGISTRY_PG_CONNECTIONS"] = "2"
+            for key in ("host", "port", "user", "password", "database"):
+                environment["VERUM_REGISTRY_PG_" + key.upper()] = str(postgres[key])
+
+        def sql(query):
+            return subprocess.check_output(["docker", "exec", "-i", postgres["container"],
+                "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", postgres["admin_user"],
+                "-d", postgres["database"], "-At"], input=query, text=True, stderr=subprocess.PIPE).strip()
+
+        def stored_keys():
+            if postgres:
+                output = sql("SELECT record_key FROM verum_publications ORDER BY record_key;")
+                return output.splitlines() if output else []
+            return sorted(path.stem for path in storage.glob("*.publication"))
+
+        def stored_bytes(key):
+            assert len(key) == 64 and all(c in "0123456789abcdef" for c in key)
+            if postgres:
+                return bytes.fromhex(sql(f"SELECT encode(record, 'hex') FROM verum_publications WHERE record_key = '{key}';"))
+            return (storage / (key + ".publication")).read_bytes()
+
+        def corrupt_record(key, contents):
+            assert len(key) == 64 and all(c in "0123456789abcdef" for c in key)
+            if postgres:
+                sql(f"UPDATE verum_publications SET record = decode('{contents.hex()}', 'hex') WHERE record_key = '{key}';")
+            else:
+                (storage / (key + ".publication")).write_bytes(contents)
+
+        def restart_database():
+            if not postgres:
+                return
+            # Crash the test database after an acknowledged publication. Its
+            # container-owned volume survives, so this exercises WAL recovery.
+            subprocess.run(["docker", "kill", "--signal", "KILL", postgres["container"]],
+                           check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["docker", "start", postgres["container"]],
+                           check=True, stdout=subprocess.DEVNULL)
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                try:
+                    if sql("SELECT 1;") == "1":
+                        return
+                except subprocess.CalledProcessError:
+                    pass
+                time.sleep(0.25)
+            raise RuntimeError("test PostgreSQL did not recover after crash")
 
         def request(path, body=None, authenticated=False, content_type=MEDIA_TYPE, timeout=120):
             headers = {"Content-Type": content_type} if body is not None else {}
@@ -119,7 +179,7 @@ def main():
             # declares an oversized size; a short length field is truncated.
             expect_status(413, "/api/v1/cogs/publish", b"invalid", True)
             expect_status(400, "/api/v1/cogs/publish", b"\x00\x00\x00", True)
-            assert not list(storage.iterdir())
+            assert stored_keys() == []
 
             # This produces the same public CLI archive/envelope/receipt path
             # used by developers. All registry access is pinned to this listener.
@@ -132,9 +192,11 @@ def main():
             (publisher / "README.md").write_text("# Widget\n")
             run([executable, "package", "publish", "--allow-dirty"], publisher, options.timeout,
                 {"VERUM_REGISTRY_TOKEN": TOKEN, "NO_PROXY": "127.0.0.1,localhost"})
-            accepted, = storage.glob("*.publication")
-            original = accepted.read_bytes()
-            provenance, source_metadata, archive = unpack_record(accepted)
+            accepted, = stored_keys()
+            original = stored_bytes(accepted)
+            snapshot = project / (accepted + ".publication")
+            snapshot.write_bytes(original)
+            provenance, source_metadata, archive = unpack_record(snapshot)
             assert provenance[:5] == ["alice", "active", "local", "exact", "widget"]
             status, headers, downloaded = request("/api/v1/cogs/widget/1.2.3/download")
             assert status == 200 and headers["Content-Type"] == "application/gzip"
@@ -157,21 +219,31 @@ def main():
             # request must be refused before any immutable record is created.
             forbidden = {**source_metadata, "name": "unowned-widget"}
             expect_status(403, "/api/v1/cogs/publish", envelope(forbidden, archive), True)
-            assert list(storage.glob("*.publication")) == [accepted]
+            assert stored_keys() == [accepted]
             corrupted = archive[:-1] + bytes([archive[-1] ^ 1])
             expect_status(422, "/api/v1/cogs/publish", envelope(source_metadata, corrupted), True)
             conflicting = {**source_metadata,
                            "readme": None if source_metadata.get("readme") is not None else "# Widget\n"}
             assert request("/api/v1/cogs/publish", envelope(conflicting, archive), True)[0] == 409
-            assert accepted.read_bytes() == original
+            assert stored_bytes(accepted) == original
+            restart_database()
+            if postgres:
+                # The live application's cached socket died with PostgreSQL.
+                # A failure must discard it; the next request must reconnect.
+                status, _, recovered = request("/api/v1/cogs/widget/1.2.3/download")
+                assert status in (200, 500)
+                if status == 500:
+                    status, _, recovered = request("/api/v1/cogs/widget/1.2.3/download")
+                assert status == 200 and recovered == archive
+                print("publication HTTP: database crash recovery and pool reconnect passed", flush=True)
             stop()
             start()
             assert request("/api/v1/cogs/widget/1.2.3/download")[2] == archive
             assert request("/api/v1/cogs/publish", envelope(source_metadata, archive), True)[0] == 200
-            accepted.write_bytes(original[:-1])
+            corrupt_record(accepted, original[:-1])
             assert request("/api/v1/cogs/widget/1.2.3/download")[0] == 500
             assert request("/api/v1/cogs/publish", envelope(source_metadata, archive), True)[0] == 500
-            assert accepted.read_bytes() == original[:-1]
+            assert stored_bytes(accepted) == original[:-1]
             print("publication HTTP: retry, conflict, restart and corruption refusals passed", flush=True)
         except Exception as error:
             raise RuntimeError(f"{error}\n" + output.read_text(errors="replace")[-24000:]) from error

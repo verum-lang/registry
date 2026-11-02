@@ -39,6 +39,29 @@ These commands have different purposes:
 - The census counts source constructs. Counts establish neither runtime
   coverage nor correct implementations of those constructs.
 
+### PostgreSQL publication storage
+
+Apply `migrations/001_publications.sql` as the schema owner. Grant the
+registry's separate login role `USAGE` on schema `public` and only
+`SELECT, INSERT` on `public.verum_publications`. Use a logged table on a
+writable primary with `fsync` and `full_page_writes` enabled. The registry
+requires synchronous local commits for each publication.
+
+Set `VERUM_REGISTRY_STORAGE=postgres` and supply `VERUM_REGISTRY_PG_HOST`,
+`VERUM_REGISTRY_PG_PORT`, `VERUM_REGISTRY_PG_DATABASE`,
+`VERUM_REGISTRY_PG_USER` and `VERUM_REGISTRY_PG_PASSWORD` alongside the
+listener, credential and authority settings. TLS defaults to `verify-full`.
+The local test selects `VERUM_REGISTRY_PG_TLS=disable` for its isolated
+loopback database. `VERUM_REGISTRY_PG_CONNECTIONS` sets the pool maximum
+from 1 to 64 and defaults to 8. The default file backend uses
+`VERUM_REGISTRY_STORE`.
+
+The isolated Docker runner uses a locally available `postgres:17-alpine`
+image and an identified Verum CLI. Run the adapter, authenticated transaction
+and listener gates independently with
+`python3 tools/test_publication_postgres.py /absolute/path/to/verum --component storage`,
+then `--component transaction` and `--component http`.
+
 The latest complete-project check evaluates authentication candidate
 `c02238261` with the freshly baked CLI from language commit `49559a042`.
 It completes in **349.31 seconds with 2 compilation errors**, exit 101:

@@ -3,7 +3,9 @@ module verum_registry.node.publication_start;
 mount core.base.env.var;
 mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
 mount verum_registry.node.publication_archive.valid_publication_name;
-mount verum_registry.node.publication_service.serve_publications;
+mount verum_registry.node.publication_service.serve_publication_storage;
+mount verum_registry.node.publication_storage.PublicationStorage;
+mount core.database.postgres.config.{PgConfig, PgTlsMode};
 
 fn required(name: &Text) -> Result<Text, Text> {
     match var(name) {
@@ -36,10 +38,42 @@ public fn publication_authorities(id: &Text, names: &Text) -> Result<List<Author
 /// executable so a failed startup is not reported as a clean server shutdown.
 public async fn run_publication_node() -> Result<(), Text> {
     let address = required(&"VERUM_REGISTRY_LISTEN")?;
-    let directory = required(&"VERUM_REGISTRY_STORE")?;
     let credentials = required(&"VERUM_REGISTRY_CREDENTIALS")?;
     let authority = required(&"VERUM_REGISTRY_AUTHORITY")?;
     let names = required(&"VERUM_REGISTRY_OWNED_NAMES")?;
     let authorities = publication_authorities(&authority, &names)?;
-    serve_publications(&address, &directory, &credentials, authorities).await
+    let storage = configured_storage()?;
+    serve_publication_storage(&address, storage, &credentials, authorities).await
+}
+
+fn configured_storage() -> Result<PublicationStorage, Text> {
+    let backend = var(&"VERUM_REGISTRY_STORAGE").unwrap_or("files");
+    if backend == "files" {
+        let directory = required(&"VERUM_REGISTRY_STORE")?;
+        return PublicationStorage.open(&directory, 100663296)
+            .map_err(|_| "publication file storage could not be opened");
+    }
+    if backend != "postgres" { return Result.Err("VERUM_REGISTRY_STORAGE must be files or postgres"); }
+    let host = required(&"VERUM_REGISTRY_PG_HOST")?;
+    let port_text = required(&"VERUM_REGISTRY_PG_PORT")?;
+    let port = port_text.parse_int()
+        .map_err(|_| "VERUM_REGISTRY_PG_PORT must be an integer")?;
+    if port < 1 || port > 65535 { return Result.Err("VERUM_REGISTRY_PG_PORT must be between 1 and 65535"); }
+    let user = required(&"VERUM_REGISTRY_PG_USER")?;
+    let password = required(&"VERUM_REGISTRY_PG_PASSWORD")?;
+    let database = required(&"VERUM_REGISTRY_PG_DATABASE")?;
+    let tls = match var(&"VERUM_REGISTRY_PG_TLS").unwrap_or("verify-full") {
+        "verify-full" => PgTlsMode.PtmVerifyFull,
+        "disable" => PgTlsMode.PtmDisable,
+        _ => return Result.Err("VERUM_REGISTRY_PG_TLS must be verify-full or disable"),
+    };
+    let connections = var(&"VERUM_REGISTRY_PG_CONNECTIONS").unwrap_or("8").parse_int()
+        .map_err(|_| "VERUM_REGISTRY_PG_CONNECTIONS must be an integer")?;
+    if connections < 1 || connections > 64 {
+        return Result.Err("VERUM_REGISTRY_PG_CONNECTIONS must be between 1 and 64");
+    }
+    let config = PgConfig.new(host, port, user, password, database)
+        .with_application_name("verum-registry").with_tls(tls);
+    PublicationStorage.open_postgres(config, 100663296, connections)
+        .map_err(|_| "publication PostgreSQL storage could not be opened")
 }

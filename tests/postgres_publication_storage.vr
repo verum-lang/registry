@@ -1,0 +1,50 @@
+module verum_registry.tests.postgres_publication_storage;
+mount core.base.env.var;
+mount core.database.postgres.config.{PgConfig, PgTlsMode};
+mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
+
+fn main() {
+    let config = PgConfig.new(
+        var(&"VERUM_PG_TEST_HOST").unwrap(),
+        var(&"VERUM_PG_TEST_PORT").unwrap().parse_int().unwrap(),
+        var(&"VERUM_PG_TEST_USER").unwrap(),
+        var(&"VERUM_PG_TEST_PASSWORD").unwrap(),
+        var(&"VERUM_PG_TEST_DATABASE").unwrap(),
+    ).with_tls(PgTlsMode.PtmDisable);
+    let storage = PublicationStorage.open_postgres(config, 32768, 2).unwrap();
+    let phase = var(&"VERUM_PG_STORAGE_PHASE").unwrap_or("write");
+    if phase == "race-a" || phase == "race-b" {
+        let key = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let bytes: List<Byte> = if phase == "race-a" { [1, 2, 3] } else { [4, 5, 6] };
+        match storage.commit(&key, &bytes) {
+            Result.Ok(RecordWrite.Created) => print("postgres storage: race created"),
+            Result.Err(PublicationStorageError.Conflict) => print("postgres storage: race conflict"),
+            _ => panic("unexpected competing publication result"),
+        }
+        return;
+    }
+    let key = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let mut bytes: List<Byte> = List.new();
+    let mut index = 0;
+    while index < 10003 { bytes.push((index % 256) as Byte); index = index + 1; }
+    if phase == "corrupt" {
+        assert(storage.load(&key) is Result.Err(PublicationStorageError.Corrupt));
+        assert(storage.commit(&key, &bytes) is Result.Err(PublicationStorageError.Corrupt));
+        print("postgres storage: corrupt row refused");
+        return;
+    }
+    if phase != "write" && phase != "read" { panic("unknown storage test phase"); }
+    if phase == "write" {
+        assert(storage.load(&key).unwrap() is Maybe.None);
+        assert(storage.commit(&key, &bytes).unwrap() is RecordWrite.Created);
+    }
+    let stored = storage.load(&key).unwrap().unwrap();
+    assert_eq(stored.len(), bytes.len());
+    index = 0;
+    while index < bytes.len() { assert_eq(stored[index], bytes[index]); index = index + 1; }
+    assert(storage.commit(&key, &bytes).unwrap() is RecordWrite.Existing);
+    bytes[0] = 99;
+    assert(storage.commit(&key, &bytes) is Result.Err(PublicationStorageError.Conflict));
+    assert(storage.load(&"not-a-key") is Result.Err(PublicationStorageError.InvalidKey));
+    print("postgres storage: durable bytes, exact retry and conflict passed");
+}

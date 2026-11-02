@@ -1,6 +1,7 @@
 module verum_registry.tests.publication_commit;
 
 mount core.base.env.var;
+mount core.database.postgres.config.{PgConfig, PgTlsMode};
 mount core.io.file.File;
 mount core.io.protocols.Read;
 mount core.net.http.{Headers, Method};
@@ -78,10 +79,22 @@ fn check_receipt(receipt: &PublicationReceipt, expected_status: Int, publication
     assert_eq(fields.get(&"checksum").unwrap().as_string().unwrap(), publication.metadata.checksum_spelling);
 }
 
+fn fixture_storage(directory: &Text, limit: Int) -> PublicationStorage {
+    if var(&"VERUM_PUBLICATION_TEST_BACKEND").unwrap_or("files") == "postgres" {
+        let config = PgConfig.new(
+            var(&"VERUM_PG_TEST_HOST").unwrap(), var(&"VERUM_PG_TEST_PORT").unwrap().parse_int().unwrap(),
+            var(&"VERUM_PG_TEST_USER").unwrap(), var(&"VERUM_PG_TEST_PASSWORD").unwrap(),
+            var(&"VERUM_PG_TEST_DATABASE").unwrap(),
+        ).with_tls(PgTlsMode.PtmDisable);
+        return PublicationStorage.open_postgres(config, limit, 2).unwrap();
+    }
+    PublicationStorage.open(directory, limit).unwrap()
+}
+
 fn main() {
     let directory = var(&"VERUM_PUBLICATION_STORE").unwrap();
     let phase = var(&"VERUM_PUBLICATION_PHASE").unwrap();
-    let storage = PublicationStorage.open(&directory, 100663296).unwrap();
+    let storage = fixture_storage(&directory, 100663296);
     let limits = default_archive_limits();
     let publication = fixture(&"readme", false);
     if phase == "create" {
@@ -89,7 +102,7 @@ fn main() {
         assert(commit_prepared_publication(invalid, &storage, &limits)
             is Result.Err(PublicationCommitError.Admission(_)));
         assert(load_publication(&storage, &"widget", &"1.2.3") is Result.Ok(Maybe.None));
-        let tiny = PublicationStorage.open(&directory, 1).unwrap();
+        let tiny = fixture_storage(&directory, 1);
         let valid = prepare(&publication, &"alice", &"active", &"local");
         assert(commit_prepared_publication(valid, &tiny, &limits) is Result.Err(PublicationCommitError.Storage(_)));
         assert(load_publication(&storage, &"widget", &"1.2.3") is Result.Ok(Maybe.None));

@@ -1,246 +1,39 @@
 module verum_registry.node.publication_storage;
 
-mount core.io.file.File;
-mount core.io.path.Path;
-mount core.io.fs.{symlink_metadata, hard_link, remove_file};
-mount core.io.protocols.{Read, Write, StreamError, IoErrorKind};
-mount core.hash.crypto.sha256.Sha256;
-mount core.encoding.hex.encode;
-mount core.random.secure.fill_secure;
+mount core.database.postgres.config.PgConfig;
+mount verum_registry.node.publication_local_storage.PublicationLocalStorage;
+mount verum_registry.node.publication_postgres_storage.PublicationPostgresStorage;
+public mount verum_registry.node.publication_storage_contract.{PublicationStorageError, RecordWrite};
 
-/// Immutable records in an operator-owned directory on one local filesystem.
-/// Each record contains the complete publication transaction. This storage
-/// boundary checks integrity; semantic admission belongs to its caller.
-public type PublicationStorage is {
-    private directory: Text,
-    private limit: Int,
-};
+type PublicationBackend is
+    | Local(PublicationLocalStorage)
+    | Postgres(PublicationPostgresStorage);
 
-public type PublicationStorageError is
-    | InvalidDirectory
-    | InvalidKey
-    | TooLarge
-    | Corrupt
-    | Conflict
-    | Io(StreamError);
-
-public type RecordWrite is | Created | Existing;
-
-fn key_valid(key: &Text) -> Bool {
-    if key.len() != 64 { return false; }
-    for byte in key.bytes() {
-        if !((byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)) {
-            return false;
-        }
-    }
-    true
-}
-
-fn record_digest(key: &Text, value: &[Byte]) -> [Byte; 32] {
-    let mut hash = Sha256.new();
-    hash.update("VRPUB001".as_bytes());
-    hash.update(key.as_bytes());
-    hash.update(value);
-    hash.finalize()
-}
-
-fn header(key: &Text, value: &List<Byte>) -> List<Byte> {
-    let mut result: List<Byte> = List.with_capacity(48);
-    for byte in "VRPUB001".bytes() { result.push(byte); }
-    let mut length = value.len();
-    let mut index = 0;
-    while index < 8 {
-        result.push((length % 256) as Byte);
-        length = length / 256;
-        index = index + 1;
-    }
-    for byte in record_digest(key, value.as_slice()) { result.push(byte); }
-    result
-}
-
-fn decode_record(
-    key: &Text, bytes: &List<Byte>, limit: Int,
-) -> Result<List<Byte>, PublicationStorageError> {
-    if bytes.len() < 48 { return Result.Err(PublicationStorageError.Corrupt); }
-    let magic = "VRPUB001".as_bytes();
-    let mut index = 0;
-    while index < 8 {
-        if bytes[index] != magic[index] { return Result.Err(PublicationStorageError.Corrupt); }
-        index = index + 1;
-    }
-    let mut length = 0;
-    index = 15;
-    while index >= 8 {
-        let byte = bytes[index] as Int;
-        if byte > limit || length > (limit - byte) / 256 {
-            return Result.Err(PublicationStorageError.Corrupt);
-        }
-        length = length * 256 + byte;
-        index = index - 1;
-    }
-    if length != bytes.len() - 48 { return Result.Err(PublicationStorageError.Corrupt); }
-    let mut value: List<Byte> = List.with_capacity(length);
-    index = 48;
-    while index < bytes.len() { value.push(bytes[index]); index = index + 1; }
-    let digest = record_digest(key, value.as_slice());
-    index = 0;
-    while index < 32 {
-        if digest[index] != bytes[16 + index] {
-            return Result.Err(PublicationStorageError.Corrupt);
-        }
-        index = index + 1;
-    }
-    Result.Ok(value)
-}
-
-fn read_record(file: &mut File, limit: Int) -> Result<List<Byte>, PublicationStorageError> {
-    let mut result: List<Byte> = List.new();
-    let mut buffer: [Byte; 4096] = [0_u8; 4096];
-    loop {
-        let count = match file.read(&mut buffer[..]) {
-            Result.Ok(count) => count,
-            Result.Err(error) => return Result.Err(PublicationStorageError.Io(error)),
-        };
-        if count == 0 { return Result.Ok(result); }
-        if count < 0 || count > buffer.len() || count > limit - result.len() {
-            return Result.Err(PublicationStorageError.Corrupt);
-        }
-        let mut index = 0;
-        while index < count { result.push(buffer[index]); index = index + 1; }
-    }
-}
-
-fn write_bytes(file: &mut File, bytes: &[Byte]) -> Result<(), PublicationStorageError> {
-    let mut position = 0;
-    while position < bytes.len() {
-        let remaining = bytes.len() - position;
-        let count = match file.write(&bytes[position..]) {
-            Result.Ok(count) => count,
-            Result.Err(error) => return Result.Err(PublicationStorageError.Io(error)),
-        };
-        if count <= 0 || count > remaining {
-            return Result.Err(PublicationStorageError.Io(StreamError.new(IoErrorKind.WriteZero)));
-        }
-        position = position + count;
-    }
-    Result.Ok(())
-}
-
-fn sync_directory(directory: &Text) -> Result<(), PublicationStorageError> {
-    let file = match File.open(directory) {
-        Result.Ok(file) => file,
-        Result.Err(error) => return Result.Err(PublicationStorageError.Io(error)),
-    };
-    match file.sync_all() {
-        Result.Ok(()) => Result.Ok(()),
-        Result.Err(error) => Result.Err(PublicationStorageError.Io(error)),
-    }
-}
+/// The storage choice is fixed at startup. An unavailable backend never
+/// substitutes another store or reports a missing release.
+public type PublicationStorage is { private backend: PublicationBackend };
 
 implement PublicationStorage {
-    /// The directory must already exist. Opening a missing or unreadable store
-    /// never silently substitutes an empty one.
     public fn open(directory: &Text, limit: Int) -> Result<PublicationStorage, PublicationStorageError> {
-        if limit < 1 || limit > 100663296 { return Result.Err(PublicationStorageError.TooLarge); }
-        if directory.len() == 0 { return Result.Err(PublicationStorageError.InvalidDirectory); }
-        for byte in directory.bytes() {
-            if byte == 0 { return Result.Err(PublicationStorageError.InvalidDirectory); }
-        }
-        let metadata = match symlink_metadata(&Path.new(directory)) {
-            Result.Ok(metadata) => metadata,
-            Result.Err(error) => return Result.Err(PublicationStorageError.Io(error)),
-        };
-        if !metadata.is_dir() || metadata.is_symlink() {
-            return Result.Err(PublicationStorageError.InvalidDirectory);
-        }
-        sync_directory(directory)?;
-        let mut owned = Text.with_capacity(directory.len());
-        owned.push_str(directory);
-        Result.Ok(PublicationStorage { directory: owned, limit: limit })
+        Result.Ok(PublicationStorage { backend: PublicationBackend.Local(PublicationLocalStorage.open(directory, limit)?) })
     }
 
-    /// A key is a lowercase SHA-256 coordinate digest, never a filesystem path.
-    /// Staging files cannot be read through this API.
+    public fn open_postgres(config: PgConfig, limit: Int, connections: Int)
+        -> Result<PublicationStorage, PublicationStorageError> {
+        Result.Ok(PublicationStorage { backend: PublicationBackend.Postgres(PublicationPostgresStorage.open(config, limit, connections)?) })
+    }
+
     public fn load(&self, key: &Text) -> Result<Maybe<List<Byte>>, PublicationStorageError> {
-        if !key_valid(key) { return Result.Err(PublicationStorageError.InvalidKey); }
-        let path = f"{self.directory}/{key}.publication";
-        let metadata = match symlink_metadata(&Path.new(&path)) {
-            Result.Ok(metadata) => metadata,
-            Result.Err(error) => {
-                if error.kind() is IoErrorKind.NotFound { return Result.Ok(Maybe.None); }
-                return Result.Err(PublicationStorageError.Io(error));
-            },
-        };
-        if !metadata.is_file() || metadata.is_symlink() {
-            return Result.Err(PublicationStorageError.Corrupt);
+        match &self.backend {
+            PublicationBackend.Local(storage) => storage.load(key),
+            PublicationBackend.Postgres(storage) => storage.load(key),
         }
-        let mut file = match File.open(&path) {
-            Result.Ok(file) => file,
-            Result.Err(error) => return Result.Err(PublicationStorageError.Io(error)),
-        };
-        let bytes = read_record(&mut file, self.limit + 48)?;
-        Result.Ok(Maybe.Some(decode_record(key, &bytes, self.limit)?))
     }
 
-    /// Commit one complete, immutable record. The atomic hard link arbitrates
-    /// concurrent writers; the final name is never replaced or written in place.
-    /// Success follows both file and directory sync. On an uncertain I/O failure,
-    /// retry the same key and complete record.
     public fn commit(&self, key: &Text, value: &List<Byte>) -> Result<RecordWrite, PublicationStorageError> {
-        if !key_valid(key) { return Result.Err(PublicationStorageError.InvalidKey); }
-        if value.len() > self.limit { return Result.Err(PublicationStorageError.TooLarge); }
-        let encoded_header = header(key, value);
-        let mut attempt = 0;
-        while attempt < 16 {
-            let mut nonce: List<Byte> = List.new();
-            let mut index = 0;
-            while index < 16 { nonce.push(0_u8); index = index + 1; }
-            fill_secure(&mut nonce);
-            let temporary = f"{self.directory}/.pending-{encode(nonce.as_slice())}";
-            let mut file = match File.create_new(&temporary) {
-                Result.Ok(file) => file,
-                Result.Err(error) => {
-                    if error.kind() is IoErrorKind.AlreadyExists { attempt = attempt + 1; continue; }
-                    return Result.Err(PublicationStorageError.Io(error));
-                },
-            };
-            let written = write_bytes(&mut file, encoded_header.as_slice())
-                .and_then(|_| write_bytes(&mut file, value.as_slice()));
-            if let Result.Err(error) = written {
-                let _ = remove_file(&Path.new(&temporary));
-                return Result.Err(error);
-            }
-            if let Result.Err(error) = file.sync_all() {
-                let _ = remove_file(&Path.new(&temporary));
-                return Result.Err(PublicationStorageError.Io(error));
-            }
-            let final_path = f"{self.directory}/{key}.publication";
-            let linked = hard_link(&Path.new(&temporary), &Path.new(&final_path));
-            // Removing an unreferenced staging name cannot invalidate a final
-            // hard link. A crash may leave an orphan, never a partial release.
-            let _ = remove_file(&Path.new(&temporary));
-            let outcome = match linked {
-                Result.Ok(()) => RecordWrite.Created,
-                Result.Err(error) => {
-                    if !(error.kind() is IoErrorKind.AlreadyExists) {
-                        return Result.Err(PublicationStorageError.Io(error));
-                    }
-                    let existing = match self.load(key)? {
-                        Maybe.Some(existing) => existing,
-                        Maybe.None => return Result.Err(PublicationStorageError.Corrupt),
-                    };
-                    if existing.len() != value.len() { return Result.Err(PublicationStorageError.Conflict); }
-                    index = 0;
-                    while index < value.len() {
-                        if existing[index] != value[index] { return Result.Err(PublicationStorageError.Conflict); }
-                        index = index + 1;
-                    }
-                    RecordWrite.Existing
-                },
-            };
-            sync_directory(&self.directory)?;
-            return Result.Ok(outcome);
+        match &self.backend {
+            PublicationBackend.Local(storage) => storage.commit(key, value),
+            PublicationBackend.Postgres(storage) => storage.commit(key, value),
         }
-        Result.Err(PublicationStorageError.Io(StreamError.new(IoErrorKind.AlreadyExists)))
     }
 }

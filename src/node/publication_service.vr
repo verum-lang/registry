@@ -41,13 +41,19 @@ implement PublicationHandler {
     public fn open(
         directory: &Text, credential_file: &Text, authorities: List<Authority>,
     ) -> Result<PublicationHandler, Text> {
-        let credentials = match load_credentials(credential_file, &authorities) {
-            Result.Ok(value) => value,
-            Result.Err(_) => return Result.Err("credential configuration could not be loaded"),
-        };
         let storage = match PublicationStorage.open(directory, 100663296) {
             Result.Ok(value) => value,
             Result.Err(_) => return Result.Err("publication storage could not be opened"),
+        };
+        PublicationHandler.from_storage(storage, credential_file, authorities)
+    }
+
+    public fn from_storage(
+        storage: PublicationStorage, credential_file: &Text, authorities: List<Authority>,
+    ) -> Result<PublicationHandler, Text> {
+        let credentials = match load_credentials(credential_file, &authorities) {
+            Result.Ok(value) => value,
+            Result.Err(_) => return Result.Err("credential configuration could not be loaded"),
         };
         Result.Ok(PublicationHandler {
             credentials: credentials, authorities: authorities, storage: storage,
@@ -134,7 +140,15 @@ implement Handler for PublicationHandler {
 public async fn serve_publications(
     address: &Text, directory: &Text, credential_file: &Text, authorities: List<Authority>,
 ) -> Result<(), Text> {
-    let handler = PublicationHandler.open(directory, credential_file, authorities)?;
+    let storage = PublicationStorage.open(directory, 100663296)
+        .map_err(|_| "publication storage could not be opened")?;
+    serve_publication_storage(address, storage, credential_file, authorities).await
+}
+
+public async fn serve_publication_storage(
+    address: &Text, storage: PublicationStorage, credential_file: &Text, authorities: List<Authority>,
+) -> Result<(), Text> {
+    let handler = PublicationHandler.from_storage(storage, credential_file, authorities)?;
     // Inflation is bounded per request; a small connection budget also bounds
     // aggregate memory until streaming archive admission is available.
     let server = WeftApp.new(handler).with_max_connections(2).bind(address.clone())?;

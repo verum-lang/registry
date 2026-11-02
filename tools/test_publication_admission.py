@@ -24,7 +24,8 @@ COMMON = (
 )
 TRANSACTION = (
     "protocol/authority", "node/publication_auth", "node/publication_prepare",
-    "node/publication_storage", "node/publication_commit",
+    "node/publication_storage_contract", "node/publication_local_storage",
+    "node/publication_postgres_storage", "node/publication_storage", "node/publication_commit",
 )
 
 
@@ -110,6 +111,19 @@ def unpack_record(path):
     return fields[:6], metadata, compressed
 
 
+def stage_component(project, modules, fixture):
+    for module in modules:
+        destination = project / f"src/{module}.vr"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / f"src/{module}.vr", destination)
+    (project / "verum.toml").write_text(
+        '[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n')
+    source = (ROOT / f"tests/{fixture}.vr").read_text()
+    header = f"module verum_registry.tests.{Path(fixture).name};"
+    assert source.count(header) == 1
+    (project / "src/main.vr").write_text(source.replace(header, "module verum_registry.main;", 1))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
@@ -122,18 +136,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="registry-publication-admission-") as temporary:
         project = Path(temporary)
         modules = COMMON + (TRANSACTION if options.component != "archive" else ())
-        for module in modules:
-            destination = project / f"src/{module}.vr"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / f"src/{module}.vr", destination)
-        (project / "verum.toml").write_text(
-            '[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n')
         fixture = ("language/publication_receipt_construct" if options.component == "receipt-private"
                    else f"publication_{options.component}")
-        source = (ROOT / f"tests/{fixture}.vr").read_text()
-        header = f"module verum_registry.tests.{Path(fixture).name};"
-        assert source.count(header) == 1
-        (project / "src/main.vr").write_text(source.replace(header, "module verum_registry.main;", 1))
+        stage_component(project, modules, fixture)
         if options.component == "receipt-private":
             try:
                 run([executable, "check"], project, options.timeout)
