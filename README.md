@@ -89,7 +89,10 @@ Run `python3 tools/test_publication_install.py /absolute/path/to/verum` to
 publish and install with real package commands and fresh client profiles.
 Its loopback HTTP transport forwards requests to the production Weft handler.
 The client verifies the downloaded SHA-256, then records the dependency and
-exact registry coordinate in its manifest and lockfile.
+exact registry coordinate in its manifest and lockfile. Add `--execute-installed`
+to publish a unique export and run it from a fresh consumer with the publisher's
+source removed. The gate also changes and removes the cached archive and checks
+that the consumer refuses both cases without contacting the registry.
 
 Registry commit `8ad0abc` passed the whole-project check. The CLI with
 SHA-256 `077b3e309558074ae8e2b1481e137f3264c1d8c0cd0a6d6e990538942ddbf2ae`

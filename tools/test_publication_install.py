@@ -7,6 +7,9 @@ import json
 import os
 from pathlib import Path
 import selectors
+import secrets
+import shutil
+import tarfile
 import signal
 import subprocess
 import tempfile
@@ -20,7 +23,7 @@ REPORT = "/api/v1/security/vulnerabilities/widget/1.2.3"
 DOWNLOAD = META + "/download"
 
 
-def exercise(exe, root, timeout):
+def exercise(exe, root, timeout, execute_installed=False, dependency_main=False):
     source = root / "handler"
     modules = COMMON + TRANSACTION + ("node/publication_credentials_file", "node/publication_advisories",
                                       "node/publication_service")
@@ -87,16 +90,21 @@ def exercise(exe, root, timeout):
                     f'[cog]\nname="{name}"\nversion="1.2.3"\nedition="2026"\n[registry]\nindex="{base}"\n')
                 return directory
 
-            def invoke(directory, args, **extra):
-                profile = directory / "profile"
-                env = {**os.environ, **package_profile(profile), **extra}
+            def invoke(directory, args, profile_env):
+                env = {**os.environ, **profile_env}
                 return subprocess.run([exe, "package", *args], cwd=directory, env=env,
                                       capture_output=True, text=True, timeout=timeout)
 
             publisher = project("publisher", "widget")
             (publisher / "src").mkdir()
-            (publisher / "src/main.vr").write_text('module widget.main;\nfn main() { print(42); }\n')
-            outcome = invoke(publisher, ["publish", "--allow-dirty"], VERUM_REGISTRY_TOKEN=TOKEN)
+            if not execute_installed or dependency_main:
+                (publisher / "src/main.vr").write_text('module widget.main;\nfn main() { print(42); }\n')
+            marker = "published-" + secrets.token_hex(12)
+            exported = f'module widget.api;\npublic fn published_value() -> Text {{ "{marker}" }}\n'
+            if execute_installed:
+                (publisher / "src/api.vr").write_text(exported)
+            outcome = invoke(publisher, ["publish", "--allow-dirty"],
+                             {**package_profile(publisher / "profile"), "VERUM_REGISTRY_TOKEN": TOKEN})
             assert outcome.returncode == 0, outcome.stderr
             assert events == [("/api/v1/cogs/publish", 201)], events
             snapshot, = (source / "store").glob("*.publication")
@@ -116,7 +124,8 @@ def exercise(exe, root, timeout):
                 consumer = project(label, "consumer")
                 manifest = consumer / "Verum.toml"
                 before = manifest.read_bytes()
-                result = invoke(consumer, ["install", "widget", "--version", "1.2.3"])
+                env = package_profile(consumer / "profile")
+                result = invoke(consumer, ["install", "widget", "--version", "1.2.3"], env)
                 output = result.stdout + result.stderr
                 assert (result.returncode == 0) == success, (label, output)
                 expected = [(META, 200), (REPORT, 200 if success or damaged else 503)]
@@ -135,6 +144,47 @@ def exercise(exe, root, timeout):
                 assert ("No known vulnerabilities" in output) == (report == empty)
                 if report != empty:
                     assert finding["description"] in output
+
+                return consumer, env
+
+            if execute_installed:
+                consumer, env = install("consumer-run", empty, True)
+                cached, = (consumer / "profile").rglob("widget-1.2.3.tar.gz")
+                with tarfile.open(cached, "r:gz") as accepted:
+                    assert accepted.extractfile("src/api.vr").read().decode() == exported
+                # The registry and the consumer are now the only holders of this cog.
+                shutil.rmtree(publisher)
+                (consumer / "src").mkdir()
+                (consumer / "src/main.vr").write_text(
+                    "module consumer.main;\nmount widget.api.published_value;\n"
+                    "fn main() { print(published_value()); }\n")
+                def run(args):
+                    return subprocess.run([exe, *args], cwd=consumer, env={**os.environ, **env},
+                                          text=True, capture_output=True, timeout=timeout)
+
+                events.clear()
+                lock, = [p for p in consumer.iterdir() if p.name.lower() == "verum.lock"]
+                manifest = consumer / "Verum.toml"
+                original = (lock.read_bytes(), manifest.read_bytes())
+                checked = run(["check"])
+                assert checked.returncode == 0, checked.stderr
+                result = run(["run", "--tier", "interpret"])
+                assert result.returncode == 0, result.stderr
+                assert result.stdout.strip() == marker, result.stdout
+
+                cached.write_bytes(archive[:-1] + bytes([archive[-1] ^ 1]))
+                result = run(["run", "--tier", "interpret"])
+                assert result.returncode != 0 and "Checksum mismatch for installed cog" in result.stderr, result
+                assert marker not in result.stdout
+                cached.unlink()
+                result = run(["run", "--tier", "interpret"])
+                assert result.returncode != 0 and "Cannot open installed archive" in result.stderr, result
+                assert marker not in result.stdout and not cached.exists()
+                assert (lock.read_bytes(), manifest.read_bytes()) == original
+                assert not events, events
+                print("Installed cog: fresh consumer checked and ran the published function offline; "
+                      "changed and missing archives were refused.")
+                return
 
             # A report about different archive bytes cannot authorize this coordinate.
             (reports / f"{snapshot.stem}-{'0' * 64}.json").write_text(json.dumps(empty))
@@ -163,6 +213,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--execute-installed", action="store_true", help="mount and run the installed export")
+    parser.add_argument("--dependency-main", action="store_true",
+                        help="also publish a dependency entry point when exercising the installed export")
     options = parser.parse_args()
+    if options.dependency_main and not options.execute_installed:
+        parser.error("--dependency-main requires --execute-installed")
     with tempfile.TemporaryDirectory(prefix="verum-publish-install-") as tmp:
-        exercise(str(options.verum.resolve(strict=True)), Path(tmp), options.timeout)
+        exercise(str(options.verum.resolve(strict=True)), Path(tmp), options.timeout, options.execute_installed, options.dependency_main)
