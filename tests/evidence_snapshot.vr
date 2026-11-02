@@ -13,7 +13,7 @@ fn main() {
     let digest = digest_of(&input);
     let signature = SignatureBundle { manifest_digest: digest.clone(), signer: "publisher" };
     let proof = InclusionProof { manifest_digest: digest, log_id: "long-upstream-log-identity", tree_size: 3 };
-    let verdict = verify(input.clone(), &signature, &proof, "long-authority-identity", AuthorityRole.Local, &proof.log_id).unwrap();
+    let verdict = verify(input, &signature, &proof, "long-authority-identity", AuthorityRole.Local, &proof.log_id).unwrap();
     input.version.push_str("-changed");
     assert_eq(input.version, "1.2.3-release-with-long-text-changed");
     assert_eq(verdict.manifest().version, "1.2.3-release-with-long-text");
