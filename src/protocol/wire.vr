@@ -113,11 +113,11 @@ fn kind_of(v: &JsonValue) -> Text {
     }
 }
 
-/// A required sub-object.
-fn field_object(parent: &JsonValue, at: &Text) -> Result<JsonValue, WireError> {
-    match parent.as_object() {
+/// Move a required sub-object out of the request document for decoding.
+fn take_field_object(parent: &mut JsonValue, at: &Text) -> Result<JsonValue, WireError> {
+    match parent.as_object_mut() {
         Maybe.None => Result.Err(WireError.NotAnObject),
-        Maybe.Some(map) => match map.get(at) {
+        Maybe.Some(map) => match map.remove(at.clone()) {
             Maybe.None => Result.Err(WireError.MissingField(at.clone())),
             Maybe.Some(v) => {
                 if v.as_object() is None {
@@ -127,7 +127,7 @@ fn field_object(parent: &JsonValue, at: &Text) -> Result<JsonValue, WireError> {
                         kind_of(v),
                     ));
                 }
-                Result.Ok(v.clone())
+                Result.Ok(v)
             }
         },
     }
@@ -256,7 +256,7 @@ public fn decode_proof(v: &JsonValue) -> Result<InclusionProof, WireError> {
 /// partially-filled request: either every field was present and
 /// well-typed, or the first fault is named and nothing is built.
 public fn decode_publish_request(body: &Text) -> Result<PublishRequest, WireError> {
-    let doc = match decode(body) {
+    let mut doc = match decode(body) {
         Result.Ok(v) => v,
         // The JSON error is not passed through verbatim: its own text
         // describes a position in a byte stream, which is true but not
@@ -268,9 +268,9 @@ public fn decode_publish_request(body: &Text) -> Result<PublishRequest, WireErro
         return Result.Err(WireError.NotAnObject);
     }
 
-    let manifest_v = field_object(&doc, &"manifest")?;
-    let signature_v = field_object(&doc, &"signature")?;
-    let proof_v = field_object(&doc, &"proof")?;
+    let manifest_v = take_field_object(&mut doc, &"manifest")?;
+    let signature_v = take_field_object(&mut doc, &"signature")?;
+    let proof_v = take_field_object(&mut doc, &"proof")?;
     let as_authority = field_text(&doc, &"as_authority", &"as_authority")?;
 
     Result.Ok(PublishRequest {
