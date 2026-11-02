@@ -9,9 +9,9 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
-import sys
 import tempfile
 import time
+import tomllib
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -34,6 +34,27 @@ def envelope(metadata, content):
     return len(encoded).to_bytes(4, "little") + encoded + len(content).to_bytes(8, "little") + content
 
 
+def package_profile(profile):
+    """The CLI resolves its OS cache and signing keys inside this disposable client profile."""
+    profile.mkdir()
+    return {"HOME": str(profile), "XDG_CACHE_HOME": str(profile / "cache"),
+            "XDG_CONFIG_HOME": str(profile / "config"), "LOCALAPPDATA": str(profile / "local"),
+            "APPDATA": str(profile / "roaming"), "USERPROFILE": str(profile), "NO_COLOR": "1",
+            "HTTP_PROXY": "http://127.0.0.1:1", "HTTPS_PROXY": "http://127.0.0.1:1",
+            "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+
+
+def check_installed(consumer, profile, base, digest, archive):
+    artifact, = profile.rglob("widget-1.2.3.tar.gz")
+    assert artifact.read_bytes() == archive
+    manifest = tomllib.loads((consumer / "Verum.toml").read_text())
+    assert manifest["dependencies"]["widget"] == "1.2.3"
+    lockfile, = [p for p in consumer.iterdir() if p.name.lower() == "verum.lock"]
+    entry, = tomllib.loads(lockfile.read_text())["packages"]
+    assert entry["name"] == "widget" and entry["version"] == "1.2.3" and entry["checksum"] == digest
+    assert entry["source"] == {"type": "registry", "registry": base, "version": "1.2.3"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
@@ -44,20 +65,12 @@ def main():
     if not 0 < options.timeout <= 1800:
         parser.error("timeout must be between 0 and 1800 seconds")
     executable = str(options.verum.resolve(strict=True))
-    # The public CLI automatically signs when a user key exists. This unsigned
-    # source-publication test must never borrow the developer's signing identity.
-    if sys.platform == "darwin":
-        configuration = Path.home() / "Library/Application Support"
-    elif os.name == "nt":
-        configuration = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
-    else:
-        configuration = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    if any(path.exists() for path in (configuration / "verum/signing.key", Path.home() / ".verum/signing.key")):
-        parser.error("use a clean unsigned test profile: the CLI signing-key locations must be absent")
     with tempfile.TemporaryDirectory(prefix="registry-publication-http-") as temporary:
         project = Path(temporary)
         storage = project / "store"
         storage.mkdir()
+        reports = project / "reports"
+        reports.mkdir()
         credentials = project / "credentials.json"
         write_credentials(credentials)
         with socket.socket() as probe:
@@ -67,7 +80,7 @@ def main():
         client = build_opener(ProxyHandler({}))
         environment = {**os.environ, "NO_COLOR": "1", "VERUM_NO_OBJECT_CACHE": "1",
                        "VERUM_REGISTRY_LISTEN": f"127.0.0.1:{port}",
-                       "VERUM_REGISTRY_STORAGE": "files",
+                       "VERUM_REGISTRY_STORAGE": "files", "VERUM_REGISTRY_ADVISORIES": str(reports),
                        "VERUM_REGISTRY_STORE": str(storage), "VERUM_REGISTRY_CREDENTIALS": str(credentials),
                        "VERUM_REGISTRY_AUTHORITY": "local", "VERUM_REGISTRY_OWNED_NAMES": "widget"}
 
@@ -200,7 +213,7 @@ def main():
             (publisher / "src/main.vr").write_text('module widget.main;\nfn main() { print(42); }\n')
             (publisher / "README.md").write_text("# Widget\n")
             run([executable, "package", "publish", "--allow-dirty"], publisher, options.timeout,
-                {"VERUM_REGISTRY_TOKEN": TOKEN, "NO_PROXY": "127.0.0.1,localhost"})
+                {**package_profile(project / "publisher-profile"), "VERUM_REGISTRY_TOKEN": TOKEN})
             accepted, = stored_keys()
             original = stored_bytes(accepted)
             snapshot = project / (accepted + ".publication")
@@ -217,6 +230,19 @@ def main():
             assert metadata["published_at"] == int(provenance[5])
             assert metadata["signature"] is None and metadata["proofs"] is None
             print("publication HTTP: real CLI publish and exact metadata/download passed", flush=True)
+
+            report = {"package": "widget", "version": "1.2.3", "vulnerabilities": []}
+            digest = source_metadata["checksum"]
+            (reports / f"{accepted}-{digest}.json").write_text(json.dumps(report))
+            consumer = project / "consumer"
+            consumer.mkdir()
+            (consumer / "Verum.toml").write_text(
+                f'[cog]\nname="consumer"\nversion="1.0.0"\nedition="2026"\n[registry]\nindex="{base}"\n')
+            profile = project / "consumer-profile"
+            run([executable, "package", "install", "widget", "--version", "1.2.3"],
+                consumer, options.timeout, package_profile(profile))
+            check_installed(consumer, profile, base, digest, archive)
+            print("publication HTTP: fresh package client installed exact archive and lock entry", flush=True)
 
             status, _, body = request("/api/v1/cogs/publish", envelope(source_metadata, archive), True)
             assert status == 200 and json.loads(body)["checksum"] == source_metadata["checksum"]

@@ -292,7 +292,7 @@ def main():
                 sql("DELETE FROM public.verum_publications;")
             if options.component in ("all", "handler"):
                 source = project / "handler-test"
-                modules = COMMON + TRANSACTION + ("node/publication_credentials_file", "node/publication_service")
+                modules = COMMON + TRANSACTION + ("node/publication_credentials_file", "node/publication_advisories", "node/publication_service")
                 stage_component(source, modules, "postgres_publication_handler")
                 fixtures(source)
                 write_credentials(source / "credentials.json")

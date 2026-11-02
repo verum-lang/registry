@@ -68,6 +68,29 @@ gate opens the TCP listener and invokes the public package client.
 `--component reconnect` terminates the database session during a blocked
 publication and verifies that the running pool replaces it and safely retries.
 
+### Exact-version installation and advisories
+
+Configure `VERUM_REGISTRY_ADVISORIES` to point to a separate directory owned by
+the registry's advisory operator. Grant the service read-only filesystem access.
+The publication API cannot write reports. Provision a report for each reviewed source archive using
+the filename `<coordinate-key>-<archive-sha256>.json`. The coordinate key is
+SHA-256 of `verum-source-release-v1` followed by a NUL, the UTF-8 package name,
+a NUL and the UTF-8 version. Install updates to a report with an atomic rename.
+
+A report contains `package`, `version` and `vulnerabilities`. Each finding has
+`id`, `severity` (`low`, `medium`, `high` or `critical`), `title`,
+`description` and a `patched_versions` array of strings. Write an empty array
+only for a reviewed release with no recorded findings. A missing directory
+configuration, absent report or invalid report makes the advisory query for a
+published release return 503. A configured directory must exist at startup.
+Reports are limited to 256 KiB.
+
+Run `python3 tools/test_publication_install.py /absolute/path/to/verum` to
+publish and install with real package commands and fresh client profiles.
+Its loopback HTTP transport forwards requests to the production Weft handler.
+The client verifies the downloaded SHA-256, then records the dependency and
+exact registry coordinate in its manifest and lockfile.
+
 Registry commit `8ad0abc` passed the whole-project check. The CLI with
 SHA-256 `077b3e309558074ae8e2b1481e137f3264c1d8c0cd0a6d6e990538942ddbf2ae`
 checked all 40 production files in 71 seconds.

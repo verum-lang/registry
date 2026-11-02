@@ -1,5 +1,7 @@
 module verum_registry.node.publication_service;
 
+mount core.base.env.var;
+mount verum_registry.node.publication_advisories.AdvisoryReports;
 mount core.net.http.{Method, Response, StatusCode};
 mount core.net.url.percent_decode;
 mount core.net.weft.app.WeftApp;
@@ -21,6 +23,7 @@ mount verum_registry.node.publication_commit.{PublicationCommitError, commit_pre
 /// One immutable operator configuration. Every read comes from durable storage;
 /// there is no independently updated catalog that can acknowledge missing bytes.
 public type PublicationHandler is {
+    private advisories: Maybe<AdvisoryReports>,
     private credentials: CredentialStore,
     private authorities: List<Authority>,
     private storage: PublicationStorage,
@@ -56,10 +59,15 @@ implement PublicationHandler {
             Result.Err(_) => return Result.Err("credential configuration could not be loaded"),
         };
         Result.Ok(PublicationHandler {
-            credentials: credentials, authorities: authorities, storage: storage,
+            advisories: Maybe.None, credentials: credentials, authorities: authorities, storage: storage,
             envelope_limits: publication_limits(65536, 917504).unwrap(),
             archive_limits: default_archive_limits(),
         })
+    }
+
+    public fn with_advisories(mut self, directory: &Text) -> Result<PublicationHandler, Text> {
+        self.advisories = Maybe.Some(AdvisoryReports.open(directory)?);
+        Result.Ok(self)
     }
 
     /// Synchronous admission completes before the handler returns HTTP success.
@@ -78,9 +86,10 @@ implement PublicationHandler {
             };
         }
         let segments = request.path.split(&"/");
-        if (segments.len() != 6 && segments.len() != 7)
-            || segments[0] != "" || segments[1] != "api" || segments[2] != "v1" || segments[3] != "cogs"
-            || (segments.len() == 7 && segments[6] != "download") {
+        let advisory = segments.len() == 7 && segments[3] == "security" && segments[4] == "vulnerabilities";
+        let release = (segments.len() == 6 || (segments.len() == 7 && segments[6] == "download"))
+            && segments[3] == "cogs";
+        if !(advisory || release) || segments[0] != "" || segments[1] != "api" || segments[2] != "v1" {
             return failure(404, &"route not found");
         }
         if !(request.method is Method.Get) {
@@ -90,11 +99,12 @@ implement PublicationHandler {
         if let Maybe.Some(query) = &request.raw_query {
             if query.len() != 0 { return failure(400, &"unexpected query"); }
         }
-        let name = match percent_decode(&segments[4]) {
+        let coordinate = if advisory { 5 } else { 4 };
+        let name = match percent_decode(&segments[coordinate]) {
             Result.Ok(value) => value,
             Result.Err(_) => return failure(400, &"invalid coordinate"),
         };
-        let version = match percent_decode(&segments[5]) {
+        let version = match percent_decode(&segments[coordinate + 1]) {
             Result.Ok(value) => value,
             Result.Err(_) => return failure(400, &"invalid coordinate"),
         };
@@ -106,6 +116,16 @@ implement PublicationHandler {
             Result.Ok(Maybe.None) => return failure(404, &"publication not found"),
             Result.Err(_) => return failure(500, &"publication could not be read"),
         };
+        if advisory {
+            let reports = match &self.advisories {
+                Maybe.Some(reports) => reports,
+                Maybe.None => return failure(503, &"advisory report unavailable"),
+            };
+            return match reports.query(&name, &version, &record.metadata.checksum_spelling) {
+                Result.Ok(bytes) => Response.new(StatusCode.new(200)).header("content-type", "application/json").body(bytes),
+                Result.Err(_) => failure(503, &"advisory report unavailable"),
+            };
+        }
         if segments.len() == 7 {
             return Response.new(StatusCode.new(200)).header("content-type", "application/gzip")
                 .header("etag", f"\"{record.metadata.checksum_spelling}\"").body(record.archive);
@@ -149,6 +169,10 @@ public async fn serve_publication_storage(
     address: &Text, storage: PublicationStorage, credential_file: &Text, authorities: List<Authority>,
 ) -> Result<(), Text> {
     let handler = PublicationHandler.from_storage(storage, credential_file, authorities)?;
+    let handler = match var(&"VERUM_REGISTRY_ADVISORIES") {
+        Result.Ok(directory) => handler.with_advisories(&directory)?,
+        Result.Err(_) => handler,
+    };
     // Inflation is bounded per request; a small connection budget also bounds
     // aggregate memory until streaming archive admission is available.
     let server = WeftApp.new(handler).with_max_connections(2).bind(address.clone())?;

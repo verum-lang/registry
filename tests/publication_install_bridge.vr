@@ -1,0 +1,35 @@
+module verum_registry.tests.publication_install_bridge;
+mount core.io.fs.{read, read_to_string, write};
+mount core.io.path.Path;
+mount core.io.stdio.read_line;
+mount core.net.http.{Headers, Method};
+mount core.net.weft.handler.{Handler, WeftRequest};
+mount verum_registry.node.publication_service.PublicationHandler;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+
+// The loopback test passes only the raw HTTP request to this subprocess.
+// All routing, authorization, report lookup and response bodies come from the handler.
+async fn main() {
+    let authority = Authority { id: "local", role: AuthorityRole.Local, owns: [NamePattern.Exact("widget")] };
+    let handler = PublicationHandler.open(&"store", &"credentials.json", [authority]).unwrap()
+        .with_advisories(&"reports").unwrap();
+    print("handler-ready");
+    loop {
+        let command: Text = read_line().unwrap();
+        if command == "quit" || command.len() == 0 { break; }
+        let method = match command { "POST" => Method.Post, "GET" => Method.Get, _ => panic("unexpected test method") };
+        let path: Text = read_to_string(&Path.new(&"request.path")).unwrap();
+        let media: Text = read_to_string(&Path.new(&"request.media")).unwrap();
+        let authorization: Text = read_to_string(&Path.new(&"request.authorization")).unwrap();
+        let mut headers = Headers.new();
+        if media.len() > 0 { headers.set(&"content-type", &media); }
+        if authorization.len() > 0 { headers.set(&"authorization", &authorization); }
+        let body: List<Byte> = read(&Path.new(&"request.bin")).unwrap();
+        let request = WeftRequest.new(method, path, Maybe.None, headers, body);
+        let response = handler.handle(request).await.unwrap();
+        assert_eq(response.content_length().unwrap(), response.body_bytes().len());
+        write(&Path.new(&"response.bin"), response.body_bytes()).unwrap();
+        write(&Path.new(&"response.media"), response.content_type().unwrap().as_bytes()).unwrap();
+        print(f"response={response.status_code().code()}");
+    }
+}

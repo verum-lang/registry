@@ -99,10 +99,13 @@ mutation guarantee. Retain the archive request count and project state as
 observable controls; a mocked empty response cannot establish the registry's
 advisory query path.
 
-This read contract is required in addition to authenticated publication,
-durable archive admission and exact-byte download. The development listener
-does not implement the advisory route, so neither its existing routes nor
-standalone client tests establish publication-to-installation acceptance.
+The publication handler reads complete operator-provisioned reports keyed by
+the published coordinate and archive digest. A publisher can submit source
+bytes but cannot set the report. The handler validates the report against
+the requested coordinate on every read. The package-command acceptance
+fixture runs the production handler behind a loopback HTTP transport and
+checks fresh cache bytes, the manifest and the lockfile. The packaged TCP
+listener has its own acceptance gate.
 
 ## Language mechanisms and their acceptance
 

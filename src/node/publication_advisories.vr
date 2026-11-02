@@ -1,0 +1,95 @@
+module verum_registry.node.publication_advisories;
+
+mount core.encoding.json.{JsonValue, parse_strict};
+mount core.io.file.File;
+mount core.io.fs.{Metadata, symlink_metadata};
+mount core.io.path.Path;
+mount core.io.protocols.Read;
+mount verum_registry.node.publication_record.publication_record_key;
+mount verum_registry.node.publication_storage_contract.key_valid;
+
+/// A trusted operator provisions complete reports independently of publishers.
+/// A report is bound both to its coordinate and to the accepted archive digest.
+public type AdvisoryReports is { private directory: Text };
+
+public type AdvisoryReportError is | Unavailable | InvalidReport;
+
+fn string_field(fields: &Map<Text, JsonValue>, key: &Text) -> Maybe<Text> {
+    match fields.get(key) {
+        Maybe.Some(value) => value.as_string(),
+        Maybe.None => Maybe.None,
+    }
+}
+
+fn valid_finding(value: &JsonValue) -> Bool {
+    let fields = match value.as_object() { Maybe.Some(fields) => fields, Maybe.None => return false };
+    if fields.len() != 5 { return false; }
+    for key in ["id", "title", "description"] {
+        if string_field(fields, &key).unwrap_or("").len() == 0 { return false; }
+    }
+    let severity = string_field(fields, &"severity").unwrap_or("");
+    if severity != "low" && severity != "medium" && severity != "high" && severity != "critical" { return false; }
+    let patched = match fields.get(&"patched_versions") { Maybe.Some(patched) => patched, Maybe.None => return false };
+    let versions = match patched.as_array() { Maybe.Some(versions) => versions, Maybe.None => return false };
+    for version in versions.iter() {
+        if version.as_string().unwrap_or("").len() == 0 { return false; }
+    }
+    true
+}
+
+fn matches_report(value: &JsonValue, name: &Text, version: &Text) -> Bool {
+    let fields = match value.as_object() { Maybe.Some(fields) => fields, Maybe.None => return false };
+    if fields.len() != 3 || string_field(fields, &"package").unwrap_or("") != *name
+        || string_field(fields, &"version").unwrap_or("") != *version { return false; }
+    let findings = match fields.get(&"vulnerabilities") { Maybe.Some(findings) => findings, Maybe.None => return false };
+    let entries = match findings.as_array() { Maybe.Some(entries) => entries, Maybe.None => return false };
+    for finding in entries.iter() { if !valid_finding(finding) { return false; } }
+    true
+}
+
+implement AdvisoryReports {
+    public fn open(directory: &Text) -> Result<AdvisoryReports, Text> {
+        if directory.len() == 0 { return Result.Err("invalid advisory report directory"); }
+        for byte in directory.bytes() { if byte == 0 { return Result.Err("invalid advisory report directory"); } }
+        let meta: Metadata = match symlink_metadata(&Path.new(directory)) {
+            Result.Ok(meta) => meta, Result.Err(_) => return Result.Err("advisory report directory unavailable"),
+        };
+        if !meta.is_dir() || meta.is_symlink() { return Result.Err("invalid advisory report directory"); }
+        Result.Ok(AdvisoryReports { directory: directory.clone() })
+    }
+
+    public fn query(&self, name: &Text, version: &Text, checksum: &Text)
+        -> Result<List<Byte>, AdvisoryReportError> {
+        // Only fixed-format digests enter the path.
+        let key = publication_record_key(name, version);
+        if !key_valid(checksum) { return Result.Err(AdvisoryReportError.InvalidReport); }
+        let path = f"{self.directory}/{key}-{checksum}.json";
+        let stat: Metadata = match symlink_metadata(&Path.new(&path)) {
+            Result.Ok(stat) => stat, Result.Err(_) => return Result.Err(AdvisoryReportError.Unavailable),
+        };
+        if !stat.is_file() || stat.is_symlink() || stat.len() > 262144 { return Result.Err(AdvisoryReportError.InvalidReport); }
+        let mut file: File = match File.open(&path) {
+            Result.Ok(file) => file, Result.Err(_) => return Result.Err(AdvisoryReportError.Unavailable),
+        };
+        let mut bytes: List<Byte> = List.new();
+        let mut buffer: [Byte; 4096] = [0_u8; 4096];
+        loop {
+            let count = match file.read(&mut buffer[..]) {
+                Result.Ok(count) => count,
+                Result.Err(_) => return Result.Err(AdvisoryReportError.Unavailable),
+            };
+            if count == 0 { break; }
+            if count < 0 || count > buffer.len() || count > 262144 - bytes.len() { return Result.Err(AdvisoryReportError.InvalidReport); }
+            let mut index = 0;
+            while index < count { bytes.push(buffer[index]); index = index + 1; }
+        }
+        let source = match Text.from_utf8(bytes.as_slice()) {
+            Result.Ok(source) => source, Result.Err(_) => return Result.Err(AdvisoryReportError.InvalidReport),
+        };
+        let report = match parse_strict(&source, 262144) {
+            Result.Ok(report) => report, Result.Err(_) => return Result.Err(AdvisoryReportError.InvalidReport),
+        };
+        if !matches_report(&report, name, version) { return Result.Err(AdvisoryReportError.InvalidReport); }
+        Result.Ok(bytes)
+    }
+}
