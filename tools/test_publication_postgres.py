@@ -71,12 +71,66 @@ def check_uncommitted_visibility(container, sql):
     print("PostgreSQL SQL: uncommitted row invisible; waiting writer committed exact bytes after rollback", flush=True)
 
 
+def check_pool_reconnect(container, sql, launch, timeout):
+    """Terminate the sole checked-out connection while its INSERT waits on a publisher."""
+    command = ["docker", "exec", "-i", container, "psql", "-XqAt", "-v", "ON_ERROR_STOP=1",
+               "-U", "registry_publisher", "-d", "registry_test"]
+    def publisher_sql(query):
+        return subprocess.run(command, input=query, text=True, capture_output=True,
+                              check=True, timeout=10).stdout.strip()
+
+    anchor, pending = "e" * 64, "f" * 64
+    block = record(pending, b"uncommitted").hex()
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True) as blocker:
+        blocker.stdin.write("SET application_name = 'publication_pool_blocker'; BEGIN; "
+                            f"INSERT INTO public.verum_publications VALUES ('{pending}', decode('{block}','hex'));\n")
+        blocker.stdin.flush()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            client = pool.submit(launch)
+
+            def wait_backend(previous=None):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if client.done():
+                        raise AssertionError("Verum finished before a blocked INSERT: " + client.result())
+                    query = """SELECT c.pid FROM pg_catalog.pg_stat_activity c
+                        JOIN pg_catalog.pg_stat_activity b ON b.pid = ANY(pg_catalog.pg_blocking_pids(c.pid))
+                        WHERE c.usename = 'registry_publisher' AND c.application_name = 'publication_pool_client'
+                          AND b.usename = 'registry_publisher' AND b.application_name = 'publication_pool_blocker'
+                          AND c.wait_event_type = 'Lock'"""
+                    pid = publisher_sql(query)
+                    if pid.isdigit() and pid != previous:
+                        return pid
+                    time.sleep(0.25)
+                raise RuntimeError("publication INSERT did not wait on the test rollback")
+
+            try:
+                first = wait_backend()
+                visible = publisher_sql("SELECT record_key FROM public.verum_publications;")
+                assert visible == anchor
+                # Only the fault is injected as the test administrator.
+                assert sql(f"SELECT pg_catalog.pg_terminate_backend({first});").stdout.strip() == "t"
+                replacement = wait_backend(previous=first)
+                assert replacement != first
+            finally:
+                blocker.communicate("ROLLBACK;\n", timeout=10)
+            assert blocker.returncode == 0
+            assert client.result() == "postgres storage: discarded terminated backend and recovered in live pool"
+    rows = publisher_sql("SELECT record_key, encode(record,'hex') FROM public.verum_publications ORDER BY record_key;")
+    actual = {key: bytes.fromhex(value) for key, value in (line.split("|") for line in rows.splitlines())}
+    assert actual == {anchor: record(anchor, bytes([0, 1, 127, 255])),
+                      pending: record(pending, bytes([0, 42, 254]))}
+    print("PostgreSQL: terminated active INSERT, observed a different backend in the same pool, "
+          "and verified both immutable records", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
     parser.add_argument("--image", default="postgres:17-alpine")
     parser.add_argument("--timeout", type=float, default=600)
-    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "http", "sql"), default="all")
+    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "reconnect", "http", "sql"), default="all")
     options = parser.parse_args()
     executable = str(options.verum.resolve(strict=True))
     if not 0 < options.timeout <= 1800:
@@ -226,6 +280,16 @@ def main():
                 assert inspect_record() == original[:-1]
                 sql("DELETE FROM public.verum_publications;")
                 print("PostgreSQL: authenticated Verum preparation, admission, restart, retry and conflict passed", flush=True)
+            if options.component in ("all", "reconnect"):
+                source = project / "reconnect-test"
+                modules = tuple(f"node/publication_{part}" for part in
+                                ("storage_contract", "local_storage", "postgres_storage", "storage"))
+                stage_component(source, modules, "postgres_publication_reconnect")
+                def reconnect():
+                    return run([executable, "run", "--tier", "interpret"], source, options.timeout,
+                               {**pg_environment(), "VERUM_NO_OBJECT_CACHE": "1"})
+                check_pool_reconnect(container, sql, reconnect, options.timeout)
+                sql("DELETE FROM public.verum_publications;")
             if options.component in ("all", "handler"):
                 source = project / "handler-test"
                 modules = COMMON + TRANSACTION + ("node/publication_credentials_file", "node/publication_service")

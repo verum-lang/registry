@@ -65,6 +65,8 @@ The handler gate sends requests through the production Weft handler, reads the
 accepted bytes from PostgreSQL independently and verifies exact downloads both
 before and after restarting PostgreSQL and the application process. The HTTP
 gate opens the TCP listener and invokes the public package client.
+`--component reconnect` terminates the database session during a blocked
+publication and verifies that the running pool replaces it and safely retries.
 
 Registry commit `8ad0abc` passed the whole-project check. The CLI with
 SHA-256 `077b3e309558074ae8e2b1481e137f3264c1d8c0cd0a6d6e990538942ddbf2ae`

@@ -1,0 +1,27 @@
+module verum_registry.tests.postgres_publication_reconnect;
+
+mount core.base.env.var;
+mount core.database.postgres.config.{PgConfig, PgTlsMode};
+mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
+
+fn main() {
+    let config = PgConfig.new(
+        var(&"VERUM_PG_TEST_HOST").unwrap(), var(&"VERUM_PG_TEST_PORT").unwrap().parse_int().unwrap(),
+        var(&"VERUM_PG_TEST_USER").unwrap(), var(&"VERUM_PG_TEST_PASSWORD").unwrap(),
+        var(&"VERUM_PG_TEST_DATABASE").unwrap(),
+    ).with_application_name("publication_pool_client").with_tls(PgTlsMode.PtmDisable);
+    // A replacement must serve this same live pool, whose only lease was busy.
+    let storage = PublicationStorage.open_postgres(config, 32768, 1).unwrap();
+    let anchor = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let pending = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    let original: List<Byte> = [0, 1, 127, 255];
+    let retry: List<Byte> = [0, 42, 254];
+    assert(storage.commit(&anchor, &original).unwrap() is RecordWrite.Created);
+    assert(storage.commit(&pending, &retry) is Result.Err(PublicationStorageError.Database));
+    let loaded = storage.load(&anchor).unwrap().unwrap();
+    assert_eq(loaded, original);
+    assert(storage.commit(&pending, &retry).unwrap() is RecordWrite.Created);
+    assert(storage.commit(&pending, &retry).unwrap() is RecordWrite.Existing);
+    assert(storage.commit(&anchor, &retry) is Result.Err(PublicationStorageError.Conflict));
+    print("postgres storage: discarded terminated backend and recovered in live pool");
+}
