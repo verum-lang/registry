@@ -46,6 +46,7 @@ fn main() {
     for name in [
         "traversal", "absolute", "backslash", "drive", "empty-component", "device",
         "trailing-dot", "duplicate", "duplicate-directory", "file-parent", "child-parent",
+        "case-manifest", "case-file-parent", "case-child-parent",
         "symlink", "hardlink", "missing-manifest", "nested-manifest", "directory-manifest",
         "manifest-utf8", "manifest-coordinate", "gzip-trailing", "gzip-concatenated",
         "gzip-truncated", "gzip-crc", "tar-terminator", "tar-trailing", "tar-payload",

@@ -90,22 +90,24 @@ fn register_path(
         path.slice(0, path.len() - 1)
     } else { path.clone() };
     let components = normalized.split(&"/");
-    let mut prefix = Text.new();
+    // Case-insensitive clients can extract ASCII case variants to one path.
+    // Keep the archive spelling for manifest and README checks.
+    let mut key = Text.new();
     let mut index = 0;
     while index < components.len() {
         let component = &components[index];
         if !component_valid(component) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
-        if index > 0 { prefix.push_str(&"/"); }
-        prefix.push_str(component);
+        if index > 0 { key.push_str(&"/"); }
+        key.push_str(&component.to_ascii_lowercase());
         if index + 1 < components.len() {
-            if seen.get(&prefix) is Maybe.Some(false) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
-            parents.insert(prefix.clone(), true);
+            if seen.get(&key) is Maybe.Some(false) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
+            parents.insert(key.clone(), true);
         }
         index = index + 1;
     }
-    if seen.contains_key(&normalized) { return Result.Err(ArchiveAdmissionError.DuplicatePath); }
-    if !directory && parents.contains_key(&normalized) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
-    seen.insert(normalized.clone(), directory);
+    if seen.contains_key(&key) { return Result.Err(ArchiveAdmissionError.DuplicatePath); }
+    if !directory && parents.contains_key(&key) { return Result.Err(ArchiveAdmissionError.UnsafePath); }
+    seen.insert(key, directory);
     Result.Ok(normalized)
 }
 
