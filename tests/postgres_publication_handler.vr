@@ -1,0 +1,63 @@
+module verum_registry.tests.postgres_publication_handler;
+
+mount core.base.env.var;
+mount core.database.postgres.config.{PgConfig, PgTlsMode};
+mount core.io.fs.{read, write};
+mount core.io.path.Path;
+mount core.net.http.{Headers, Method, Response};
+mount core.net.weft.handler.{Handler, WeftRequest};
+mount verum_registry.node.publication_service.PublicationHandler;
+mount verum_registry.node.publication_storage.PublicationStorage;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+
+fn get(path: &Text) -> WeftRequest {
+    WeftRequest.new(Method.Get, path.clone(), Maybe.None, Headers.new(), [])
+}
+
+fn publish(file: &Text, token: &Text) -> WeftRequest {
+    let mut headers = Headers.new();
+    headers.set(&"content-type", &"application/vnd.verum.cog-publish.v1");
+    if token.len() > 0 { headers.set(&"authorization", &f"Bearer {token}"); }
+    WeftRequest.new(Method.Post, "/api/v1/cogs/publish", Maybe.None, headers,
+                    read(&Path.new(file)).unwrap())
+}
+
+async fn send(handler: &PublicationHandler, request: WeftRequest, status: Int) -> Response {
+    let response = handler.handle(request).await.unwrap();
+    assert_eq(response.status_code().code(), status);
+    assert_eq(response.content_length().unwrap(), response.body_bytes().len());
+    response
+}
+
+async fn main() {
+    let config = PgConfig.new(
+        var(&"VERUM_PG_TEST_HOST").unwrap(), var(&"VERUM_PG_TEST_PORT").unwrap().parse_int().unwrap(),
+        var(&"VERUM_PG_TEST_USER").unwrap(), var(&"VERUM_PG_TEST_PASSWORD").unwrap(),
+        var(&"VERUM_PG_TEST_DATABASE").unwrap(),
+    ).with_tls(PgTlsMode.PtmDisable);
+    let handler = PublicationHandler.from_storage(PublicationStorage.open_postgres(config, 100663296, 2).unwrap(),
+        &"credentials.json", [Authority { id: "local", role: AuthorityRole.Local, owns: [NamePattern.Exact("widget")] }]).unwrap();
+    let token = var(&"VERUM_PG_TEST_TOKEN").unwrap();
+    let phase = var(&"VERUM_PG_HANDLER_PHASE").unwrap();
+    let info = "/api/v1/cogs/widget/1.2.3";
+    let download = "/api/v1/cogs/widget/1.2.3/download";
+    if phase == "create" {
+        let _ = send(&handler, publish(&"release.bin", &""), 401).await;
+        let _ = send(&handler, publish(&"unowned.bin", &token), 403).await;
+        let _ = send(&handler, get(&info), 404).await;
+        let created = send(&handler, publish(&"release.bin", &token), 201).await;
+        assert_eq(created.content_type().unwrap(), "application/json");
+        print(created.body_text());
+    } else if phase == "restart" {
+        let duplicate = send(&handler, publish(&"release.bin", &token), 200).await;
+        assert_eq(duplicate.content_type().unwrap(), "application/json");
+        print(duplicate.body_text());
+        let _ = send(&handler, publish(&"conflict.bin", &token), 409).await;
+    } else { panic("unknown handler test phase"); }
+    let metadata = send(&handler, get(&info), 200).await;
+    assert_eq(metadata.content_type().unwrap(), "application/json");
+    print(metadata.body_text());
+    let archive = send(&handler, get(&download), 200).await;
+    assert_eq(archive.content_type().unwrap(), "application/gzip");
+    write(&Path.new(&"download.gz"), archive.body_bytes()).unwrap();
+}

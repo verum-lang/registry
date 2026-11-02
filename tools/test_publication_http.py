@@ -22,6 +22,18 @@ TOKEN = "vrp1_" + bytes(range(32)).hex()
 MEDIA_TYPE = "application/vnd.verum.cog-publish.v1"
 
 
+def write_credentials(credentials):
+    credentials.write_text(json.dumps({"version": 1,
+        "principals": [{"id": "alice", "grants": [{"authority": "local", "names": [{"exact": "widget"}]}]}],
+        "credentials": [{"id": "active", "principal": "alice", "active": True,
+                         "token_sha256": hashlib.sha256(TOKEN.encode()).hexdigest()}]}))
+
+
+def envelope(metadata, content):
+    encoded = json.dumps(metadata, separators=(",", ":")).encode()
+    return len(encoded).to_bytes(4, "little") + encoded + len(content).to_bytes(8, "little") + content
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
@@ -47,10 +59,7 @@ def main():
         storage = project / "store"
         storage.mkdir()
         credentials = project / "credentials.json"
-        credentials.write_text(json.dumps({"version": 1,
-            "principals": [{"id": "alice", "grants": [{"authority": "local", "names": [{"exact": "widget"}]}]}],
-            "credentials": [{"id": "active", "principal": "alice", "active": True,
-                             "token_sha256": hashlib.sha256(TOKEN.encode()).hexdigest()}]}))
+        write_credentials(credentials)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
@@ -208,10 +217,6 @@ def main():
             assert metadata["published_at"] == int(provenance[5])
             assert metadata["signature"] is None and metadata["proofs"] is None
             print("publication HTTP: real CLI publish and exact metadata/download passed", flush=True)
-
-            def envelope(metadata, content):
-                encoded = json.dumps(metadata, separators=(",", ":")).encode()
-                return len(encoded).to_bytes(4, "little") + encoded + len(content).to_bytes(8, "little") + content
 
             status, _, body = request("/api/v1/cogs/publish", envelope(source_metadata, archive), True)
             assert status == 200 and json.loads(body)["checksum"] == source_metadata["checksum"]

@@ -60,7 +60,11 @@ The isolated Docker runner uses a locally available `postgres:17-alpine`
 image and an identified Verum CLI. Run the adapter, authenticated transaction
 and listener gates independently with
 `python3 tools/test_publication_postgres.py /absolute/path/to/verum --component storage`,
-then `--component transaction` and `--component http`.
+then `--component transaction`, `--component handler` and `--component http`.
+The handler gate sends requests through the production Weft handler, reads the
+accepted bytes from PostgreSQL independently and verifies exact downloads both
+before and after restarting PostgreSQL and the application process. The HTTP
+gate opens the TCP listener and invokes the public package client.
 
 Registry commit `8ad0abc` passed the whole-project check. The CLI with
 SHA-256 `077b3e309558074ae8e2b1481e137f3264c1d8c0cd0a6d6e990538942ddbf2ae`

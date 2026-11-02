@@ -6,6 +6,7 @@ container and its anonymous volume on exit; no installed database is used.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -16,6 +17,7 @@ import tempfile
 import time
 import uuid
 
+from test_publication_http import TOKEN, envelope, write_credentials
 from test_publication_storage import record, run
 from test_publication_admission import COMMON, TRANSACTION, fixtures, stage_component, unpack_record
 
@@ -74,7 +76,7 @@ def main():
     parser.add_argument("verum", type=Path)
     parser.add_argument("--image", default="postgres:17-alpine")
     parser.add_argument("--timeout", type=float, default=600)
-    parser.add_argument("--component", choices=("all", "storage", "transaction", "http", "sql"), default="all")
+    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "http", "sql"), default="all")
     options = parser.parse_args()
     executable = str(options.verum.resolve(strict=True))
     if not 0 < options.timeout <= 1800:
@@ -224,6 +226,50 @@ def main():
                 assert inspect_record() == original[:-1]
                 sql("DELETE FROM public.verum_publications;")
                 print("PostgreSQL: authenticated Verum preparation, admission, restart, retry and conflict passed", flush=True)
+            if options.component in ("all", "handler"):
+                source = project / "handler-test"
+                modules = COMMON + TRANSACTION + ("node/publication_credentials_file", "node/publication_service")
+                stage_component(source, modules, "postgres_publication_handler")
+                fixtures(source)
+                write_credentials(source / "credentials.json")
+                archive = (source / "readme.gz").read_bytes()
+                checksum = hashlib.sha256(archive).hexdigest()
+                metadata = {"name": "widget", "version": "1.2.3", "description": None, "authors": [],
+                            "license": None, "repository": None, "homepage": None, "keywords": [],
+                            "categories": [], "readme": None, "dependencies": {}, "features": {},
+                            "checksum": checksum}
+                for file, value in (("release", metadata), ("unowned", {**metadata, "name": "unowned-widget"}),
+                                    ("conflict", {**metadata, "readme": "# Widget\n"})):
+                    (source / (file + ".bin")).write_bytes(envelope(value, archive))
+
+                def handler(phase):
+                    output = run([executable, "run", "--tier", "interpret"], source, options.timeout,
+                                 {**pg_environment(), "VERUM_PG_TEST_TOKEN": TOKEN,
+                                  "VERUM_PG_HANDLER_PHASE": phase, "VERUM_NO_OBJECT_CACHE": "1"})
+                    receipt, info = [json.loads(line) for line in output.splitlines()]
+                    assert receipt == {"name": "widget", "version": "1.2.3", "checksum": checksum}
+                    assert all(info[key] == value for key, value in metadata.items())
+                    assert (source / "download.gz").read_bytes() == archive
+                    return info
+
+                initial = handler("create")
+                key = sql("SELECT record_key FROM public.verum_publications;").stdout.strip()
+                assert len(key) == 64 and all(c in "0123456789abcdef" for c in key)
+                def release_bytes():
+                    return bytes.fromhex(sql("SELECT encode(record,'hex') FROM public.verum_publications;").stdout)
+                original = release_bytes()
+                snapshot = source / (key + ".publication")
+                snapshot.write_bytes(original)
+                provenance, stored_metadata, stored_archive = unpack_record(snapshot)
+                assert stored_metadata == metadata and stored_archive == archive
+                assert provenance[:5] == ["alice", "active", "local", "exact", "widget"]
+                assert initial["published_at"] == int(provenance[5])
+                print("PostgreSQL handler: bearer refusals, 201, metadata and exact gzip passed", flush=True)
+                restart_database()
+                assert handler("restart") == initial
+                assert release_bytes() == original
+                sql("DELETE FROM public.verum_publications;")
+                print("PostgreSQL handler: restart, 200 retry, 409 conflict and exact download passed", flush=True)
             if options.component in ("all", "http"):
                 subprocess.run([sys.executable, str(ROOT / "tools/test_publication_http.py"), executable,
                     "--timeout", str(options.timeout), "--postgres-config", str(configuration)], check=True)
