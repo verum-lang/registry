@@ -1,0 +1,25 @@
+// Appended only in the isolated fixture so the test can mutate private fields.
+public fn check_verdict_snapshot(original: &Verified) {
+    let mut copy = original.snapshot();
+    copy.manifest.name.0.push_str("-copy");
+    copy.manifest.version.push_str("-copy");
+    copy.manifest.artefact.0.push_str("-copy");
+    copy.manifest.published_at = 99;
+    copy.authority_id.push_str("-copy");
+    copy.role = AuthorityRole.Upstream;
+    copy.log_id.push_str("-copy");
+    assert_eq(copy.manifest.name.0, "@example/a-long-package-name-copy");
+    assert_eq(copy.manifest.version, "1.2.3-release-with-long-text-copy");
+    assert_eq(copy.manifest.artefact.0, "0123456789abcdef0123456789abcdef-copy");
+    assert_eq(copy.manifest.published_at, 99);
+    assert_eq(copy.authority_id, "long-authority-identity-copy");
+    assert(copy.role is AuthorityRole.Upstream);
+    assert_eq(copy.log_id, "long-upstream-log-identity-copy");
+    assert_eq(original.manifest.name.0, "@example/a-long-package-name");
+    assert_eq(original.manifest.version, "1.2.3-release-with-long-text");
+    assert_eq(original.manifest.artefact.0, "0123456789abcdef0123456789abcdef");
+    assert_eq(original.manifest.published_at, 42);
+    assert_eq(original.authority_id, "long-authority-identity");
+    assert(original.role is AuthorityRole.Local);
+    assert_eq(original.log_id, "long-upstream-log-identity");
+}

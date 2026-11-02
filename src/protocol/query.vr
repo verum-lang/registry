@@ -72,6 +72,17 @@ public type Clause is
     /// Only coordinates the named authority answered for.
     | From(Text);
 
+implement Clause {
+    fn snapshot(&self) -> Clause {
+        match self {
+            Clause.Named(name) => Clause.Named(PackageName(name.0.clone())),
+            Clause.InRole(role) => Clause.InRole(role.clone()),
+            Clause.AtVersion(constraint) => Clause.AtVersion(constraint.snapshot()),
+            Clause.From(authority) => Clause.From(authority.clone()),
+        }
+    }
+}
+
 /// A question: every clause must hold.
 ///
 /// A conjunction and nothing else. Disjunction is deliberately absent —
@@ -163,8 +174,7 @@ public pure fn role_eq(a: &AuthorityRole, b: &AuthorityRole) -> Bool {
 public pure fn selector(q: &Query) -> Transducer<Verified, Verified> {
     let ordered = by_cost(&q.clauses);
     let mut acc: Transducer<Verified, Verified> = Transducer.map(|v| v);
-    for c in ordered.iter() {
-        let this = c.clone();
+    for this in ordered {
         acc = Transducer.compose2(acc, Transducer.filter(|v| clause_holds(&this, v)));
     }
     acc
@@ -188,7 +198,7 @@ public pure fn by_cost(clauses: &List<Clause>) -> List<Clause> {
                 i = i + 1;
             }
         }
-        out.insert(at, c.clone());
+        out.insert(at, c.snapshot());
     }
     out
 }

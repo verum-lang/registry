@@ -214,8 +214,8 @@ public async fn import_slice(
 
     // Pass 2 — store, keeping the attribution each item arrived with.
     let mut stored = 0;
-    for v in verified.iter() {
-        cache.store(v.clone());
+    for v in verified {
+        cache.store(v);
         stored = stored + 1;
     }
     Result.Ok(stored)

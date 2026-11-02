@@ -676,7 +676,7 @@ fn retention_scene(label: &Text) {
     match verified_sample() {
         Maybe.Some(v) => {
             let mut shelf = Cache.empty();
-            shelf.store(v.clone());
+            shelf.store(v);
             // BOTH HALVES OR NEITHER. A scene holding only a mirrored
             // coordinate demonstrates that retention drops things, which
             // is the easy half; the rule is that it drops what it
@@ -1143,18 +1143,18 @@ async fn main() {
     match verified_sample() {
         Maybe.Some(v) => {
             let mut shelf = Cache.empty();
-            shelf.store(v.clone());
+            shelf.store(v.snapshot());
 
             // Every clause holds: this is what the node has.
             let mut hit: List<Clause> = List.new();
-            hit.push(Clause.Named(v.manifest().name.clone()));
+            hit.push(Clause.Named(v.manifest().name));
             hit.push(Clause.InRole(v.role()));
             search_scene(&"search/hit", &shelf, &Query { clauses: hit });
 
             // One clause fails, and the three answers still agree —
             // which is the property, not the count.
             let mut miss: List<Clause> = List.new();
-            miss.push(Clause.Named(v.manifest().name.clone()));
+            miss.push(Clause.Named(v.manifest().name));
             miss.push(Clause.From("nobody"));
             search_scene(&"search/miss", &shelf, &Query { clauses: miss });
 

@@ -211,12 +211,7 @@ public fn publish(
 
     // 2. Does the evidence check out — against OUR log, since we are the
     //    authority answering for this name.
-    let m = Manifest {
-        name: PackageName(request.manifest.name.0.clone()),
-        version: request.manifest.version.clone(),
-        artefact: request.manifest.artefact.clone(),
-        published_at: request.manifest.published_at,
-    };
+    let m = request.manifest.snapshot();
     let verified = match verify(
         m,
         &request.signature,
@@ -254,6 +249,6 @@ public fn publish(
         Answer.NotFound => {}
     }
 
-    cache.store(verified.clone());
+    cache.store(verified.snapshot());
     Result.Ok(Published.Accepted(verified))
 }

@@ -94,6 +94,14 @@ implement Manifest {
 }
 
 implement Verified {
+    /// Retain the checked manifest and its attribution as an independent value.
+    public fn snapshot(&self) -> Verified {
+        Verified {
+            manifest: self.manifest(), authority_id: self.authority_id(),
+            role: self.role(), log_id: self.log_id(),
+        }
+    }
+
     public fn manifest(&self) -> Manifest { self.manifest.snapshot() }
     public fn authority_id(&self) -> Text { snapshot_text(&self.authority_id) }
     public fn role(&self) -> AuthorityRole { self.role.clone() }

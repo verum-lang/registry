@@ -86,7 +86,7 @@ public type Answer is
 // -----------------------------------------------------------------------------
 
 implement CachedEntry {
-    public fn verified(&self) -> Verified { self.verified.clone() }
+    public fn verified(&self) -> Verified { self.verified.snapshot() }
     public fn fetched_at(&self) -> Int { self.fetched_at }
 }
 
@@ -240,7 +240,7 @@ public fn sweep_cache(
 /// guarantee expressed as a signature.
 public pure fn hit_for(e: &CachedEntry) -> Answer {
     Answer.Hit(CachedEntry {
-        verified: e.verified.clone(),
+        verified: e.verified(),
         fetched_at: e.fetched_at,
     })
 }

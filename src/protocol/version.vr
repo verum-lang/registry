@@ -117,6 +117,23 @@ public type Constraint is
     /// Anything the node holds.
     | Any;
 
+implement Version {
+    fn snapshot(&self) -> Version {
+        Version { major: self.major, minor: self.minor, patch: self.patch }
+    }
+}
+
+implement Constraint {
+    public fn snapshot(&self) -> Constraint {
+        match self {
+            Constraint.Exact(v) => Constraint.Exact(v.snapshot()),
+            Constraint.AtLeast(v) => Constraint.AtLeast(v.snapshot()),
+            Constraint.Compatible(v) => Constraint.Compatible(v.snapshot()),
+            Constraint.Any => Constraint.Any,
+        }
+    }
+}
+
 /// Does this version satisfy this constraint?
 ///
 /// The whole of the matching rule, in one function, so a caller cannot

@@ -26,6 +26,9 @@ COMPONENTS = {
     "evidence_snapshot": {
         "task": "T1790",
         "modules": (Path("src/protocol/authority.vr"), Path("src/protocol/evidence.vr")),
+        "appended_fragments": {
+            Path("src/protocol/evidence.vr"): Path("tests/fragments/evidence_snapshot.vr"),
+        },
         "fixture": Path("tests/evidence_snapshot.vr"),
         "expected": Path("tests/evidence_snapshot.expected"),
         "header": b"module verum_registry.tests.evidence_snapshot;\n",
