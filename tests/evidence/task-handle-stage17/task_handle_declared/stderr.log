@@ -1,0 +1,2 @@
+     Running /private/tmp/verum-T1678-carrier-controls/task_handle_declared/task_handle_declared.vr (interpreter)
+error: VBC codegen error (user bodies): internal compiler error: variant 'Ready' not defined: Poll type must be in scope for Future await (in function main)

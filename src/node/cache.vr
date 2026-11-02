@@ -1,0 +1,346 @@
+// =============================================================================
+// verum_registry.node.cache — what a node keeps, and what it says offline
+// =============================================================================
+// Spec: registry-federation-protocol §2.4 (consistency), §4.1 (offline)
+//
+// Two rules live here, and both are about honesty rather than speed:
+//
+//   * A cached answer KEEPS THE ATTRIBUTION it was fetched with. A cache
+//     that forgets where an answer came from turns an upstream package
+//     into a local one on the way to disk, which is the same
+//     misrepresentation §2.3 refuses at the proof level.
+//
+//   * An unreachable upstream answers `UpstreamUnreachable`, never
+//     `NotFound`. "I cannot see" and "it does not exist" are different
+//     facts, and a build system that conflates them either fails a build
+//     that should have used the cache, or hides a typo as an outage.
+//
+// TWO THINGS ARE NOT PARAMETERS HERE, and both are deliberate.
+//
+// WHEN it is comes from the `Clock` context. Every stored answer is
+// dated, and a date threaded by hand is a date some path forgets — the
+// forgetting is invisible because the type still checks, `0` being a
+// perfectly good `Int`.
+//
+// WHETHER THE UPSTREAM IS REACHABLE comes from the `Uplink` context.
+// Reachability changes between two calls, so a value captured once and
+// passed down is a fact about the past presented as a fact about the
+// present — exactly the confusion §4.1 refuses at the answer level,
+// arriving through the parameter list instead.
+//
+// SHAPE: the entries are a `Map` keyed by package name, not a list. A
+// registry holds millions of coordinates, and a linear scan is not a
+// smaller version of an index — it is a different asymptote, and one
+// that only shows up at the scale where it is expensive to change. The
+// lookup below is one probe whatever the node holds.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.cache;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.protocol.evidence.{Manifest, Verified};
+mount verum_registry.node.ambient.{Clock, Uplink};
+mount verum_registry.node.store.{Keyed};
+
+// -----------------------------------------------------------------------------
+// What a cache holds
+// -----------------------------------------------------------------------------
+
+/// One cached coordinate, with everything needed to answer for it later
+/// WITHOUT contacting anyone — including who answered originally.
+public type CachedEntry is {
+    verified: Verified,
+    /// When this node fetched it, so a consistency answer can be dated.
+    /// Read from the clock at store time, never supplied by a caller.
+    fetched_at: Int,
+};
+
+/// A node's local cache, indexed by the name a lookup asks for.
+///
+/// The indexing itself is `node.store`'s, not this module's. What is left
+/// here is everything that knows the value is a VERIFIED COORDINATE: that
+/// storing one dates it from the clock, that a miss must tell an outage
+/// apart from an absence, and that eviction is a different right from
+/// storage. A container that also knew those things would have to be
+/// rewritten for the next thing this node holds.
+public type Cache is {
+    entries: Keyed<CachedEntry>,
+};
+
+/// What a lookup can answer. Note what is NOT here: there is no variant
+/// meaning "absent, probably" — the two absences are named separately.
+public type Answer is
+    /// Served from cache, with the attribution it was fetched with.
+    | Hit(CachedEntry)
+    /// The upstream is unreachable and this node has never seen the name.
+    | UpstreamUnreachable
+    /// The upstream was reachable and does not have it.
+    | NotFound;
+
+// -----------------------------------------------------------------------------
+// Lookup (spec §4.1)
+// -----------------------------------------------------------------------------
+
+implement CachedEntry {
+    public fn verified(&self) -> Verified { self.verified.clone() }
+    public fn fetched_at(&self) -> Int { self.fetched_at }
+}
+
+implement Cache {
+    public fn empty() -> Cache {
+        Cache { entries: Keyed.empty() }
+    }
+
+    /// Store a verified coordinate, dated by the clock.
+    ///
+    /// The attribution rides along inside `Verified`; there is no path
+    /// that stores an artefact and forgets it, because there is no way
+    /// to build a `CachedEntry` without one.
+    public fn store(&mut self, verified: Verified) using [Clock] {
+        let key = verified.manifest().name.0.clone();
+        self.entries.put(key, CachedEntry {
+            verified: verified,
+            fetched_at: Clock.now(),
+        });
+    }
+
+    /// Answer for `name`.
+    ///
+    /// A cached entry is served whether or not the upstream is up — that
+    /// is the point of §4.1: an office with a broken uplink keeps
+    /// building. Only a name this node has never seen depends on the
+    /// link, and then the two absences are told apart.
+    ///
+    /// THE GUARANTEE IS STRUCTURAL HERE, NOT COMMENTED. The hit arm
+    /// calls `hit_for`, which cannot consult the link because it does
+    /// not take it; the absent arm is the only one that reads
+    /// `Uplink`. A future edit that made a hit depend on the link would
+    /// have to change this shape to do it, and changing a shape is
+    /// visible in a way that changing a branch is not.
+    public fn lookup(&self, name: &PackageName) -> Answer using [Uplink] {
+        match self.entries.get(&name.0) {
+            Some(e) => hit_for(e),
+            None    => absent_for(Uplink.reachable()),
+        }
+    }
+
+    /// Every name this node holds.
+    ///
+    /// Exists so a policy can decide about entries WITHOUT reaching into
+    /// the map. That is not tidiness: the capability on `prune_before`
+    /// says a pruner may evict and may not store, and a caller that can
+    /// touch `entries` directly has both rights back regardless of what
+    /// its signature claims. A restriction the value's own surface lets
+    /// you walk around is a comment, not a guarantee.
+    public fn names(&self) -> List<PackageName> {
+        let mut out: List<PackageName> = List.new();
+        for k in self.entries.keys().iter() {
+            out.push(PackageName(k.clone()));
+        }
+        out
+    }
+
+    /// Every entry this node holds, in no promised order.
+    ///
+    /// `search` used to read `cache.entries` directly. That worked only
+    /// because `entries` was a bare `Map` and `Map` is in the prelude —
+    /// the reach-in was invisible, not permitted. Once `entries` became a
+    /// `Keyed`, a module that never mounted `Keyed` could no longer call
+    /// its methods and the reach-in became a compile error, which is the
+    /// type system saying out loud what this module's note on `names`
+    /// already argued: a caller that can touch the map has back every
+    /// right the signature withholds.
+    ///
+    /// So the accessor is the fix rather than a mount in `search`.
+    public fn all(&self) -> List<CachedEntry> {
+        self.entries.values()
+    }
+
+    /// The entry stored under a name, if any.
+    public fn entry(&self, name: &PackageName) -> Maybe<CachedEntry> {
+        self.entries.get(&name.0)
+    }
+
+    /// Forget an entry.
+    ///
+    /// A cache without eviction grows until the disk does not, and an
+    /// air-gapped node with a full disk is a real failure rather than a
+    /// hypothetical one. Returns whether anything was there, because a
+    /// prune that reports what it actually removed is the difference
+    /// between a maintenance job and a guess.
+    ///
+    /// EVICTING IS NOT STORING, and the type says so. `&mut` grants the
+    /// right to change a value; it says nothing about WHICH changes, so
+    /// an importer holding `&mut Cache` may quietly overwrite an
+    /// attribution or drop a coordinate somebody else vouched for. The
+    /// capability splits the two:
+    ///
+    ///     fn import_slice(cache: &mut Cache with [Store],  …)
+    ///     fn prune_before(cache: &mut Cache with [Evict],  …)
+    ///
+    /// Neither can do the other's job, and no reviewer has to notice.
+    /// This is the distinction ownership alone cannot draw — Rust's
+    /// `&mut`, Java's `final`, Go's unexported fields all stop at "may
+    /// it be changed", and the question here is "changed HOW".
+    public fn evict(&mut self, name: &PackageName) -> Bool {
+        self.entries.forget(&name.0)
+    }
+
+    /// How many entries this node holds — the figure a consistency
+    /// answer is dated against.
+    ///
+    /// The refinement is deliberate and the line between it and a typed
+    /// refusal is the design rule this codebase follows: a REFINEMENT
+    /// states an invariant of a value the node computes itself, so a
+    /// violation is this node's own bug and halting is right. Anything
+    /// arriving from a peer is checked by a function that RETURNS a
+    /// refusal instead — asserting on a malformed message from an
+    /// untrusted party would let that party halt the node.
+    public fn len(&self) -> Int{it >= 0} {
+        self.entries.len()
+    }
+
+    /// The store itself, for a policy that sweeps it.
+    ///
+    /// Handing out `&mut Keyed` looks like handing out the map this
+    /// module spent a paragraph refusing to expose, and it is not: the
+    /// capability rides on the BORROW at the call site
+    /// (`sweep(cache.store_mut() with [Evict], …)`), so a caller still
+    /// cannot store through it. What it does buy is that the two-pass
+    /// traversal is written once, in `node.store`, over any value.
+    public fn store_mut(&mut self) -> &mut Keyed<CachedEntry> {
+        &mut self.entries
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+//
+// STATE: these obligations are STATED and NOT YET DISCHARGED, and what
+// stops them has moved. They used to be UNSTATEABLE — the predicate's
+// parameters and its own declaration disagreed about what sort a record
+// or a variant has, so the claim never reached the solver at all, which
+// prints almost the same as a claim that failed. That is fixed: `let`
+// bindings, field reads, records, variants and `match` over an enum are
+// all inside the reach now, and every obligation here is put to the
+// solver.
+//
+// What is left is genuine reach. Each of these predicates walks a LIST
+// or matches over a `Result`, and the prover unfolds neither, so it
+// answers with a counterexample it invented rather than a proof. That is
+// a limit of the prover, not a doubt about the properties.
+//
+// The theorems stay: an obligation nobody has discharged is an audit
+// finding, which is the honest record, and it becomes a proof the day
+// the reach covers it — without anyone having to remember to come back.
+
+/// The answer for a name this node HOLDS.
+///
+/// Takes no link state and cannot read one, which is the §4.1
+/// guarantee expressed as a signature.
+public pure fn hit_for(e: &CachedEntry) -> Answer {
+    Answer.Hit(CachedEntry {
+        verified: e.verified.clone(),
+        fetched_at: e.fetched_at,
+    })
+}
+
+/// The answer for a name this node does NOT hold, given whether the
+/// upstream could be reached.
+///
+/// The link state is an ARGUMENT, not an injected context. That is what
+/// makes the property above statable: a predicate over a function that
+/// requires injection is not a function of its arguments, so a theorem
+/// about it can never discharge — the claim is not hard, it is
+/// ill-formed. Verum has no way to say that today, so the modelling
+/// discipline has to (T1150).
+public pure fn absent_for(upstream_reachable: Bool) -> Answer {
+    if upstream_reachable {
+        Answer.NotFound
+    } else {
+        Answer.UpstreamUnreachable
+    }
+}
+
+/// Does this answer carry the attribution the entry was stored with?
+///
+/// The failure it excludes is a cache that serves an upstream package as
+/// though the local node had published it — the same misrepresentation
+/// the evidence rules refuse at the proof level, arriving instead through
+/// the back door of a lookup that forgot where the answer came from.
+///
+/// `pure` is load-bearing: a pure function may not call an impure one,
+/// so the predicate above cannot be pure unless this one is. The
+/// modifier was missing and cost this whole obligation its SMT symbol.
+public pure fn answer_keeps_attribution(a: &Answer, expected_authority: &Text) -> Bool {
+    match a {
+        Hit(e) => e.verified.authority_id() == expected_authority.clone(),
+        // The two absences carry no attribution because they carry no
+        // artefact. Vacuously true, and stated rather than omitted so
+        // the predicate is total over `Answer`.
+        UpstreamUnreachable => true,
+        NotFound => true,
+    }
+}
+
+/// Serving a held entry answers with the attribution it was stored
+/// with.
+///
+/// THIS OBLIGATION WAS RESTATED, NOT WEAKENED (T1150). It used to read
+///
+///     fn store_then_lookup_keeps_attribution(verified: Verified)
+///         -> Bool using [Clock, Uplink]
+///
+/// — a round trip through `Cache.empty()`, `store` and `lookup`, and
+/// therefore a predicate that requires injected dependencies. Such a
+/// predicate is not a function of its arguments: its answer may vary
+/// with what was provided. Reflection refuses it for exactly that
+/// reason, so `proof by auto` could never discharge it, whatever else
+/// were fixed. It was an obligation that LOOKED open and was in fact
+/// unstatable.
+///
+/// The property being claimed was never about the clock. `store` reads
+/// the clock only to date the entry, and `lookup` reads the link only
+/// to choose WHICH ABSENCE to report. Neither touches attribution. So
+/// the honest statement is over the held entry itself, and the
+/// restructure above (`hit_for` / `absent_for`) is what makes it
+/// sayable: the attribution path no longer passes through a context at
+/// all.
+///
+/// What is genuinely lost, and stated rather than hidden: this no
+/// longer says that `store` PUTS the attribution where `hit_for` finds
+/// it. That is a property of `store`, and `CachedEntry` has no field
+/// for an authority of its own — the attribution lives inside the
+/// `Verified` it holds, so there is nothing for `store` to drop and
+/// nothing for `lookup` to re-derive. Saying so in a type is better
+/// than proving it about a round trip, and it is already said.
+public pure fn a_hit_keeps_attribution(e: &CachedEntry) -> Bool {
+    let expected = e.verified.authority_id();
+    answer_keeps_attribution(&hit_for(e), &expected)
+}
+
+@verify(formal)
+public theorem cache_keeps_attribution(e: &CachedEntry)
+    ensures a_hit_keeps_attribution(e)
+    proof by auto;
+
+/// An absence carries no attribution to lose, in EITHER link state.
+///
+/// The companion, and the half that used to hide inside the round
+/// trip: `answer_keeps_attribution` is vacuously true on both absences,
+/// and the link state selects only which of the two is reported. With
+/// the link as an argument this is one claim over both values rather
+/// than a claim about whatever the ambient `Uplink` happened to say.
+public pure fn an_absence_keeps_attribution(reachable: Bool, expected: &Text) -> Bool {
+    answer_keeps_attribution(&absent_for(reachable), expected)
+}
+
+@verify(formal)
+public theorem absence_carries_no_attribution(reachable: Bool, expected: &Text)
+    ensures an_absence_keeps_attribution(reachable, expected)
+    proof by auto;

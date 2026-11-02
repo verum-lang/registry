@@ -1,0 +1,7 @@
+module verum_registry.tests.evidence_private_field;
+mount verum_registry.protocol.evidence.{Manifest, Verified};
+
+fn forge(verdict: &mut Verified, replacement: Manifest) {
+    verdict.manifest = replacement;
+}
+fn main() {}

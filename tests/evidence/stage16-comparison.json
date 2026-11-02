@@ -1,0 +1,26 @@
+{
+  "task": "T1635",
+  "current_project_check": "project-check-stage16.json",
+  "current_project_diagnostics": 11,
+  "previous_project_check": "project-check-stage15.json",
+  "previous_project_diagnostics": 64,
+  "previous_inputs_unchanged": true,
+  "added_inputs": {
+    "src/protocol/publication.vr": "d6a3ba2112a5ae38fee85549fb107c44770dbb952863e641e6d726c0b96b0bde",
+    "tests/publication_envelope.vr": "f7c2f32338678405134f9e5bc1bbedda78e64093d6924db7ec8c8234b77e85d5"
+  },
+  "comparison_boundary": "The previous source inputs are byte-identical. Publication envelope production and fixture files were added. The product includes multiple compiler changes; diagnostic counts and elapsed time do not isolate any single fix.",
+  "metadata_candidate": {
+    "registry_commit": "399cc4156769bfd1df0ca76120da4e84a8d06931",
+    "source_scope": "Separate unlanded strict-publication-metadata candidate; this is not the main registry project.",
+    "receipt": "publication-metadata-stage16/result.json",
+    "diagnostics": 18,
+    "diagnostic_groups": {
+      "same_module_forward_variant_payload": 1,
+      "borrowed_json_object_helper_argument_mismatch": 17
+    },
+    "boundary": "Compilation failed before fixture execution. The record-field labels wrap argument mismatches in nested helper calls; they do not prove the record field declarations became Map types."
+  },
+  "compiler_build": "compiler-stage16.json",
+  "remaining": "Whole-project compilation, metadata runtime, catalog runtime, authentication, durable admission, install-and-run and AOT acceptance remain open."
+}

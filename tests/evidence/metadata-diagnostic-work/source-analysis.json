@@ -1,0 +1,23 @@
+{
+  "task": "T1685",
+  "related": "T1666",
+  "kind": "source-derived work arithmetic; no Verum execution, timing or allocation instrumentation",
+  "original_candidate": "399cc4156769bfd1df0ca76120da4e84a8d06931",
+  "original_decoder_sha256": "b626258ea1fec9e84b412181a73b9199dbf913f0e7d16d89918e50c082abc06d",
+  "original_site": "src/protocol/publication_metadata.vr:101",
+  "input_shape": "Replace baseline features with one publisher-supplied key and an array of empty strings.",
+  "feature_key_bytes": 65536,
+  "list_items": 50000,
+  "metadata_bytes": 215809,
+  "default_metadata_limit": 262144,
+  "indexed_path_bytes_formula": "sum(len(\"features.\") + 65536 + len(str(index)) + 2 for index in range(50000))",
+  "eager_final_indexed_path_bytes": 3277588890,
+  "runtime_control": {
+    "feature_key_bytes": 1024,
+    "list_items": 256,
+    "values": "alternating \"ok\" and empty string",
+    "metadata_bytes": 2321,
+    "scope": "Bounded fixture source only; not yet executed."
+  },
+  "acceptance": "Identified ordinary component replay after T1684, preserving all decoded values and nonzero-index WrongType paths. The original399cc41 candidate remains frozen for its independent replay."
+}

@@ -1,0 +1,66 @@
+// T1722 positive: public configuration and decoded input are ordinary data.
+module verum_registry.tests.publication_data_fields;
+
+mount verum_registry.protocol.authority.{
+    Authority, AuthorityRole, NamePattern, PackageName, resolve_authority,
+};
+mount verum_registry.protocol.publication.PublicationEnvelope;
+mount verum_registry.protocol.publication_metadata.{
+    DecodedDependency, DecodedDependencyOptions, DecodedSourceMetadata, DecodedPublication,
+};
+
+fn main() {
+    let mut patterns: List<NamePattern> = List.new();
+    patterns.push(NamePattern.Exact("widget"));
+    let mut authority = Authority { id: "before", role: AuthorityRole.Upstream, owns: List.new() };
+    authority.id = "local";
+    authority.role = AuthorityRole.Local;
+    authority.owns = patterns;
+    assert_eq(authority.id, "local");
+    assert(authority.role is AuthorityRole.Local);
+    assert_eq(authority.owns.len(), 1);
+    let mut authorities: List<Authority> = List.new();
+    authorities.push(authority);
+    match resolve_authority(&authorities, &PackageName("widget")) {
+        Result.Ok(resolved) => {
+            assert_eq(resolved.authority_id(), "local");
+            assert(resolved.role() is AuthorityRole.Local);
+        },
+        _ => panic("configured owner refused"),
+    }
+
+    let mut options = DecodedDependencyOptions {
+        version_spelling: "^1", features: Maybe.Some(List.new()),
+        optional: Maybe.None, default_features: Maybe.Some(false),
+    };
+    options.optional = Maybe.Some(false);
+    assert_eq(options.version_spelling, "^1");
+    assert(options.optional is Maybe.Some(false));
+    assert(options.default_features is Maybe.Some(false));
+    match options.features {
+        Maybe.Some(values) => assert_eq(values.len(), 0),
+        _ => panic("empty dependency features lost"),
+    }
+    let mut dependencies: Map<Text, DecodedDependency> = Map.new();
+    dependencies.insert("codec", DecodedDependency.Detailed(options));
+    let metadata = DecodedSourceMetadata {
+        name_spelling: "widget", version_spelling: "1.2.3", description: Maybe.None,
+        authors: List.new(), license: Maybe.None, repository: Maybe.None,
+        homepage: Maybe.None, keywords: List.new(), categories: List.new(),
+        readme: Maybe.None, dependencies: dependencies, features: Map.new(),
+        checksum_spelling: "unvalidated",
+    };
+    let mut envelope = PublicationEnvelope { metadata: "unvalidated", archive: List.new() };
+    envelope.metadata = "changed source text";
+    envelope.archive.push(31_u8);
+    let mut publication = DecodedPublication { metadata: metadata, archive: envelope.archive };
+    publication.metadata.description = Maybe.Some("ordinary source data");
+    publication.archive.push(139_u8);
+    assert_eq(envelope.metadata, "changed source text");
+    assert_eq(publication.metadata.name_spelling, "widget");
+    assert_eq(publication.metadata.checksum_spelling, "unvalidated");
+    assert_eq(publication.archive.len(), 2);
+    assert_eq(publication.archive[0], 31_u8);
+    assert_eq(publication.archive[1], 139_u8);
+    print("publication-data-api: ok");
+}

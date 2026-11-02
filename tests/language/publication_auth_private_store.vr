@@ -1,0 +1,6 @@
+// T1636 negative: another module cannot inspect private credential storage.
+module verum_registry.tests.publication_auth_private_store;
+mount verum_registry.node.publication_auth.CredentialStore;
+
+fn credential_count(store: &CredentialStore) -> Int { store.credentials.len() }
+fn main() {}

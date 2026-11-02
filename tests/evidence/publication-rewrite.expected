@@ -1,0 +1,4 @@
+publication_rewrite: v1 accepted
+publication_rewrite: v2 accepted
+publication_rewrite: rewrite of 1.0.0 refused
+publication_rewrite: passed

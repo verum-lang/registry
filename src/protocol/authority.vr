@@ -1,0 +1,258 @@
+// =============================================================================
+// registry.protocol.authority — who may answer for a name
+// =============================================================================
+// Spec: registry-federation-protocol §1
+//
+// The rule this module carries: a name resolves to EXACTLY ONE authority,
+// and the answer says which. Two authorities claiming a name is refused,
+// not ranked — precedence is how a supply-chain substitution becomes
+// invisible.
+//
+// The attribution is carried by the TYPE. There is no way to obtain a
+// resolved coordinate without also obtaining the authority that answered
+// for it, because `Resolved` has no constructor that omits one.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.authority;
+
+// -----------------------------------------------------------------------------
+// Names
+// -----------------------------------------------------------------------------
+
+/// A package name, `[@scope/]name`.
+///
+/// A newtype rather than a bare `Text`: a name and a version string are
+/// both text, and mixing them is the kind of mistake a type system exists
+/// to make impossible.
+public type PackageName is (Text);
+
+/// A name pattern an authority may own: an exact name, or a scope
+/// wildcard (`@acme/*`).
+public type NamePattern is
+    | Exact(Text)
+    | Scope(Text);
+
+// -----------------------------------------------------------------------------
+// Authorities
+// -----------------------------------------------------------------------------
+
+/// What kind of answer an authority gives.
+public type AuthorityRole is
+    | Upstream
+    | Local;
+
+/// One authority this node knows about.
+///
+/// `owns` is EXPLICIT and has no default. A node that lists nothing owns
+/// nothing and therefore cannot publish — which is exactly right for a
+/// pure mirror, and is the safe direction to be wrong in.
+/// These fields are operator configuration, not publication authority.
+public type Authority is {
+    public id: Text,
+    public role: AuthorityRole,
+    public owns: List<NamePattern>,
+};
+
+// -----------------------------------------------------------------------------
+// The result of a resolution
+// -----------------------------------------------------------------------------
+
+/// A name, together with the authority that answered for it.
+///
+/// Every field is required. There is no `Resolved` without an authority,
+/// so a code path cannot lose the attribution by forgetting to carry it —
+/// it would have nothing to construct.
+public type Resolved is {
+    private name: PackageName,
+    private authority_id: Text,
+    private role: AuthorityRole,
+};
+
+implement Resolved {
+    /// Read the selected configured owner without exposing mutable attribution.
+    public fn authority_id(&self) -> Text { self.authority_id.clone() }
+    public fn role(&self) -> AuthorityRole { self.role.clone() }
+}
+
+/// Why a resolution did not produce exactly one answer.
+///
+/// There is deliberately no "upstream unreachable" here. Resolution asks
+/// WHO answers for a name, and that is decided by configuration alone —
+/// it gives the same answer with the network unplugged. Whether the
+/// authority actually answered is a different question, asked at fetch
+/// time, and `Answer` in the cache module is where the two absences are
+/// told apart. A variant here would have been a second, unreachable copy
+/// of that distinction: nothing in `resolve_authority` could ever
+/// produce it, and its presence invited callers to handle a case the
+/// function cannot return.
+public type ResolutionError is
+    /// More than one authority owns the name. Both are named, because an
+    /// operator resolving this needs to know which two.
+    | AmbiguousAuthority(List<Text>)
+    /// No authority owns it and there is no upstream configured.
+    | NoAuthority;
+
+// -----------------------------------------------------------------------------
+// Matching
+// -----------------------------------------------------------------------------
+
+implement NamePattern {
+    /// Does this pattern claim `name`?
+    public fn claims(&self, name: &PackageName) -> Bool {
+        match self {
+            Exact(e) => e == name.0,
+            Scope(s) => {
+                // `@acme/*` claims `@acme/anything`, and nothing else.
+                let prefix = f"{s}/";
+                name.0.starts_with(&prefix)
+            }
+        }
+    }
+}
+
+implement Authority {
+    /// Does this authority claim `name`?
+    public fn claims(&self, name: &PackageName) -> Bool {
+        for p in self.owns.iter() {
+            if p.claims(name) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The resolution rule (spec §1.3)
+// -----------------------------------------------------------------------------
+
+/// Resolve `name` against `authorities`.
+///
+/// NOT named `resolve`: the standard library has a two-argument
+/// `resolve` of its own, and an explicit mount of a same-arity namesake
+/// currently binds to it (filed, with the exact site). `resolve_authority`
+/// also says more — what is resolved is the AUTHORITY, and the name is
+/// only the question.
+///
+/// Exactly three outcomes, and the middle one is the point:
+///   * one claimant  → that authority answers;
+///   * many claimants → refused, both named;
+///   * none          → the upstream answers, if there is one.
+public pure fn resolve_authority(
+    authorities: &List<Authority>,
+    name: &PackageName,
+) -> Result<Resolved, ResolutionError> {
+    let mut claimants: List<Text> = List.new();
+    let mut winner_id = "";
+    let mut winner_role = AuthorityRole.Local;
+
+    for a in authorities.iter() {
+        if a.claims(name) {
+            claimants.push(a.id.clone());
+            winner_id = a.id.clone();
+            winner_role = a.role.clone();
+        }
+    }
+
+    if claimants.len() > 1 {
+        return Result.Err(ResolutionError.AmbiguousAuthority(claimants));
+    }
+
+    if claimants.len() == 1 {
+        return Result.Ok(Resolved {
+            name: PackageName(name.0.clone()),
+            authority_id: winner_id,
+            role: winner_role,
+        });
+    }
+
+    // Unclaimed: the upstream answers, and the answer is attributed to it.
+    for a in authorities.iter() {
+        if a.role is Upstream {
+            return Result.Ok(Resolved {
+                name: PackageName(name.0.clone()),
+                authority_id: a.id.clone(),
+                role: AuthorityRole.Upstream,
+            });
+        }
+    }
+
+    Result.Err(ResolutionError.NoAuthority)
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+//
+// STATE: these obligations are STATED and NOT YET DISCHARGED, and what
+// stops them has moved. They used to be UNSTATEABLE — the predicate's
+// parameters and its own declaration disagreed about what sort a record
+// or a variant has, so the claim never reached the solver at all, which
+// prints almost the same as a claim that failed. That is fixed: `let`
+// bindings, field reads, records, variants and `match` over an enum are
+// all inside the reach now, and every obligation here is put to the
+// solver.
+//
+// What is left is genuine reach. Each of these predicates walks a LIST
+// or matches over a `Result`, and the prover unfolds neither, so it
+// answers with a counterexample it invented rather than a proof. That is
+// a limit of the prover, not a doubt about the properties.
+//
+// The theorems stay: an obligation nobody has discharged is an audit
+// finding, which is the honest record, and it becomes a proof the day
+// the reach covers it — without anyone having to remember to come back.
+//
+// The module note above says the attribution is carried by the type. That
+// is a claim about every path through `resolve_authority`, and a claim of
+// that shape is worth exactly as much as its enforcement: a comment stops
+// being true silently, a theorem stops compiling.
+
+/// Is this resolution attributed to an authority that was actually
+/// offered?
+///
+/// The failure it excludes is a resolution naming an authority nobody
+/// configured — a fabricated provenance, which is worse than no answer
+/// because it looks like one.
+public pure fn attributed_to_a_configured_authority(
+    authorities: &List<Authority>,
+    r: &Resolved,
+) -> Bool {
+    for a in authorities.iter() {
+        if a.id == r.authority_id {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every successful resolution is attributed; every other outcome is a
+/// typed refusal. There is no third possibility, which is what makes the
+/// attribution unforgettable rather than merely conventional.
+public pure fn resolution_attributes_or_refuses(
+    authorities: &List<Authority>,
+    name: &PackageName,
+) -> Bool {
+    match resolve_authority(authorities, name) {
+        Ok(r)  => attributed_to_a_configured_authority(authorities, &r),
+        Err(_) => true,
+    }
+}
+
+@verify(formal)
+public theorem resolution_is_attributed(
+    authorities: &List<Authority>,
+    name: &PackageName,
+)
+    ensures resolution_attributes_or_refuses(authorities, name)
+    // By construction, and the construction is the whole argument:
+    // `Resolved` has three required fields and no constructor that omits
+    // `authority_id`, so an Ok can only be built inside
+    // `resolve_authority`. There are exactly two such sites, and each
+    // copies the id from an element of `authorities` — the claimant in
+    // the single-claimant branch, the upstream in the unclaimed branch.
+    // No path fabricates an id, because no path has one to fabricate.
+    proof by auto;

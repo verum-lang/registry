@@ -1,0 +1,155 @@
+// =============================================================================
+// node/ingest — accepting a slice, and the obligation that comes with it
+// =============================================================================
+//
+// One function in this file is the whole point of the module, and it is
+// eleven lines long. Everything else is the types that make those eleven
+// lines impossible to get wrong.
+//
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.ingest;
+
+mount verum_registry.node.ambient.{Clock};
+mount verum_registry.node.cache.{Cache};
+mount verum_registry.node.slice.{Slice, ImportError, import_slice};
+mount verum_registry.node.durable.{Storage, persist};
+
+// -----------------------------------------------------------------------------
+// The obligation
+// -----------------------------------------------------------------------------
+
+/// The duty to write down a change that has already been made in memory.
+///
+/// LINEAR — exactly once — and the domain is the reason, not the feature.
+///
+/// A registry exists to HOLD evidence. A node that verified a slice,
+/// stored it, and then went down without writing it comes back up
+/// missing coordinates it had already checked — and from outside that is
+/// indistinguishable from a node that never had them, which is the one
+/// thing a transparency log may not be ambiguous about. The window is
+/// not hypothetical: verification is the slow part, persistence is the
+/// cheap part at the end, and every crash lands in between.
+///
+/// `affine` would say "at most once" — take it or drop it, both fine.
+/// That is exactly what is NOT fine here: dropping it is the bug.
+/// `linear` says the obligation must be DISCHARGED, and the compiler
+/// counts. Reaching the end of a function still holding one is an error,
+/// and so is reaching a `return` still holding one.
+///
+/// WHAT NO MAINSTREAM LANGUAGE DOES HERE. Rust's `#[must_use]` is a
+/// warning and applies to a value you ignore, not one you bind; Java's
+/// `@CheckReturnValue` the same; Go has `defer`, which runs cleanup but
+/// cannot make forgetting to write one a compile error; C++ destructors
+/// run something on drop, which is the opposite choice — they make
+/// dropping SILENT rather than refused, and "it ran the wrong cleanup"
+/// is how a half-written log happens. Linearity is the only one of these
+/// that refuses the program.
+public type linear Unsaved is {
+    /// How many coordinates the change added, so the discharge can say
+    /// what it wrote rather than that it wrote.
+    added: Int{it > 0},
+};
+
+/// Take on the duty. Called only where a change has actually happened,
+/// which is why it takes the count rather than defaulting to one.
+public fn changed(added: Int{it > 0}) -> Unsaved {
+    Unsaved { added: added }
+}
+
+/// Discharge it by WRITING. Consumes the duty and reports what the
+/// backend said, because a persist that silently failed is the same
+/// failure as one that never ran.
+public fn write_down(u: Unsaved, slice: &Slice) -> Bool using [Storage] {
+    let _count = u.added;
+    persist(slice)
+}
+
+/// Discharge it by DELIBERATELY NOT WRITING.
+///
+/// This exists so the rule stays honest. A node under memory pressure
+/// may hold a slice it does not intend to survive a restart, and there
+/// has to be a way to say so — otherwise the only way to satisfy the
+/// compiler is to write, and a rule that can only be obeyed one way
+/// stops being a decision and becomes a ritual. Naming the reason at the
+/// call site is the point: `keep_in_memory` reads differently from
+/// `write_down` in a review, which `defer`-style cleanup cannot manage.
+public fn keep_in_memory(u: Unsaved) -> Int {
+    u.added
+}
+
+// -----------------------------------------------------------------------------
+// The eleven lines
+// -----------------------------------------------------------------------------
+
+/// Verify a slice, store it, and write it down — or do none of those.
+///
+/// THREE OF THE LANGUAGE'S GUARANTEES MEET IN THIS SIGNATURE, and none
+/// of them is decoration:
+///
+///   * `&mut Cache with [Store]` — this function may ADD coordinates and
+///     may not evict them. `&mut` alone answers "may it change"; the
+///     capability answers "change HOW", and `node/retention.prune_before`
+///     holds `[Evict]` and cannot reach `import_slice` at all.
+///   * `linear Unsaved` — the duty taken on when the cache changed must
+///     be discharged on EVERY path out of this function, including the
+///     early ones.
+///   * `async` — inherited, not chosen. `import_slice` fans out one
+///     verification per item and joins them; awaiting a child is what
+///     makes a parent async, and the signature has to say so.
+///
+/// AND THE MATCH BELOW IS THE SHAPE THAT USED NOT TO COMPILE. Both arms
+/// consume `pending`, exactly one arm runs, so the duty is discharged
+/// exactly once per execution — which is precisely what `linear` asks
+/// for. Until the affine checker learned that arms are ALTERNATIVES
+/// rather than a sequence, this was refused as a use after move, and
+/// every transaction-shaped function in the standard library was refused
+/// with it.
+public async fn ingest(
+    cache: &mut Cache with [Store],
+    slice: &Slice,
+) -> Result<Int{it >= 0}, ImportError> using [Clock, Storage] {
+    match import_slice(cache, slice).await {
+        Result.Ok(count) => {
+            // Nothing changed, so no duty is taken on: an empty slice is
+            // not a write. Taking one and immediately discharging it
+            // would type-check and would be a lie about what happened.
+            if count == 0 {
+                return Result.Ok(0);
+            }
+            let pending = changed(count);
+            if write_down(pending, slice) {
+                Result.Ok(count)
+            } else {
+                Result.Err(ImportError.NotPersisted)
+            }
+        }
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+/// The same ingest for a node that is deliberately volatile — an
+/// air-gapped verifier that reports and forgets.
+///
+/// It differs from `ingest` in ONE call, and that call is the whole
+/// difference in behaviour. There is no flag, no configuration key, and
+/// no way to end up in the wrong one by accident: the two functions
+/// discharge the same duty in the two ways it can be discharged.
+public async fn ingest_volatile(
+    cache: &mut Cache with [Store],
+    slice: &Slice,
+) -> Result<Int{it >= 0}, ImportError> using [Clock] {
+    match import_slice(cache, slice).await {
+        Result.Ok(count) => {
+            if count == 0 {
+                return Result.Ok(0);
+            }
+            let pending = changed(count);
+            Result.Ok(keep_in_memory(pending))
+        }
+        Result.Err(e) => Result.Err(e),
+    }
+}

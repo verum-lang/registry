@@ -1,0 +1,259 @@
+// =============================================================================
+// verum_registry.node.publish — the write path
+// =============================================================================
+// Spec: registry-federation-protocol §5 (row 2), §1.3, §2
+//
+// Reading is where a registry is convenient. Publishing is where it is
+// TRUSTWORTHY, because every rule here refuses something a publisher
+// might sincerely want to do:
+//
+//   * A NODE MAY ONLY PUBLISH NAMES IT OWNS. An enterprise node that
+//     accepts a release for an upstream-owned coordinate has performed a
+//     supply-chain substitution, whatever it intended: its users get its
+//     artefact under someone else's name. The refusal names the owner,
+//     because "not yours" without "whose, then" leaves an operator
+//     guessing.
+//
+//   * A PUBLISHED VERSION IS NEVER REPLACED. Re-publishing a coordinate
+//     with different content rewrites history for everyone who already
+//     resolved it, and there is no lock file that survives it. A version
+//     is published once; a mistake is corrected by publishing another.
+//
+//   * IDENTICAL RE-PUBLICATION IS NOT AN ERROR. A retried upload of the
+//     SAME artefact is the network being unreliable, not a publisher
+//     misbehaving, and answering it with a failure teaches operators to
+//     force past failures. It answers with what is already there.
+//
+// The third rule is why the second is stated in terms of CONTENT and not
+// of arrival: "already published" is only a conflict when the bytes
+// differ.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.publish;
+
+mount verum_registry.protocol.authority.{
+    Authority, AuthorityRole, PackageName, ResolutionError, resolve_authority,
+};
+mount verum_registry.protocol.evidence.{
+    EvidenceError, InclusionProof, Manifest, SignatureBundle, Verified, verify,
+};
+mount verum_registry.node.cache.{Answer, Cache};
+mount verum_registry.node.ambient.{Clock, NodeIdentity, Uplink};
+
+// -----------------------------------------------------------------------------
+// What a publisher offers
+// -----------------------------------------------------------------------------
+
+/// One release, offered to this node by whoever holds the authority.
+///
+/// `as_authority` is the identity the publisher CLAIMS to be acting as.
+/// It is checked against what the name resolves to rather than trusted,
+/// which is the difference between an authority and a header.
+public type PublishRequest is {
+    public manifest: Manifest,
+    public signature: SignatureBundle,
+    public proof: InclusionProof,
+    public as_authority: Text,
+};
+
+/// Why a publication was refused. Every case is actionable by the
+/// publisher without asking anyone what happened.
+public type PublishError is
+    /// The name belongs to another authority. First the claimed
+    /// identity, then the actual owner.
+    | NotOurName(Text, Text)
+    /// The name resolves to no authority this node knows.
+    | NoSuchName
+    /// Two authorities own the name; publishing into that is a coin
+    /// toss, so it is refused for the same reason a read is.
+    | ContestedName(List<Text>)
+    /// The evidence did not check out against this node's own log.
+    | EvidenceRefused(EvidenceError)
+    /// This coordinate exists with DIFFERENT content. Names the version,
+    /// because a publisher republishing by mistake needs to see which.
+    | VersionAlreadyPublished(Text);
+
+/// What a publication did. Distinguishing the two is the point of the
+/// third rule above: an operator retrying an upload should be able to
+/// tell "it worked" from "it was already there" without either being a
+/// failure.
+public type Published is
+    | Accepted(Verified)
+    | AlreadyIdentical(Verified);
+
+// -----------------------------------------------------------------------------
+// The write path (spec §5 row 2)
+// -----------------------------------------------------------------------------
+
+/// The right to attempt ONE publication.
+///
+/// AFFINE, and the domain is why. A transparency log exists so that one
+/// release has one entry; a publisher whose request times out and
+/// retries, or a supervisor that restarts a worker mid-flight, can
+/// produce two entries for one release, and two entries are exactly the
+/// disagreement the log was built to make impossible.
+///
+/// `publish` CONSUMES the slot. A second call has nothing left to pass,
+/// so "attempted at most once" stops being a rule somebody has to keep
+/// and becomes a thing the compiler counts. An affine value cannot be
+/// used twice, and the checker says so at the second use rather than in
+/// an incident report.
+///
+/// WHAT THIS DOES NOT CLAIM, because it would be false: the NETWORK can
+/// still retry. Affinity governs this node's own code path — it removes
+/// the accidental double-publish that a retry loop or a restarted worker
+/// produces locally. The idempotent answer below (`AlreadyIdentical`)
+/// stays for the case affinity cannot reach: a second request arriving
+/// from outside, which is not this program using a value twice but two
+/// programs asking the same question.
+///
+/// Mainstream languages have moves; a value declared AFFINE says the
+/// intent at the declaration rather than leaving each reader to infer
+/// it from how the function happens to take its argument.
+public type affine PublishSlot is {
+    /// Which authority the slot was issued for, so a slot cannot be
+    /// minted for one authority and spent as another.
+    for_authority: Text,
+};
+
+/// Publish `request` into `cache`, against the authorities this node is
+/// configured with.
+///
+/// The order is deliberate: OWNERSHIP first, evidence second. Checking
+/// evidence before ownership would tell a publisher whether their
+/// signature is valid for a name they have no right to — a small oracle,
+/// and one with no reason to exist.
+///
+/// The authorities and the node's own log are AMBIENT: they are the
+/// configuration this node runs with, identical for every decision it
+/// makes, and a publication judged against a different set than the one
+/// the node runs with is not a judgement anybody asked for.
+fn local_authority(request: &PublishRequest) -> Result<Text, PublishError>
+    using [NodeIdentity]
+{
+    let name = PackageName(request.manifest.name.0.clone());
+    let authorities = NodeIdentity.authorities();
+
+    // 1. Is this name ours, and is the publisher who they say they are?
+    match resolve_authority(&authorities, &name) {
+        Err(ResolutionError.AmbiguousAuthority(who)) => {
+            return Result.Err(PublishError.ContestedName(who));
+        }
+        Err(ResolutionError.NoAuthority) => {
+            return Result.Err(PublishError.NoSuchName);
+        }
+        Ok(resolved) => {
+            // An upstream-attributed name is not ours to publish, even
+            // when we hold a perfectly good artefact for it.
+            if resolved.role() is Upstream {
+                return Result.Err(PublishError.NotOurName(
+                    request.as_authority.clone(),
+                    resolved.authority_id(),
+                ));
+            }
+            if resolved.authority_id() != request.as_authority.clone() {
+                return Result.Err(PublishError.NotOurName(
+                    request.as_authority.clone(),
+                    resolved.authority_id(),
+                ));
+            }
+        }
+    }
+
+    Result.Ok(request.as_authority.clone())
+}
+
+implement PublishSlot {
+    public fn for_request(request: &PublishRequest) -> Result<PublishSlot, PublishError>
+        using [NodeIdentity]
+    {
+        match local_authority(request) {
+            Ok(authority) => Result.Ok(PublishSlot { for_authority: authority }),
+            Err(error) => Result.Err(error),
+        }
+    }
+}
+
+public fn publish_request(cache: &mut Cache, request: &PublishRequest)
+    -> Result<Published, PublishError> using [Clock, NodeIdentity, Uplink]
+{
+    let slot = match PublishSlot.for_request(request) {
+        Ok(slot) => slot,
+        Err(error) => return Result.Err(error),
+    };
+    publish(cache, slot, request)
+}
+
+public fn publish(
+    cache: &mut Cache,
+    slot: PublishSlot,
+    request: &PublishRequest,
+) -> Result<Published, PublishError> using [Clock, NodeIdentity, Uplink] {
+    // The slot is consumed by being taken. Reading the authority it was
+    // issued for is what makes it more than a token: a slot minted for
+    // one authority cannot be spent publishing as another.
+    let issued_for = slot.for_authority;
+    if issued_for != request.as_authority {
+        return Result.Err(PublishError.NotOurName(
+            request.as_authority.clone(),
+            issued_for,
+        ));
+    }
+    let name = PackageName(request.manifest.name.0.clone());
+    match local_authority(request) {
+        Ok(_) => {}
+        Err(error) => return Result.Err(error),
+    }
+
+    // 2. Does the evidence check out — against OUR log, since we are the
+    //    authority answering for this name.
+    let m = Manifest {
+        name: PackageName(request.manifest.name.0.clone()),
+        version: request.manifest.version.clone(),
+        artefact: request.manifest.artefact.clone(),
+        published_at: request.manifest.published_at,
+    };
+    let verified = match verify(
+        m,
+        &request.signature,
+        &request.proof,
+        request.as_authority.clone(),
+        AuthorityRole.Local,
+        &NodeIdentity.log_id(),
+    ) {
+        Ok(v) => v,
+        Err(e) => return Result.Err(PublishError.EvidenceRefused(e)),
+    };
+
+    // 3. Immutability. A coordinate already held is either the same
+    //    release arriving twice — which is the network, not a fault — or
+    //    an attempt to rewrite one, which is refused.
+    //
+    //    The lookup is about what THIS NODE holds; the link state only
+    //    decides which ABSENCE is reported, and an absence takes the
+    //    store path either way.
+    match cache.lookup(&name) {
+        Answer.Hit(existing) => {
+            let previous = existing.verified();
+            let old_manifest = previous.manifest();
+            let new_manifest = verified.manifest();
+            if old_manifest.version == new_manifest.version {
+                if old_manifest.artefact.0 == new_manifest.artefact.0 {
+                    return Result.Ok(Published.AlreadyIdentical(previous));
+                }
+                return Result.Err(PublishError.VersionAlreadyPublished(
+                    new_manifest.version,
+                ));
+            }
+        }
+        Answer.UpstreamUnreachable => {}
+        Answer.NotFound => {}
+    }
+
+    cache.store(verified.clone());
+    Result.Ok(Published.Accepted(verified))
+}

@@ -1,38 +1,12 @@
-# Verum Build artifacts
-/target/
+target/
+
+# AOT/IR dumps written beside the sources by `verum build --emit-llvm`.
+# Regenerable, and one of them is 119 MB.
 *.ll
-*.bc
-*.o
-*.so
-*.dylib
-*.dll
-*.exe
 
-# Tier-specific outputs
-/target/tier0/
-/target/tier1/
-/target/tier2/
-/target/tier3/
-/target/cbgr-profile/
-/target/verify-cache/
-
-# Cache
-.verum_cache/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Lock file (commit for libraries, ignore for binaries)
-# verum.lock
-
-# Z3 drops an empty trace file into the CWD of whatever ran the verifier.
-# Not ours to produce and not ours to keep.
+# Z3 writes this beside the working directory when a proof runs.
 .z3-trace
+
+# Python tooling tests may import their helpers.
+__pycache__/
+*.py[cod]

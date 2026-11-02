@@ -1,0 +1,9 @@
+// T1636: deliberately assembled private-state ownership control, not a public API.
+module verum_registry.tests.publication_auth_isolation;
+
+mount verum_registry.node.publication_auth.publication_auth_isolation_control;
+
+fn main() {
+    publication_auth_isolation_control();
+    print("publication-auth-isolation: ok");
+}

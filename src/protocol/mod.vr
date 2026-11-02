@@ -1,0 +1,15 @@
+// =============================================================================
+// verum_registry.protocol — the federation protocol, as code
+// =============================================================================
+// Spec: docs/architecture/registry-federation-protocol.md
+//
+// The rules a node answers by. Each submodule carries one section of the
+// specification and states its architectural obligations, so a rule the
+// code stops honouring is a build failure rather than a stale comment.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol;

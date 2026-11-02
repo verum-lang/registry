@@ -1,0 +1,248 @@
+module verum_registry.node.publication_manifest;
+
+mount core.configuration.toml.{TomlValue, TomlError, parse_table};
+mount core.base.semver.SemVer;
+mount core.base.semver_constraint.parse_cargo;
+mount verum_registry.protocol.publication_metadata.{
+    DecodedDependency, DecodedDependencyOptions, DecodedSourceMetadata,
+};
+
+public type ManifestAgreementError is
+    | InvalidLimit
+    | TooLarge
+    | Syntax(TomlError)
+    | MissingField(Text)
+    | WrongType(Text)
+    | Mismatch(Text)
+    | InvalidVersion
+    | InvalidRequirement(Text)
+    | UnsupportedDependencyField(Text)
+    | DuplicateDependencyOption(Text);
+
+fn manifest_table(value: &TomlValue, path: &Text)
+    -> Result<Map<Text, TomlValue>, ManifestAgreementError>
+{
+    match value {
+        TomlValue.TomlTable(fields) => Result.Ok(*fields),
+        _ => Result.Err(ManifestAgreementError.WrongType(path.clone())),
+    }
+}
+
+fn required_text(fields: &Map<Text, TomlValue>, key: &Text, path: &Text)
+    -> Result<Text, ManifestAgreementError>
+{
+    match fields.get(key) {
+        Maybe.Some(TomlValue.TomlString(text)) => Result.Ok(text),
+        Maybe.Some(_) => Result.Err(ManifestAgreementError.WrongType(path.clone())),
+        Maybe.None => Result.Err(ManifestAgreementError.MissingField(path.clone())),
+    }
+}
+
+fn same_text(actual: &Text, expected: &Text, path: &Text)
+    -> Result<(), ManifestAgreementError>
+{
+    if actual != expected { return Result.Err(ManifestAgreementError.Mismatch(path.clone())); }
+    Result.Ok(())
+}
+
+fn optional_text(fields: &Map<Text, TomlValue>, key: &Text, expected: &Maybe<Text>)
+    -> Result<(), ManifestAgreementError>
+{
+    let path = f"cog.{key}";
+    match fields.get(key) {
+        Maybe.None => {
+            if !(expected is Maybe.None) { return Result.Err(ManifestAgreementError.Mismatch(path)); }
+        },
+        Maybe.Some(TomlValue.TomlString(actual)) => match expected {
+            Maybe.Some(text) => same_text(&actual, text, &path)?,
+            Maybe.None => return Result.Err(ManifestAgreementError.Mismatch(path)),
+        },
+        Maybe.Some(_) => return Result.Err(ManifestAgreementError.WrongType(path)),
+    }
+    Result.Ok(())
+}
+
+fn text_array(value: &TomlValue, expected: &List<Text>, path: &Text)
+    -> Result<(), ManifestAgreementError>
+{
+    let actual = match value {
+        TomlValue.TomlArray(items) => items,
+        _ => return Result.Err(ManifestAgreementError.WrongType(path.clone())),
+    };
+    if actual.len() != expected.len() { return Result.Err(ManifestAgreementError.Mismatch(path.clone())); }
+    let mut index = 0;
+    while index < actual.len() {
+        match &actual[index] {
+            TomlValue.TomlString(text) => same_text(text, &expected[index], path)?,
+            _ => return Result.Err(ManifestAgreementError.WrongType(path.clone())),
+        }
+        index = index + 1;
+    }
+    Result.Ok(())
+}
+
+fn default_text_array(fields: &Map<Text, TomlValue>, key: &Text, expected: &List<Text>)
+    -> Result<(), ManifestAgreementError>
+{
+    let path = f"cog.{key}";
+    match fields.get(key) {
+        Maybe.Some(value) => text_array(&value, expected, &path),
+        Maybe.None => {
+            if expected.len() != 0 { return Result.Err(ManifestAgreementError.Mismatch(path)); }
+            Result.Ok(())
+        },
+    }
+}
+
+fn optional_bool(value: &Maybe<TomlValue>, expected: &Maybe<Bool>, path: &Text)
+    -> Result<(), ManifestAgreementError>
+{
+    match value {
+        Maybe.None => {
+            if !(expected is Maybe.None) { return Result.Err(ManifestAgreementError.Mismatch(path.clone())); }
+        },
+        Maybe.Some(TomlValue.TomlBool(actual)) => match expected {
+            Maybe.Some(flag) => {
+                if actual != flag { return Result.Err(ManifestAgreementError.Mismatch(path.clone())); }
+            },
+            Maybe.None => return Result.Err(ManifestAgreementError.Mismatch(path.clone())),
+        },
+        Maybe.Some(_) => return Result.Err(ManifestAgreementError.WrongType(path.clone())),
+    }
+    Result.Ok(())
+}
+
+fn dependency_options(fields: &Map<Text, TomlValue>, expected: &DecodedDependencyOptions, path: &Text)
+    -> Result<(), ManifestAgreementError>
+{
+    for (key, _) in fields.iter() {
+        if key != "version" && key != "features" && key != "optional"
+            && key != "default-features" && key != "default_features" {
+            return Result.Err(ManifestAgreementError.UnsupportedDependencyField(f"{path}.{key}"));
+        }
+    }
+    let version = required_text(fields, &"version", &f"{path}.version")?;
+    valid_requirement(&version, path)?;
+    same_text(&version, &expected.version_spelling, &f"{path}.version")?;
+    match fields.get(&"features") {
+        Maybe.None => {
+            if !(expected.features is Maybe.None) {
+                return Result.Err(ManifestAgreementError.Mismatch(f"{path}.features"));
+            }
+        },
+        Maybe.Some(value) => match &expected.features {
+            Maybe.Some(features) => text_array(&value, features, &f"{path}.features")?,
+            Maybe.None => return Result.Err(ManifestAgreementError.Mismatch(f"{path}.features")),
+        },
+    }
+    optional_bool(&fields.get(&"optional"), &expected.optional, &f"{path}.optional")?;
+    let hyphenated = fields.get(&"default-features");
+    let underscored = fields.get(&"default_features");
+    if !(hyphenated is Maybe.None) && !(underscored is Maybe.None) {
+        return Result.Err(ManifestAgreementError.DuplicateDependencyOption(f"{path}.default-features"));
+    }
+    let defaults = if (hyphenated is Maybe.None) { underscored } else { hyphenated };
+    optional_bool(&defaults, &expected.default_features, &f"{path}.default-features")
+}
+
+fn valid_requirement(text: &Text, path: &Text) -> Result<(), ManifestAgreementError> {
+    match parse_cargo(text) {
+        Result.Ok(_) => Result.Ok(()),
+        Result.Err(_) => Result.Err(ManifestAgreementError.InvalidRequirement(path.clone())),
+    }
+}
+
+fn dependency(value: &TomlValue, expected: &DecodedDependency, path: &Text)
+    -> Result<(), ManifestAgreementError>
+{
+    match value {
+        TomlValue.TomlString(version) => {
+            valid_requirement(version, path)?;
+            match expected {
+                DecodedDependency.Requirement(text) => same_text(version, text, path),
+                _ => Result.Err(ManifestAgreementError.Mismatch(path.clone())),
+            }
+        },
+        TomlValue.TomlTable(fields) => match expected {
+            DecodedDependency.Detailed(options) => dependency_options(fields, options, path),
+            _ => Result.Err(ManifestAgreementError.Mismatch(path.clone())),
+        },
+        _ => Result.Err(ManifestAgreementError.WrongType(path.clone())),
+    }
+}
+
+fn dependencies(root: &Map<Text, TomlValue>, expected: &Map<Text, DecodedDependency>)
+    -> Result<(), ManifestAgreementError>
+{
+    let fields = match root.get(&"dependencies") {
+        Maybe.None => {
+            if expected.len() == 0 { return Result.Ok(()); }
+            return Result.Err(ManifestAgreementError.Mismatch("dependencies"));
+        },
+        Maybe.Some(value) => manifest_table(&value, &"dependencies")?,
+    };
+    if fields.len() != expected.len() { return Result.Err(ManifestAgreementError.Mismatch("dependencies")); }
+    for (name, value) in fields.iter() {
+        let specification = match expected.get(&name) {
+            Maybe.Some(specification) => specification,
+            Maybe.None => return Result.Err(ManifestAgreementError.Mismatch(f"dependencies.{name}")),
+        };
+        dependency(&value, &specification, &f"dependencies.{name}")?;
+    }
+    Result.Ok(())
+}
+
+fn features(root: &Map<Text, TomlValue>, expected: &Map<Text, List<Text>>)
+    -> Result<(), ManifestAgreementError>
+{
+    let fields = match root.get(&"features") {
+        Maybe.None => {
+            if expected.len() == 0 { return Result.Ok(()); }
+            return Result.Err(ManifestAgreementError.Mismatch("features"));
+        },
+        Maybe.Some(value) => manifest_table(&value, &"features")?,
+    };
+    if fields.len() != expected.len() { return Result.Err(ManifestAgreementError.Mismatch("features")); }
+    for (name, value) in fields.iter() {
+        let members = match expected.get(&name) {
+            Maybe.Some(members) => members,
+            Maybe.None => return Result.Err(ManifestAgreementError.Mismatch(f"features.{name}")),
+        };
+        text_array(&value, &members, &f"features.{name}")?;
+    }
+    Result.Ok(())
+}
+
+/// Check the fields projected by the CLI's source publisher. Archive bytes,
+/// checksum, optional README content and authentication require other gates.
+public fn verify_manifest_metadata(
+    source: &Text, metadata: &DecodedSourceMetadata, max_bytes: Int,
+) -> Result<(), ManifestAgreementError> {
+    if max_bytes < 1 || max_bytes > 1048576 { return Result.Err(ManifestAgreementError.InvalidLimit); }
+    if source.len() > max_bytes { return Result.Err(ManifestAgreementError.TooLarge); }
+    let root = match parse_table(source) {
+        Result.Ok(root) => root,
+        Result.Err(error) => return Result.Err(ManifestAgreementError.Syntax(error)),
+    };
+    let cog = match root.get(&"cog") {
+        Maybe.Some(value) => manifest_table(&value, &"cog")?,
+        Maybe.None => return Result.Err(ManifestAgreementError.MissingField("cog")),
+    };
+    let name = required_text(&cog, &"name", &"cog.name")?;
+    let version = required_text(&cog, &"version", &"cog.version")?;
+    match SemVer.parse(&version) {
+        Result.Ok(_) => {},
+        Result.Err(_) => return Result.Err(ManifestAgreementError.InvalidVersion),
+    }
+    same_text(&name, &metadata.name_spelling, &"cog.name")?;
+    same_text(&version, &metadata.version_spelling, &"cog.version")?;
+    optional_text(&cog, &"description", &metadata.description)?;
+    default_text_array(&cog, &"authors", &metadata.authors)?;
+    optional_text(&cog, &"license", &metadata.license)?;
+    optional_text(&cog, &"repository", &metadata.repository)?;
+    optional_text(&cog, &"homepage", &metadata.homepage)?;
+    default_text_array(&cog, &"keywords", &metadata.keywords)?;
+    default_text_array(&cog, &"categories", &metadata.categories)?;
+    dependencies(&root, &metadata.dependencies)?;
+    features(&root, &metadata.features)
+}

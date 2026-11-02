@@ -1,0 +1,216 @@
+    Checking verum-registry v0.1.0 (/private/tmp/verum-registry-t1635)
+2026-10-09T14:06:26.424455Z  WARN Context: Context 'Clock' in function 'publish' has no matching context declaration
+2026-10-09T14:06:26.424501Z  WARN Context: Context 'NodeIdentity' in function 'publish' has no matching context declaration
+2026-10-09T14:06:26.424507Z  WARN Context: Context 'Uplink' in function 'publish' has no matching context declaration
+2026-10-09T14:06:26.424515Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'publish'
+2026-10-09T14:06:26.424521Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'publish'
+2026-10-09T14:06:26.426273Z  WARN Context: Context 'Clock' in function 'import_slice' has no matching context declaration
+2026-10-09T14:06:26.426281Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'import_slice'
+2026-10-09T14:06:26.434893Z  WARN Context: Context 'Clock' in function 'dated_note' has no matching context declaration
+2026-10-09T14:06:26.434904Z  WARN Context: Context 'NodeIdentity' in function 'dated_note' has no matching context declaration
+2026-10-09T14:06:26.434910Z  WARN Context: Context 'Clock' in function 'publish_route_scene' has no matching context declaration
+2026-10-09T14:06:26.434914Z  WARN Context: Context 'NodeIdentity' in function 'publish_route_scene' has no matching context declaration
+2026-10-09T14:06:26.434918Z  WARN Context: Context 'Uplink' in function 'publish_route_scene' has no matching context declaration
+2026-10-09T14:06:26.434922Z  WARN Context: Context 'Clock' in function 'resolve_route_scene' has no matching context declaration
+2026-10-09T14:06:26.434926Z  WARN Context: Context 'NodeIdentity' in function 'resolve_route_scene' has no matching context declaration
+2026-10-09T14:06:26.434929Z  WARN Context: Context 'Uplink' in function 'resolve_route_scene' has no matching context declaration
+2026-10-09T14:06:26.434933Z  WARN Context: Context 'Clock' in function 'get_resolve' has no matching context declaration
+2026-10-09T14:06:26.434937Z  WARN Context: Context 'NodeIdentity' in function 'get_resolve' has no matching context declaration
+2026-10-09T14:06:26.434945Z  WARN Context: Context 'Uplink' in function 'get_resolve' has no matching context declaration
+2026-10-09T14:06:26.434950Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'get_resolve'
+2026-10-09T14:06:26.434956Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'get_resolve'
+2026-10-09T14:06:26.434961Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'get_resolve'
+2026-10-09T14:06:26.434966Z  WARN Context: Context 'Clock' in function 'get_search' has no matching context declaration
+2026-10-09T14:06:26.434972Z  WARN Context: Context 'NodeIdentity' in function 'get_search' has no matching context declaration
+2026-10-09T14:06:26.434975Z  WARN Context: Context 'Uplink' in function 'get_search' has no matching context declaration
+2026-10-09T14:06:26.434978Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'get_search'
+2026-10-09T14:06:26.434982Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'get_search'
+2026-10-09T14:06:26.434985Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'get_search'
+2026-10-09T14:06:26.434988Z  WARN Context: Context 'Clock' in function 'post' has no matching context declaration
+2026-10-09T14:06:26.434993Z  WARN Context: Context 'NodeIdentity' in function 'post' has no matching context declaration
+2026-10-09T14:06:26.435000Z  WARN Context: Context 'Uplink' in function 'post' has no matching context declaration
+2026-10-09T14:06:26.435005Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'post'
+2026-10-09T14:06:26.435012Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'post'
+2026-10-09T14:06:26.435018Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'post'
+2026-10-09T14:06:26.437699Z  WARN Context: Context 'Clock' in function 'store' has no matching context declaration
+2026-10-09T14:06:26.437719Z  WARN Context: Context 'Uplink' in function 'lookup' has no matching context declaration
+2026-10-09T14:06:26.440225Z  WARN Context: Context 'Clock' in function 'route_publish' has no matching context declaration
+2026-10-09T14:06:26.440244Z  WARN Context: Context 'NodeIdentity' in function 'route_publish' has no matching context declaration
+2026-10-09T14:06:26.440248Z  WARN Context: Context 'Uplink' in function 'route_publish' has no matching context declaration
+2026-10-09T14:06:26.440251Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T14:06:26.440254Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T14:06:26.440257Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T14:06:26.440260Z  WARN Context: Context 'Clock' in function 'serve_forever' has no matching context declaration
+2026-10-09T14:06:26.440262Z  WARN Context: Context 'NodeIdentity' in function 'serve_forever' has no matching context declaration
+2026-10-09T14:06:26.440265Z  WARN Context: Context 'Uplink' in function 'serve_forever' has no matching context declaration
+2026-10-09T14:06:26.440267Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T14:06:26.440270Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T14:06:26.440273Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T14:06:26.442926Z  WARN Context: Context 'Storage' in function 'write_down' has no matching context declaration
+2026-10-09T14:06:26.442933Z  WARN Context: Context 'Storage' declared in 'using' clause but never used in function 'write_down'
+2026-10-09T14:06:26.442937Z  WARN Context: Context 'Clock' in function 'ingest' has no matching context declaration
+2026-10-09T14:06:26.442940Z  WARN Context: Context 'Storage' in function 'ingest' has no matching context declaration
+2026-10-09T14:06:26.442942Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'ingest'
+2026-10-09T14:06:26.442945Z  WARN Context: Context 'Clock' in function 'ingest_volatile' has no matching context declaration
+2026-10-09T14:06:26.442949Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'ingest_volatile'
+2026-10-09T14:06:26.443940Z  WARN Context: Context 'Clock' in function 'restore' has no matching context declaration
+2026-10-09T14:06:26.443946Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'restore'
+2026-10-09T14:06:26.446355Z  WARN Context: Context 'Clock' in function 'horizon_for' has no matching context declaration
+2026-10-09T14:09:58.779395Z  WARN Type checking found 64 error(s)
+
+error: cannot index type '&verum_registry.protocol.source.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.source.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&checked verum_registry.protocol.hash.Narrow' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&checked verum_registry.protocol.hash.Wide' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.authority.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.authority.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.authority.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: no method named `empty` found for type `Keyed<_>`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.node.cache:90:26
+error: cannot index type 'verum_registry.node.publish.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.publish.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.publish.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:183:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:191:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:200:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:210:28
+error: cannot index type 'verum_registry.protocol.wire.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:347:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:379:28
+error: cannot index type 'verum_registry.protocol.wire.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.wire.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.wire.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.wire.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'USize<JsonValue>', found 'core.collections.list.List<JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:378:41
+error: cannot index type '&verum_registry.node.resolution.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.node.resolution.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: Pattern expects a variant type, but scrutinee has type IoResult<Text> at verum_registry.node.ambient:132:13
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.query.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'core.base.iterator.Transducer<verum_registry.protocol.query.Verified, verum_registry.protocol.query.Verified>', found 'Transducer<_, &verum_registry.protocol.query.Verified>'
+  --> verum_registry.protocol.query:170:5
+error<E400>: Type mismatch: expected 'core.base.iterator.Transducer<verum_registry.protocol.query.Verified, verum_registry.protocol.query.Verified>', found 'Transducer<_, _>'
+  --> verum_registry.protocol.query:165:51
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'core.async.future.Future<Ok(verum_registry.node.slice.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))>', found 'JoinHandle<Ok(verum_registry.node.slice.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))>'
+  --> verum_registry.node.slice:188:22
+error: Pattern expects a variant type, but scrutinee has type core.async.future.Future<Ok(verum_registry.node.slice.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))> at verum_registry.node.slice:201:13
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.durable.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E306>: capability violation: method `lookup` on `Cache` requires `ReadOnly` capability
+  note: available capabilities: [Store]
+  help: to call this method, the value needs `ReadOnly` capability
+  help: consider using a value with more capabilities, or choose a different method
+  --> verum_registry.main:333:19
+error: cannot index type 'verum_registry.main.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:329:24
+error<E400>: no method named `empty` found for type `verum_registry.main.HeadLog`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.main:357:22
+error<E400>: no method named `new` found for type `verum_registry.main.NodeHandler`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.main:475:23
+error: cannot index type 'verum_registry.main.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: no method named `new` found for type `verum_registry.main.NodeHandler`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.main:534:19
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:683:29
+error<E404>: Ambiguous type for `before`: the inferred type `_` is not fully determined by this function — add a type annotation (e.g. `let before: <Type> = …;`)
+  --> verum_registry.main:694:13
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:813:48
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:857:21
+error<E405>: type `verum_registry.main.RegistrySource` does not implement `Source`, required by this call's bound
+  --> verum_registry.main:916:5
+error<E405>: type `verum_registry.main.GitSource` does not implement `Source`, required by this call's bound
+  --> verum_registry.main:917:5
+error<E405>: type `verum_registry.main.RegistrySource` does not implement `Source`, required by this call's bound
+  --> verum_registry.main:918:5
+error<E405>: type `verum_registry.main.GitSource` does not implement `Source`, required by this call's bound
+  --> verum_registry.main:919:5
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:960:21
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:991:31
+error: Pattern expects a variant type, but scrutinee has type IoResult<Text> at verum_registry.main:1024:17
+  --> <no source location attached to this diagnostic>
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:1030:32
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:1074:33
+error<E400>: no method named `empty` found for type `core.context.Cache`
+  help: did you mean `entry`?
+  --> verum_registry.main:1141:29
+
+error: compilation failed with 64 errors
+
+error: compilation failed with 64 errors

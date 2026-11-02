@@ -1,0 +1,23 @@
+{
+  "registry_commit": "1fa43a2de53c2145c1fcd7248fab77ed88b8e6bf",
+  "language_product_commit": "fdad59f06114fd2770f3d53058373764284c7c2e",
+  "cli_sha256": "0e488832a40517d260e50947a8788548484c4da931f49b92e4c1c7734858719a",
+  "runner_sha256": "b15fdd9c47a029d670f54d87cd5d630e2f75e730920e2cf4fed2db04900b7817",
+  "command": [
+    "tools/verify_obligations.sh",
+    "<identified-stage14-verum>",
+    "--timeout",
+    "120"
+  ],
+  "seconds": 140.53,
+  "exit": 2,
+  "scope": "Real registry proof census on pinned stage14 CLI; no current-main compiler/runtime acceptance.",
+  "raw_log_sha256": "08146b6e68b7b78eabba38989cb6dcfbad2906dbd9907f8f43ff015a5cc7f1a5",
+  "status": "invalid_measurement_after_compile_errors",
+  "controls": "both false theorems failed; true theorem proved",
+  "registry_proof_totals": null,
+  "failure": "First file src/node/cache.vr failed compilation before a verification report: tuple indexing on node.cache.PackageName and its reference was refused.",
+  "retained_log": "proof-census-stage14.log",
+  "retained_log_normalization": "absolute registry checkout path replaced with <registry>",
+  "retained_log_sha256": "70088601aba624bbfec2ab25620554de943b49010db4f0153ec156d8aa950f21"
+}

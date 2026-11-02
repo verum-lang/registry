@@ -1,0 +1,39 @@
+module verum_registry.tests.evidence_snapshot;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.protocol.evidence.{Digest, Manifest, SignatureBundle, InclusionProof, digest_of, verify};
+
+fn main() {
+    let mut input = Manifest {
+        name: PackageName("@example/a-long-package-name"),
+        version: "1.2.3-release-with-long-text",
+        artefact: Digest("0123456789abcdef0123456789abcdef"),
+        published_at: 42,
+    };
+    let digest = digest_of(&input);
+    let signature = SignatureBundle { manifest_digest: digest.clone(), signer: "publisher" };
+    let proof = InclusionProof { manifest_digest: digest, log_id: "long-upstream-log-identity", tree_size: 3 };
+    let verdict = verify(input.clone(), &signature, &proof, "long-authority-identity", AuthorityRole.Local, &proof.log_id).unwrap();
+    input.version.push_str("-changed");
+    assert_eq(input.version, "1.2.3-release-with-long-text-changed");
+    assert_eq(verdict.manifest().version, "1.2.3-release-with-long-text");
+
+    let mut snapshot = verdict.manifest();
+    snapshot.name.0.push_str("-changed");
+    snapshot.artefact.0.push_str("-changed");
+    snapshot.published_at = 100;
+    assert_eq(snapshot.name.0, "@example/a-long-package-name-changed");
+    assert_eq(snapshot.artefact.0, "0123456789abcdef0123456789abcdef-changed");
+    assert_eq(verdict.manifest().name.0, "@example/a-long-package-name");
+    assert_eq(verdict.manifest().artefact.0, "0123456789abcdef0123456789abcdef");
+    assert_eq(verdict.manifest().published_at, 42);
+    let mut authority = verdict.authority_id();
+    authority.push_str("-changed");
+    assert_eq(authority, "long-authority-identity-changed");
+    assert_eq(verdict.authority_id(), "long-authority-identity");
+    let mut log = verdict.log_id();
+    log.push_str("-changed");
+    assert_eq(log, "long-upstream-log-identity-changed");
+    assert_eq(verdict.log_id(), "long-upstream-log-identity");
+    print("evidence snapshots: ok");
+}

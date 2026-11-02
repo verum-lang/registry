@@ -1,0 +1,49 @@
+{
+  "tasks": [
+    "T1681",
+    "T1678"
+  ],
+  "registry_candidate_commit": "c2a47e4b0feb278e00d0f6ef9e9f0e25af962e6f",
+  "registry_evidence_base": "21c32dd5b51d01a5455d87aa38744b58202b9b5f",
+  "language_commit": "3821b1961cd057fd03c9e6d39cbf50609261e4eb",
+  "cli_sha256": "1ff8778a3db363dc81197dc2c1eb994da9c2e80a942a30ca046501ab075aa7c3",
+  "build_manifest": "../publication-metadata-stage17/build-manifest.json",
+  "build_manifest_sha256": "fc2ade43974a3049fbcb07aabe15490daf8728299413a31bbb90404bc9bc96e4",
+  "controls": {
+    "task_handle_inferred": {
+      "fixture": "tests/language/task_handle_inferred.vr",
+      "fixture_sha256": "ff1007749604888bd0cdc99f35e4f11ce91a6fbf26fe6cd0ac0dd89e6bdfec3e",
+      "elapsed_seconds": 64.24,
+      "receipt": "task_handle_inferred/result.json",
+      "files": {
+        "result.json": "6be2e1397998c51e5a3c7ce1bd81d9006a98d4e1f5b7ac711bcbe3746e9e0393",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr.log": "0927c2a254feaad8ed6cd71593987d3e0c7370f834bad3fa76a2418372e1cfac"
+      }
+    },
+    "task_handle_declared": {
+      "fixture": "tests/language/task_handle_declared.vr",
+      "fixture_sha256": "b9723a5ee8689192bf7d1386bfe2e1b90cab1461f584e34908dee18f53f0104d",
+      "elapsed_seconds": 67.412,
+      "receipt": "task_handle_declared/result.json",
+      "files": {
+        "result.json": "3874505d8105b65d1d0edd55195c70a9d3e2ece8b74d3ae7aea2f884f62d88bf",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr.log": "23d98aafb13a9fccfee9ced9676be4a7da9a8f246075840da22687418e939686"
+      }
+    },
+    "task_handle_record": {
+      "fixture": "tests/language/task_handle_record.vr",
+      "fixture_sha256": "39c3635545014eb0823027c372557f85a1edc3ad1c2394698501501bd4922891",
+      "elapsed_seconds": 64.261,
+      "receipt": "task_handle_record/result.json",
+      "files": {
+        "result.json": "d6200fa8b1ce84c6b254aa423a7da43ab326de376c39eae04b626e0714eaa72c",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr.log": "280198e2da7f9f5bc72cde6fb97ef2d9911ee44596c3dd224cf9a32fd1420c14"
+      }
+    }
+  },
+  "runtime_reached": false,
+  "scope": "All three ordinary interpreter controls failed before runtime. No task completion, panic/cancellation, cache preservation, AOT, or service acceptance. The production T1678 candidate is not included in this evidence commit."
+}

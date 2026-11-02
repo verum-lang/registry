@@ -1,0 +1,14 @@
+// =============================================================================
+// verum_registry — the federated registry node, as a cog
+// =============================================================================
+// Spec: docs/architecture/registry-federated-design.md
+//
+// One programme, two roles: an official node and a private one differ by
+// configuration and trust anchors, never by code path.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry;

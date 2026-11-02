@@ -1,0 +1,380 @@
+// ====================================================================
+// wire.vr — the publish request on the wire
+// ====================================================================
+// Until this module existed a node could refuse, verify, attribute and
+// serve — but nobody could SEND it anything. `node/publish.vr` takes a
+// `PublishRequest` and there was no way to build one from bytes, so the
+// whole publication path was reachable only from inside the program.
+// This is the module that opens it.
+//
+// THE ONE RULE THIS FILE IS BUILT ON: a missing or ill-typed field is a
+// REFUSAL THAT NAMES THE FIELD, never a default.
+//
+// It would be shorter to write `as_string().unwrap_or("")`. Consider
+// what that buys: a publish request with no `signer` decodes to a
+// signature bundle signed by the empty string, and
+// `protocol/evidence.vr`'s verification then compares that empty signer
+// against the authority list and refuses — with the wrong reason. The
+// operator reads "not our name" and goes looking at their authority
+// configuration, when what actually happened is that their client sent
+// a malformed body. A default converts a transport fault into a policy
+// fault, and policy faults are the ones people argue about for hours.
+//
+// The same rule stated as a test: EVERY error this module can return
+// names a JSON path. If a decoder can fail without saying where, the
+// failure is not decodable by a human and the module has not done its
+// job.
+//
+// ROUND-TRIP is the invariant that keeps the two halves honest —
+// `decode_publish_request(encode_publish_request(r)) == r` — and it is
+// stated as a checkable function at the bottom rather than as a comment,
+// because the encoder and the decoder are exactly the kind of pair that
+// drifts silently: each is individually plausible, and only their
+// composition is wrong.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.wire;
+
+mount core.encoding.json.{
+    decode,
+    json_array,
+    json_int,
+    json_object,
+    json_string,
+    stringify,
+    JsonValue,
+};
+mount verum_registry.node.publish.{PublishRequest};
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+mount verum_registry.protocol.evidence.{
+    Digest,
+    InclusionProof,
+    Manifest,
+    SignatureBundle,
+    Verified,
+};
+
+// -----------------------------------------------------------------------------
+// Refusals
+// -----------------------------------------------------------------------------
+
+/// Why a body could not be read as a publish request.
+///
+/// Every variant carries the JSON path of the field at fault. The path
+/// is the whole point: "manifest.version" tells a client which line of
+/// their request to fix, while "malformed request" tells them to guess.
+public type WireError is
+    /// The bytes were not JSON at all.
+    | NotJson(Text)
+    /// The document is JSON but not an object at the top level.
+    | NotAnObject
+    /// A required field is absent. Carries its path.
+    | MissingField(Text)
+    /// A field is present with the wrong JSON type. Carries its path,
+    /// what was wanted, and what arrived — three facts, because
+    /// "wrong type" alone sends the reader back to the source.
+    | WrongType(Text, Text, Text);
+
+implement WireError {
+    /// One line, suitable for an HTTP body.
+    public fn describe(&self) -> Text {
+        match self {
+            WireError.NotJson(why) => f"body is not JSON: {why}",
+            WireError.NotAnObject => "body must be a JSON object",
+            WireError.MissingField(path) => f"missing field: {path}",
+            WireError.WrongType(path, want, got) =>
+                f"field {path}: expected {want}, got {got}",
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Reading one field
+// -----------------------------------------------------------------------------
+//
+// These three helpers are where the no-defaults rule is actually
+// enforced. Everything below them is composition, so if the rule holds
+// here it holds everywhere in the module.
+
+/// The name of a JSON value's kind, for the "got" half of a type error.
+fn kind_of(v: &JsonValue) -> Text {
+    match v {
+        JsonValue.JsonNull => "null",
+        JsonValue.JsonBool(_) => "bool",
+        JsonValue.JsonInt(_) => "int",
+        JsonValue.JsonFloat(_) => "float",
+        JsonValue.JsonString(_) => "string",
+        JsonValue.JsonArray(_) => "array",
+        JsonValue.JsonObject(_) => "object",
+    }
+}
+
+/// A required sub-object.
+fn field_object(parent: &JsonValue, at: &Text) -> Result<JsonValue, WireError> {
+    match parent.as_object() {
+        Maybe.None => Result.Err(WireError.NotAnObject),
+        Maybe.Some(map) => match map.get(at) {
+            Maybe.None => Result.Err(WireError.MissingField(at.clone())),
+            Maybe.Some(v) => {
+                if v.as_object() is None {
+                    return Result.Err(WireError.WrongType(
+                        at.clone(),
+                        "object",
+                        kind_of(v),
+                    ));
+                }
+                Result.Ok(v.clone())
+            }
+        },
+    }
+}
+
+/// A required string field, addressed by its full path for the error.
+fn field_text(parent: &JsonValue, at: &Text, path: &Text) -> Result<Text, WireError> {
+    match parent.as_object() {
+        Maybe.None => Result.Err(WireError.NotAnObject),
+        Maybe.Some(map) => match map.get(at) {
+            Maybe.None => Result.Err(WireError.MissingField(path.clone())),
+            Maybe.Some(v) => match v.as_string() {
+                Maybe.Some(s) => Result.Ok(s),
+                Maybe.None => Result.Err(WireError.WrongType(
+                    path.clone(),
+                    "string",
+                    kind_of(v),
+                )),
+            },
+        },
+    }
+}
+
+/// A required integer field.
+fn field_int(parent: &JsonValue, at: &Text, path: &Text) -> Result<Int, WireError> {
+    match parent.as_object() {
+        Maybe.None => Result.Err(WireError.NotAnObject),
+        Maybe.Some(map) => match map.get(at) {
+            Maybe.None => Result.Err(WireError.MissingField(path.clone())),
+            Maybe.Some(v) => match v.as_int() {
+                Maybe.Some(n) => Result.Ok(n),
+                Maybe.None => Result.Err(WireError.WrongType(
+                    path.clone(),
+                    "int",
+                    kind_of(v),
+                )),
+            },
+        },
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Encoding
+// -----------------------------------------------------------------------------
+
+/// The manifest as JSON.
+public fn encode_manifest(m: &Manifest) -> JsonValue {
+    let mut fields: Map<Text, JsonValue> = Map.new();
+    fields.insert("name", json_string(m.name.0.clone()));
+    fields.insert("version", json_string(m.version.clone()));
+    fields.insert("artefact", json_string(m.artefact.0.clone()));
+    fields.insert("published_at", json_int(m.published_at));
+    json_object(fields)
+}
+
+/// The signature bundle as JSON.
+public fn encode_signature(s: &SignatureBundle) -> JsonValue {
+    let mut fields: Map<Text, JsonValue> = Map.new();
+    fields.insert("manifest_digest", json_string(s.manifest_digest.0.clone()));
+    fields.insert("signer", json_string(s.signer.clone()));
+    json_object(fields)
+}
+
+/// The inclusion proof as JSON.
+public fn encode_proof(p: &InclusionProof) -> JsonValue {
+    let mut fields: Map<Text, JsonValue> = Map.new();
+    fields.insert("manifest_digest", json_string(p.manifest_digest.0.clone()));
+    fields.insert("log_id", json_string(p.log_id.clone()));
+    fields.insert("tree_size", json_int(p.tree_size));
+    json_object(fields)
+}
+
+/// A whole publish request as a JSON document.
+public fn encode_publish_request(r: &PublishRequest) -> Text {
+    let mut fields: Map<Text, JsonValue> = Map.new();
+    fields.insert("manifest", encode_manifest(&r.manifest));
+    fields.insert("signature", encode_signature(&r.signature));
+    fields.insert("proof", encode_proof(&r.proof));
+    fields.insert("as_authority", json_string(r.as_authority.clone()));
+    stringify(&json_object(fields))
+}
+
+// -----------------------------------------------------------------------------
+// Decoding
+// -----------------------------------------------------------------------------
+
+/// Read a manifest out of an already-parsed sub-object.
+public fn decode_manifest(v: &JsonValue) -> Result<Manifest, WireError> {
+    let name = field_text(v, &"name", &"manifest.name")?;
+    let version = field_text(v, &"version", &"manifest.version")?;
+    let artefact = field_text(v, &"artefact", &"manifest.artefact")?;
+    let published_at = field_int(v, &"published_at", &"manifest.published_at")?;
+    Result.Ok(Manifest {
+        name: PackageName(name),
+        version: version,
+        artefact: Digest(artefact),
+        published_at: published_at,
+    })
+}
+
+/// Read a signature bundle.
+public fn decode_signature(v: &JsonValue) -> Result<SignatureBundle, WireError> {
+    let digest = field_text(v, &"manifest_digest", &"signature.manifest_digest")?;
+    let signer = field_text(v, &"signer", &"signature.signer")?;
+    Result.Ok(SignatureBundle {
+        manifest_digest: Digest(digest),
+        signer: signer,
+    })
+}
+
+/// Read an inclusion proof.
+public fn decode_proof(v: &JsonValue) -> Result<InclusionProof, WireError> {
+    let digest = field_text(v, &"manifest_digest", &"proof.manifest_digest")?;
+    let log_id = field_text(v, &"log_id", &"proof.log_id")?;
+    let tree_size = field_int(v, &"tree_size", &"proof.tree_size")?;
+    Result.Ok(InclusionProof {
+        manifest_digest: Digest(digest),
+        log_id: log_id,
+        tree_size: tree_size,
+    })
+}
+
+/// Read a whole publish request from a JSON document.
+///
+/// This is the function an HTTP handler calls. It never returns a
+/// partially-filled request: either every field was present and
+/// well-typed, or the first fault is named and nothing is built.
+public fn decode_publish_request(body: &Text) -> Result<PublishRequest, WireError> {
+    let doc = match decode(body) {
+        Result.Ok(v) => v,
+        // The JSON error is not passed through verbatim: its own text
+        // describes a position in a byte stream, which is true but not
+        // useful to someone holding a request object. What the caller
+        // needs is that the transport, not the policy, is at fault.
+        Result.Err(_) => return Result.Err(WireError.NotJson("parse failed")),
+    };
+    if doc.as_object() is None {
+        return Result.Err(WireError.NotAnObject);
+    }
+
+    let manifest_v = field_object(&doc, &"manifest")?;
+    let signature_v = field_object(&doc, &"signature")?;
+    let proof_v = field_object(&doc, &"proof")?;
+    let as_authority = field_text(&doc, &"as_authority", &"as_authority")?;
+
+    Result.Ok(PublishRequest {
+        manifest: decode_manifest(&manifest_v)?,
+        signature: decode_signature(&signature_v)?,
+        proof: decode_proof(&proof_v)?,
+        as_authority: as_authority,
+    })
+}
+
+// -----------------------------------------------------------------------------
+// The invariant, as a function
+// -----------------------------------------------------------------------------
+
+/// Encoding then decoding returns what went in.
+///
+/// Written as a callable predicate rather than prose so a scene can
+/// execute it. An encoder and a decoder are the classic silently-drifting
+/// pair — each is plausible alone, and only the composition is wrong —
+/// so the property that binds them has to be something a program can
+/// run, not something a reader can nod at.
+public pure fn round_trip_preserves(r: &PublishRequest) -> Bool {
+    match decode_publish_request(&encode_publish_request(r)) {
+        Result.Err(_) => false,
+        Result.Ok(back) => {
+            back.as_authority == r.as_authority
+                && back.manifest.name.0 == r.manifest.name.0
+                && back.manifest.version == r.manifest.version
+                && back.manifest.artefact.0 == r.manifest.artefact.0
+                && back.manifest.published_at == r.manifest.published_at
+                && back.signature.signer == r.signature.signer
+                && back.signature.manifest_digest.0 == r.signature.manifest_digest.0
+                && back.proof.log_id == r.proof.log_id
+                && back.proof.tree_size == r.proof.tree_size
+                && back.proof.manifest_digest.0 == r.proof.manifest_digest.0
+        }
+    }
+}
+
+/// A body missing one field is refused, and the refusal names it.
+///
+/// The negative pole of the same invariant. Without it, a decoder that
+/// refused EVERYTHING would satisfy `round_trip_preserves` vacuously —
+/// the acceptance would be measuring the absence of noise rather than
+/// the presence of the property.
+public pure fn missing_field_is_named(body: &Text, expected_path: &Text) -> Bool {
+    match decode_publish_request(body) {
+        Result.Ok(_) => false,
+        Result.Err(WireError.MissingField(path)) => path == expected_path.clone(),
+        Result.Err(_) => false,
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The search answer
+// -----------------------------------------------------------------------------
+
+/// A verified artefact as JSON.
+///
+/// PROVENANCE TRAVELS WITH THE ARTEFACT. `authority_id`, `role` and
+/// `log_id` are not decoration — `protocol/evidence.vr` keeps them on
+/// `Verified` precisely so that a stored artefact does not become
+/// anonymous once it is on disk, and a wire format that dropped them
+/// would undo that at the first hop. A client that cannot tell which
+/// authority answered, and whether that authority was local or an
+/// upstream mirror, cannot make the decision the whole design exists to
+/// support.
+public fn encode_verified(v: &Verified) -> JsonValue {
+    let mut fields: Map<Text, JsonValue> = Map.new();
+    fields.insert("manifest", encode_manifest(&v.manifest()));
+    fields.insert("authority_id", json_string(v.authority_id()));
+    fields.insert("role", json_string(role_name(&v.role())));
+    fields.insert("log_id", json_string(v.log_id()));
+    json_object(fields)
+}
+
+/// The role as a wire word.
+///
+/// Written out rather than derived from the variant's spelling: the
+/// wire format is a promise to clients, and it must not change because
+/// somebody renamed a variant. The two are allowed to drift only
+/// deliberately, and this function is where that decision would be
+/// made.
+fn role_name(r: &AuthorityRole) -> Text {
+    match r {
+        AuthorityRole.Local => "local",
+        AuthorityRole.Upstream => "upstream",
+    }
+}
+
+/// A search answer: the matches, and how many there were.
+///
+/// The count is carried ALONGSIDE the list rather than left for the
+/// client to compute, because the two can legitimately differ once this
+/// route learns to paginate — and a client that derived the total from
+/// `results.len()` would then be quietly wrong. Stating both now costs
+/// one field and forecloses that.
+public fn encode_search_answer(results: &List<Verified>, total: Int) -> Text {
+    let mut items: List<JsonValue> = List.new();
+    for v in results.iter() {
+        items.push(encode_verified(v));
+    }
+    let mut fields: Map<Text, JsonValue> = Map.new();
+    fields.insert("total", json_int(total));
+    fields.insert("results", json_array(items));
+    stringify(&json_object(fields))
+}

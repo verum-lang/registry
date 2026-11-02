@@ -1,0 +1,21 @@
+{
+  "task": "T1635",
+  "previous_registry_commit": "2489e6fe0fa42a7297f757d1f71b08b3ffea0128",
+  "registry_commit": "9561ce0aeae6d212a0be7841f91b34a7e86b47d0",
+  "previous_language_product_commit": "d61c11aa5aeda6eafefe9bb6748115cffeb66946",
+  "language_product_commit": "faabbe696f1ee928f6b3a9bb6c7980ba20577513",
+  "common_source_inputs_identical": true,
+  "added_source_inputs": [
+    "tests/language/task_handle_declared.vr",
+    "tests/language/task_handle_inferred.vr",
+    "tests/language/task_handle_record.vr"
+  ],
+  "previous_errors": 11,
+  "current_errors": 9,
+  "elapsed_seconds": 216.409,
+  "returncode": 101,
+  "scope": "Whole-project source checking only; multiple language changes separate the products. Remaining source/protocol, async handle, IoResult and HTTP response diagnostics prevent project acceptance. No runtime, AOT or deployment verdict.",
+  "result_sha256": "0fda6aea9375bc8f840d163b8a54aa80355061b46869862de19de63dfbe2e380",
+  "log_sha256": "9b71e5bac496ba5486102e2620675ccdb78083bfb378d9783ad060d9687e88d0",
+  "build_receipt": "publication-metadata-stage18/build-manifest.json"
+}

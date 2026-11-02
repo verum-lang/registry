@@ -1,0 +1,409 @@
+// Spec: Cog Publication Protocol v1 — authenticated publisher preparation.
+module verum_registry.node.publication_auth;
+
+mount core.encoding.json.{JsonValue, JsonError, parse_strict};
+mount core.encoding.hex.{decode as decode_hex};
+mount core.hash.crypto.sha256.{Sha256};
+mount core.subtle.constant_time.{constant_time_eq};
+mount verum_registry.protocol.authority.{
+    Authority, AuthorityRole, NamePattern, PackageName, ResolutionError, resolve_authority,
+};
+
+type PrincipalId is { private value: Text };
+type CredentialId is { private value: Text };
+type AuthorityId is { private value: Text };
+type CredentialDigest is { private bytes: [Byte; 32] };
+
+type PublicationGrant is {
+    private authority: AuthorityId,
+    private names: List<NamePattern>,
+};
+
+type PublisherPrincipal is {
+    private id: PrincipalId,
+    private grants: List<PublicationGrant>,
+};
+
+type StoredCredential is {
+    private id: CredentialId,
+    private digest: CredentialDigest,
+    private principal_index: Int,
+    private active: Bool,
+};
+
+/// An immutable configuration snapshot. Its credential digests never escape.
+public type CredentialStore is {
+    private principals: List<PublisherPrincipal>,
+    private credentials: List<StoredCredential>,
+};
+
+/// An owned principal/grant snapshot, independent of the source store.
+public type AuthenticatedPublisher is {
+    private principal: PrincipalId,
+    private credential: CredentialId,
+    private grants: List<PublicationGrant>,
+};
+
+/// Authenticated attribution and the matched grant, without admission evidence.
+public type PublisherAttribution is {
+    private principal: PrincipalId,
+    private credential: CredentialId,
+    private authority: AuthorityId,
+    private matched_scope: NamePattern,
+};
+
+public type CredentialConfigError is
+    | TooLarge
+    | InvalidUtf8
+    | Syntax(JsonError)
+    | InvalidSchema(Text);
+
+public type AuthenticationError is | Unauthenticated;
+
+public type AuthorizationError is
+    | Forbidden
+    | AuthorityConflict;
+
+public pure fn credential_config_limit() -> Int { 262144 }
+
+fn object(value: &JsonValue, path: &Text) -> Result<&Map<Text, JsonValue>, CredentialConfigError> {
+    match value.as_object() {
+        Maybe.Some(fields) => Result.Ok(fields),
+        Maybe.None => Result.Err(CredentialConfigError.InvalidSchema(path.clone())),
+    }
+}
+
+fn array(value: &JsonValue, path: &Text) -> Result<&List<JsonValue>, CredentialConfigError> {
+    match value.as_array() {
+        Maybe.Some(items) => Result.Ok(items),
+        Maybe.None => Result.Err(CredentialConfigError.InvalidSchema(path.clone())),
+    }
+}
+
+fn field(fields: &Map<Text, JsonValue>, key: &Text) -> Result<JsonValue, CredentialConfigError> {
+    match fields.get(key) {
+        Maybe.Some(value) => Result.Ok(value),
+        Maybe.None => Result.Err(CredentialConfigError.InvalidSchema(key.clone())),
+    }
+}
+
+fn text_field(fields: &Map<Text, JsonValue>, key: &Text) -> Result<Text, CredentialConfigError> {
+    let value = field(fields, key)?;
+    match value.as_string() {
+        Maybe.Some(text) => Result.Ok(text),
+        Maybe.None => Result.Err(CredentialConfigError.InvalidSchema(key.clone())),
+    }
+}
+
+fn exact_fields(
+    fields: &Map<Text, JsonValue>, names: &List<Text>, path: &Text,
+) -> Result<(), CredentialConfigError> {
+    if fields.len() != names.len() {
+        return Result.Err(CredentialConfigError.InvalidSchema(path.clone()));
+    }
+    for name in names.iter() {
+        if fields.get(name) is Maybe.None {
+            return Result.Err(CredentialConfigError.InvalidSchema(path.clone()));
+        }
+    }
+    Result.Ok(())
+}
+
+fn valid_identifier(text: &Text) -> Bool {
+    if text.len() < 1 || text.len() > 128 { return false; }
+    for byte in text.bytes() {
+        if !((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)
+            || (byte >= 0x30 && byte <= 0x39) || byte == 0x5f || byte == 0x2d) {
+            return false;
+        }
+    }
+    true
+}
+
+fn lowercase_hex(text: &Text, length: Int) -> Bool {
+    if text.len() != length { return false; }
+    for byte in text.bytes() {
+        if !((byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn credential_digest(text: &Text) -> Result<CredentialDigest, CredentialConfigError> {
+    if !lowercase_hex(text, 64) {
+        return Result.Err(CredentialConfigError.InvalidSchema("token_sha256"));
+    }
+    let decoded = match decode_hex(text) {
+        Result.Ok(bytes) => bytes,
+        Result.Err(_) => return Result.Err(CredentialConfigError.InvalidSchema("token_sha256")),
+    };
+    let mut bytes: [Byte; 32] = [0_u8; 32];
+    let mut index = 0;
+    while index < 32 {
+        bytes[index] = decoded[index];
+        index = index + 1;
+    }
+    Result.Ok(CredentialDigest { bytes: bytes })
+}
+
+fn snapshot_pattern(pattern: &NamePattern) -> NamePattern {
+    match pattern {
+        NamePattern.Exact(name) => NamePattern.Exact(name.clone()),
+        NamePattern.Scope(scope) => NamePattern.Scope(scope.clone()),
+    }
+}
+
+fn same_pattern(left: &NamePattern, right: &NamePattern) -> Bool {
+    match (left, right) {
+        (NamePattern.Exact(a), NamePattern.Exact(b)) => a == b,
+        (NamePattern.Scope(a), NamePattern.Scope(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn snapshot_grants(grants: &List<PublicationGrant>) -> List<PublicationGrant> {
+    let mut copied: List<PublicationGrant> = List.with_capacity(grants.len());
+    for grant in grants.iter() {
+        let mut names: List<NamePattern> = List.with_capacity(grant.names.len());
+        for name in grant.names.iter() { names.push(snapshot_pattern(name)); }
+        copied.push(PublicationGrant {
+            authority: AuthorityId { value: grant.authority.value.clone() },
+            names: names,
+        });
+    }
+    copied
+}
+
+fn read_pattern(value: &JsonValue) -> Result<NamePattern, CredentialConfigError> {
+    let fields = object(value, &"names")?;
+    if fields.len() != 1 {
+        return Result.Err(CredentialConfigError.InvalidSchema("names"));
+    }
+    if fields.get(&"exact") is Maybe.Some(_) {
+        let name = text_field(fields, &"exact")?;
+        if name.len() < 1 || name.len() > 256 {
+            return Result.Err(CredentialConfigError.InvalidSchema("exact"));
+        }
+        return Result.Ok(NamePattern.Exact(name));
+    }
+    let scope = text_field(fields, &"scope")?;
+    if !scope.starts_with(&"@") || !valid_identifier(&scope.slice(1, scope.len())) {
+        return Result.Err(CredentialConfigError.InvalidSchema("scope"));
+    }
+    Result.Ok(NamePattern.Scope(scope))
+}
+
+fn local_authority(id: &Text, authorities: &List<Authority>) -> Bool {
+    let mut count = 0;
+    let mut local = false;
+    for authority in authorities.iter() {
+        if authority.id == *id {
+            count = count + 1;
+            local = authority.role is AuthorityRole.Local;
+        }
+    }
+    count == 1 && local
+}
+
+fn read_grant(value: &JsonValue, authorities: &List<Authority>) -> Result<PublicationGrant, CredentialConfigError> {
+    let fields = object(value, &"grants")?;
+    let keys: List<Text> = ["authority", "names"];
+    exact_fields(fields, &keys, &"grants")?;
+    let authority = text_field(fields, &"authority")?;
+    if !local_authority(&authority, authorities) {
+        return Result.Err(CredentialConfigError.InvalidSchema("authority"));
+    }
+    let name_values = field(fields, &"names")?;
+    let values = array(&name_values, &"names")?;
+    if values.len() > 32 { return Result.Err(CredentialConfigError.InvalidSchema("names")); }
+    let mut names: List<NamePattern> = List.with_capacity(values.len());
+    for value in values.iter() {
+        let pattern = read_pattern(value)?;
+        for earlier in names.iter() {
+            if same_pattern(earlier, &pattern) {
+                return Result.Err(CredentialConfigError.InvalidSchema("names"));
+            }
+        }
+        names.push(pattern);
+    }
+    Result.Ok(PublicationGrant { authority: AuthorityId { value: authority }, names: names })
+}
+
+fn read_principal(value: &JsonValue, authorities: &List<Authority>) -> Result<PublisherPrincipal, CredentialConfigError> {
+    let fields = object(value, &"principals")?;
+    let keys: List<Text> = ["id", "grants"];
+    exact_fields(fields, &keys, &"principals")?;
+    let id = text_field(fields, &"id")?;
+    if !valid_identifier(&id) { return Result.Err(CredentialConfigError.InvalidSchema("id")); }
+    let grant_values = field(fields, &"grants")?;
+    let values = array(&grant_values, &"grants")?;
+    if values.len() > 32 { return Result.Err(CredentialConfigError.InvalidSchema("grants")); }
+    let mut grants: List<PublicationGrant> = List.with_capacity(values.len());
+    for value in values.iter() {
+        let grant = read_grant(value, authorities)?;
+        // A repeated authority/name pair is redundant even in a separate grant.
+        for earlier in grants.iter() {
+            if earlier.authority.value == grant.authority.value {
+                if earlier.names.len() == 0 && grant.names.len() == 0 {
+                    return Result.Err(CredentialConfigError.InvalidSchema("grants"));
+                }
+                for name in grant.names.iter() {
+                    for old_name in earlier.names.iter() {
+                        if same_pattern(name, old_name) {
+                            return Result.Err(CredentialConfigError.InvalidSchema("grants"));
+                        }
+                    }
+                }
+            }
+        }
+        grants.push(grant);
+    }
+    Result.Ok(PublisherPrincipal { id: PrincipalId { value: id }, grants: grants })
+}
+
+fn read_credential(value: &JsonValue, principals: &List<PublisherPrincipal>) -> Result<StoredCredential, CredentialConfigError> {
+    let fields = object(value, &"credentials")?;
+    let keys: List<Text> = ["id", "principal", "token_sha256", "active"];
+    exact_fields(fields, &keys, &"credentials")?;
+    let id = text_field(fields, &"id")?;
+    if !valid_identifier(&id) { return Result.Err(CredentialConfigError.InvalidSchema("id")); }
+    let principal = text_field(fields, &"principal")?;
+    let mut principal_index = -1;
+    let mut index = 0;
+    while index < principals.len() {
+        if principals[index].id.value == principal { principal_index = index; }
+        index = index + 1;
+    }
+    if principal_index < 0 { return Result.Err(CredentialConfigError.InvalidSchema("principal")); }
+    let digest = credential_digest(&text_field(fields, &"token_sha256")?)?;
+    let active_value = field(fields, &"active")?;
+    let active = match active_value.as_bool() {
+        Maybe.Some(flag) => flag,
+        Maybe.None => return Result.Err(CredentialConfigError.InvalidSchema("active")),
+    };
+    Result.Ok(StoredCredential {
+        id: CredentialId { value: id }, digest: digest,
+        principal_index: principal_index, active: active,
+    })
+}
+
+/// Strictly decode a bounded operator configuration; never default on failure.
+/// Principal/grant records are reconstructed and retain no JSON container alias.
+public fn decode_credentials(source: &Text, authorities: &List<Authority>) -> Result<CredentialStore, CredentialConfigError> {
+    if source.len() > credential_config_limit() { return Result.Err(CredentialConfigError.TooLarge); }
+    let document = match parse_strict(source, credential_config_limit()) {
+        Result.Ok(value) => value,
+        Result.Err(error) => return Result.Err(CredentialConfigError.Syntax(error)),
+    };
+    let fields = object(&document, &"$")?;
+    let keys: List<Text> = ["version", "principals", "credentials"];
+    exact_fields(fields, &keys, &"$")?;
+    let version = field(fields, &"version")?;
+    match version.as_int() {
+        Maybe.Some(1) => {},
+        _ => return Result.Err(CredentialConfigError.InvalidSchema("version")),
+    }
+    let principal_values = field(fields, &"principals")?;
+    let values = array(&principal_values, &"principals")?;
+    if values.len() > 256 { return Result.Err(CredentialConfigError.InvalidSchema("principals")); }
+    let mut principals: List<PublisherPrincipal> = List.with_capacity(values.len());
+    for value in values.iter() {
+        let principal = read_principal(value, authorities)?;
+        for earlier in principals.iter() {
+            if earlier.id.value == principal.id.value {
+                return Result.Err(CredentialConfigError.InvalidSchema("id"));
+            }
+        }
+        principals.push(principal);
+    }
+    let credential_values = field(fields, &"credentials")?;
+    let values = array(&credential_values, &"credentials")?;
+    if values.len() > 1024 { return Result.Err(CredentialConfigError.InvalidSchema("credentials")); }
+    let mut credentials: List<StoredCredential> = List.with_capacity(values.len());
+    let mut credential_ids: Map<Text, Bool> = Map.new();
+    let mut credential_digests: Map<Text, Bool> = Map.new();
+    for value in values.iter() {
+        let credential = read_credential(value, &principals)?;
+        // Configuration validation is separate from bearer verification. The
+        // validated digest spelling is canonical lowercase hex, so an index
+        // detects duplicate digests without quadratic byte comparisons.
+        let fields = object(value, &"credentials")?;
+        let digest_key = text_field(fields, &"token_sha256")?;
+        if credential_ids.get(&credential.id.value) is Maybe.Some(_)
+            || credential_digests.get(&digest_key) is Maybe.Some(_) {
+            return Result.Err(CredentialConfigError.InvalidSchema("credentials"));
+        }
+        credential_ids.insert(credential.id.value.clone(), true);
+        credential_digests.insert(digest_key, true);
+        credentials.push(credential);
+    }
+    Result.Ok(CredentialStore { principals: principals, credentials: credentials })
+}
+
+/// Verify the complete ASCII token using shared cryptographic primitives.
+/// All configured digests are compared before deciding; none leave this module.
+public fn authenticate(store: &CredentialStore, bearer: &Text) -> Result<AuthenticatedPublisher, AuthenticationError> {
+    if bearer.len() != 69 || !bearer.starts_with(&"vrp1_")
+        || !lowercase_hex(&bearer.slice(5, bearer.len()), 64) {
+        return Result.Err(AuthenticationError.Unauthenticated);
+    }
+    let computed = Sha256.digest(bearer.as_bytes());
+    let mut matches = 0;
+    let mut selected = 0;
+    let mut index = 0;
+    while index < store.credentials.len() {
+        let credential = &store.credentials[index];
+        let expected = credential.digest.bytes;
+        let matches_digest = constant_time_eq(&computed[..], &expected[..]);
+        if matches_digest && credential.active {
+            matches = matches + 1;
+            selected = index;
+        }
+        index = index + 1;
+    }
+    if matches != 1 { return Result.Err(AuthenticationError.Unauthenticated); }
+    let credential = &store.credentials[selected];
+    let principal = &store.principals[credential.principal_index];
+    Result.Ok(AuthenticatedPublisher {
+        principal: PrincipalId { value: principal.id.value.clone() },
+        credential: CredentialId { value: credential.id.value.clone() },
+        grants: snapshot_grants(&principal.grants),
+    })
+}
+
+/// Bind an authenticated principal's grant to the node's unique local owner.
+/// PackageName is a semantic wrapper, not proof of valid package-name syntax.
+public fn authorize(
+    publisher: AuthenticatedPublisher, name: &PackageName, authorities: &List<Authority>,
+) -> Result<PublisherAttribution, AuthorizationError> {
+    let owner = match resolve_authority(authorities, name) {
+        Result.Ok(owner) => owner,
+        Result.Err(ResolutionError.NoAuthority) => return Result.Err(AuthorizationError.Forbidden),
+        Result.Err(ResolutionError.AmbiguousAuthority(_)) => return Result.Err(AuthorizationError.AuthorityConflict),
+    };
+    if owner.role() is AuthorityRole.Upstream { return Result.Err(AuthorizationError.Forbidden); }
+    let authority_id = owner.authority_id();
+    for grant in publisher.grants.iter() {
+        if grant.authority.value == authority_id {
+            for pattern in grant.names.iter() {
+                if pattern.claims(name) {
+                    return Result.Ok(PublisherAttribution {
+                        principal: PrincipalId { value: publisher.principal.value.clone() },
+                        credential: CredentialId { value: publisher.credential.value.clone() },
+                        authority: AuthorityId { value: authority_id.clone() },
+                        matched_scope: snapshot_pattern(pattern),
+                    });
+                }
+            }
+        }
+    }
+    Result.Err(AuthorizationError.Forbidden)
+}
+
+implement PublisherAttribution {
+    public fn principal_id(&self) -> Text { self.principal.value.clone() }
+    public fn credential_id(&self) -> Text { self.credential.value.clone() }
+    public fn authority_id(&self) -> Text { self.authority.value.clone() }
+    public fn scope_snapshot(&self) -> NamePattern { snapshot_pattern(&self.matched_scope) }
+}

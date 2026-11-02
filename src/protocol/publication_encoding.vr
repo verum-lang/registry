@@ -1,0 +1,143 @@
+module verum_registry.protocol.publication_encoding;
+
+mount core.encoding.json.{JsonValue, stringify};
+mount verum_registry.protocol.publication_metadata.{
+    DecodedSourceMetadata, DecodedDependency,
+};
+
+public type MetadataEncodingError is | InvalidLimit | TooLarge;
+
+type Writer is { output: Text, limit: Int };
+
+implement Writer {
+    fn append(&mut self, value: &Text) -> Result<(), MetadataEncodingError> {
+        if value.len() > self.limit - self.output.len() {
+            return Result.Err(MetadataEncodingError.TooLarge);
+        }
+        self.output.push_str(value);
+        Result.Ok(())
+    }
+
+    fn text(&mut self, value: &Text) -> Result<(), MetadataEncodingError> {
+        // Bound the input before the JSON escaper allocates its result. Escapes
+        // may expand it; append then enforces the exact encoded-byte budget.
+        if value.len() > self.limit - self.output.len() {
+            return Result.Err(MetadataEncodingError.TooLarge);
+        }
+        self.append(&stringify(&JsonValue.JsonString(value.clone())))
+    }
+
+    fn optional_text(&mut self, value: &Maybe<Text>) -> Result<(), MetadataEncodingError> {
+        match value {
+            Maybe.Some(text) => self.text(text),
+            Maybe.None => self.append(&"null"),
+        }
+    }
+
+    fn optional_bool(&mut self, value: &Maybe<Bool>) -> Result<(), MetadataEncodingError> {
+        match value {
+            Maybe.Some(flag) => {
+                if *flag { self.append(&"true") } else { self.append(&"false") }
+            },
+            Maybe.None => self.append(&"null"),
+        }
+    }
+
+    fn texts(&mut self, values: &List<Text>) -> Result<(), MetadataEncodingError> {
+        self.append(&"[")?;
+        let mut first = true;
+        for value in values.iter() {
+            if !first { self.append(&",")?; }
+            first = false;
+            self.text(value)?;
+        }
+        self.append(&"]")
+    }
+
+    fn dependency(&mut self, dependency: &DecodedDependency) -> Result<(), MetadataEncodingError> {
+        match dependency {
+            DecodedDependency.Requirement(version) => self.text(version),
+            DecodedDependency.Detailed(options) => {
+                self.append(&"{\"version\":")?;
+                self.text(&options.version_spelling)?;
+                self.append(&",\"features\":")?;
+                match &options.features {
+                    Maybe.Some(features) => self.texts(features)?,
+                    Maybe.None => self.append(&"null")?,
+                }
+                self.append(&",\"optional\":")?;
+                self.optional_bool(&options.optional)?;
+                self.append(&",\"default_features\":")?;
+                self.optional_bool(&options.default_features)?;
+                self.append(&"}")
+            },
+        }
+    }
+}
+
+/// Stable local storage encoding of schema-decoded metadata. Object keys are
+/// ordered; array order, dependency form, nulls and explicit options are retained.
+/// This is not semantic admission, a signature payload or a protocol requirement
+/// that incoming JSON use this spelling.
+public fn encode_source_metadata(
+    metadata: &DecodedSourceMetadata, max_bytes: Int,
+) -> Result<Text, MetadataEncodingError> {
+    if max_bytes < 1 || max_bytes > 1048576 {
+        return Result.Err(MetadataEncodingError.InvalidLimit);
+    }
+    let mut writer = Writer { output: Text.new(), limit: max_bytes };
+    writer.append(&"{\"name\":")?;
+    writer.text(&metadata.name_spelling)?;
+    writer.append(&",\"version\":")?;
+    writer.text(&metadata.version_spelling)?;
+    writer.append(&",\"description\":")?;
+    writer.optional_text(&metadata.description)?;
+    writer.append(&",\"authors\":")?;
+    writer.texts(&metadata.authors)?;
+    writer.append(&",\"license\":")?;
+    writer.optional_text(&metadata.license)?;
+    writer.append(&",\"repository\":")?;
+    writer.optional_text(&metadata.repository)?;
+    writer.append(&",\"homepage\":")?;
+    writer.optional_text(&metadata.homepage)?;
+    writer.append(&",\"keywords\":")?;
+    writer.texts(&metadata.keywords)?;
+    writer.append(&",\"categories\":")?;
+    writer.texts(&metadata.categories)?;
+    writer.append(&",\"readme\":")?;
+    writer.optional_text(&metadata.readme)?;
+    writer.append(&",\"dependencies\":{")?;
+    let mut dependency_names: List<Text> = List.new();
+    for (name, _) in metadata.dependencies.iter() { dependency_names.push(name.clone()); }
+    dependency_names.sort();
+    let mut first = true;
+    for name in dependency_names.iter() {
+        if !first { writer.append(&",")?; }
+        first = false;
+        writer.text(name)?;
+        writer.append(&":")?;
+        match metadata.dependencies.get(name) {
+            Maybe.Some(dependency) => writer.dependency(&dependency)?,
+            Maybe.None => panic("metadata key disappeared during immutable encoding"),
+        }
+    }
+    writer.append(&"},\"features\":{")?;
+    let mut feature_names: List<Text> = List.new();
+    for (name, _) in metadata.features.iter() { feature_names.push(name.clone()); }
+    feature_names.sort();
+    first = true;
+    for name in feature_names.iter() {
+        if !first { writer.append(&",")?; }
+        first = false;
+        writer.text(name)?;
+        writer.append(&":")?;
+        match metadata.features.get(name) {
+            Maybe.Some(features) => writer.texts(&features)?,
+            Maybe.None => panic("metadata key disappeared during immutable encoding"),
+        }
+    }
+    writer.append(&"},\"checksum\":")?;
+    writer.text(&metadata.checksum_spelling)?;
+    writer.append(&"}")?;
+    Result.Ok(writer.output)
+}

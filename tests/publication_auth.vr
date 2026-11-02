@@ -1,0 +1,193 @@
+// T1636: actual credential decoder, cryptographic verifier and scope rules.
+module verum_registry.tests.publication_auth;
+
+mount core.encoding.json.JsonErrorKind;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern, PackageName};
+mount verum_registry.node.publication_auth.{
+    CredentialStore, CredentialConfigError, AuthenticationError, AuthorizationError,
+    AuthenticatedPublisher, PublisherAttribution, decode_credentials,
+    authenticate, authorize, credential_config_limit,
+};
+
+fn configuration() -> Text { """{"version":1,"principals":[{"id":"alice","grants":[{"authority":"local","names":[{"exact":"widget"},{"scope":"@acme"}]}]},{"id":"bob","grants":[{"authority":"local","names":[{"exact":"other-widget"}]}]}],"credentials":[{"id":"alice-active","principal":"alice","token_sha256":"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee","active":true},{"id":"alice-rotated","principal":"alice","token_sha256":"4fec22ff6d5f4cf39ad988ab2c8d5e87678fbb25ee322aecf1184f9b87686ef5","active":true},{"id":"alice-inactive","principal":"alice","token_sha256":"c018c379fde3ca92c560c94b9088d762e68f120817b4a26a6da1c85d5da5bd7c","active":false},{"id":"bob-active","principal":"bob","token_sha256":"c57a22a5e5becfa96f0aa937162032f8524036697aad28ecadc1488c4f633ab6","active":true}]}""" }
+fn alice_token() -> Text { "vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }
+fn rotated_token() -> Text { "vrp1_202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f" }
+fn inactive_token() -> Text { "vrp1_404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f" }
+fn bob_token() -> Text { "vrp1_606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f" }
+fn unknown_token() -> Text { "vrp1_808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f" }
+
+fn authorities() -> List<Authority> {
+    [Authority { id: "local", role: AuthorityRole.Local, owns: [
+        NamePattern.Exact("widget"), NamePattern.Exact("other-widget"),
+        NamePattern.Scope("@acme"),
+    ] }]
+}
+
+fn decoded(source: &Text) -> CredentialStore {
+    match decode_credentials(source, &authorities()) {
+        Result.Ok(store) => store,
+        Result.Err(_) => panic("valid credential configuration refused"),
+    }
+}
+
+fn publisher(store: &CredentialStore, token: &Text) -> AuthenticatedPublisher {
+    match authenticate(store, token) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("valid credential refused"),
+    }
+}
+
+fn permitted(store: &CredentialStore, token: &Text, name: &Text) -> PublisherAttribution {
+    match authorize(publisher(store, token), &PackageName(name.clone()), &authorities()) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("authorized name refused"),
+    }
+}
+
+fn unauthenticated(store: &CredentialStore, token: &Text) {
+    match authenticate(store, token) {
+        Result.Err(AuthenticationError.Unauthenticated) => {},
+        _ => panic("credential negative authenticated"),
+    }
+}
+
+fn forbidden(store: &CredentialStore, token: &Text, name: &Text, owners: &List<Authority>) {
+    match authorize(publisher(store, token), &PackageName(name.clone()), owners) {
+        Result.Err(AuthorizationError.Forbidden) => {},
+        _ => panic("forbidden publisher/name accepted"),
+    }
+}
+
+fn schema_refusal(source: &Text) {
+    match decode_credentials(source, &authorities()) {
+        Result.Err(CredentialConfigError.InvalidSchema(_)) => {},
+        _ => panic("configuration schema negative accepted or flattened"),
+    }
+}
+
+fn changed(before: &Text, after: &Text) -> Text {
+    let source = configuration();
+    assert(source.contains(before));
+    source.replace(before, after)
+}
+
+fn real_verifier() {
+    let store = decoded(&configuration());
+    let alice = permitted(&store, &alice_token(), &"widget");
+    assert_eq(alice.principal_id(), "alice");
+    assert_eq(alice.credential_id(), "alice-active");
+    assert_eq(alice.authority_id(), "local");
+    match alice.scope_snapshot() {
+        NamePattern.Exact(name) => assert_eq(name, "widget"),
+        _ => panic("expected exact grant"),
+    }
+    let rotated = permitted(&store, &rotated_token(), &"widget");
+    assert_eq(rotated.principal_id(), alice.principal_id());
+    assert_eq(rotated.credential_id(), "alice-rotated");
+    let bob = permitted(&store, &bob_token(), &"other-widget");
+    assert_eq(bob.principal_id(), "bob");
+    match permitted(&store, &alice_token(), &"@acme/codec").scope_snapshot() {
+        NamePattern.Scope(scope) => assert_eq(scope, "@acme"),
+        _ => panic("expected scoped grant"),
+    }
+    unauthenticated(&store, &inactive_token());
+    unauthenticated(&store, &unknown_token());
+    unauthenticated(&store, &alice_token().replace(&"vrp1_", &"VRP1_"));
+    unauthenticated(&store, &alice_token().replace(&"1f", &"1F"));
+    unauthenticated(&store, &alice_token().replace(&"1f", &"1e"));
+    unauthenticated(&store, &"vrp1_");
+    unauthenticated(&store, &"");
+    unauthenticated(&store, &f"{alice_token()} ");
+    forbidden(&store, &alice_token(), &"other-widget", &authorities());
+    forbidden(&store, &bob_token(), &"widget", &authorities());
+    forbidden(&store, &alice_token(), &"widget-extra", &authorities());
+    forbidden(&store, &alice_token(), &"@acme-other/codec", &authorities());
+    let absent: List<Authority> = List.new();
+    forbidden(&store, &alice_token(), &"widget", &absent);
+    let upstream: List<Authority> = [Authority {
+        id: "local", role: AuthorityRole.Upstream, owns: [NamePattern.Exact("widget")],
+    }];
+    forbidden(&store, &alice_token(), &"widget", &upstream);
+    let ambiguous: List<Authority> = [
+        Authority { id: "local", role: AuthorityRole.Local, owns: [NamePattern.Exact("widget")] },
+        Authority { id: "second", role: AuthorityRole.Local, owns: [NamePattern.Exact("widget")] },
+    ];
+    match authorize(publisher(&store, &alice_token()), &PackageName("widget"), &ambiguous) {
+        Result.Err(AuthorizationError.AuthorityConflict) => {},
+        _ => panic("ambiguous ownership was accepted"),
+    }
+}
+
+fn configuration_refusals() {
+    schema_refusal(&"null");
+    schema_refusal(&"[]");
+    schema_refusal(&"{}");
+    schema_refusal(&changed(&"\"version\":1", &"\"version\":2"));
+    schema_refusal(&changed(&"\"version\":1", &"\"version\":null"));
+    schema_refusal(&changed(&"\"version\":1", &"\"version\":1.0"));
+    schema_refusal(&changed(&"\"version\":1", &"\"version\":1,\"unknown\":true"));
+    schema_refusal(&changed(&"\"active\":true", &"\"active\":null"));
+    schema_refusal(&changed(&"\"active\":true", &"\"active\":\"true\""));
+    schema_refusal(&changed(&"\"id\":\"alice\"", &"\"id\":\"\""));
+    schema_refusal(&changed(&"\"principal\":\"alice\"", &"\"principal\":\"missing\""));
+    schema_refusal(&changed(&"\"authority\":\"local\"", &"\"authority\":\"missing\""));
+    schema_refusal(&changed(&"\"id\":\"bob\"", &"\"id\":\"alice\""));
+    schema_refusal(&changed(&"\"id\":\"alice-rotated\"", &"\"id\":\"alice-active\""));
+    schema_refusal(&changed(&"4fec22ff6d5f4cf39ad988ab2c8d5e87678fbb25ee322aecf1184f9b87686ef5", &"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee"));
+    schema_refusal(&changed(&"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee", &"00"));
+    schema_refusal(&changed(&"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee", &"0A479C22546D3B2F7351F4AB8AE6AC0B33D4D29975C9A8F6362AFDC4152C82EE"));
+    schema_refusal(&changed(&"{\"exact\":\"widget\"}", &"{\"exact\":\"widget\"},{\"exact\":\"widget\"}"));
+    schema_refusal(&changed(&"{\"scope\":\"@acme\"}", &"{\"scope\":\"@acme/*\"}"));
+    schema_refusal(&changed(&"{\"scope\":\"@acme\"}", &"{\"scope\":\"acme\"}"));
+    schema_refusal(&changed(&"{\"exact\":\"widget\"}", &"{\"exact\":\"widget\",\"scope\":\"@acme\"}"));
+    let duplicate = changed(&"\"version\":1", &"\"version\":1,\"version\":1");
+    let escaped = changed(&"\"id\":\"alice\"", &"\"id\":\"alice\",\"\\u0069d\":\"alice\"");
+    for source in [duplicate, escaped] {
+        match decode_credentials(&source, &authorities()) {
+            Result.Err(CredentialConfigError.Syntax(error)) => assert(error.kind is JsonErrorKind.DuplicateKey),
+            _ => panic("decoded duplicate configuration key was lost"),
+        }
+    }
+    let upstream: List<Authority> = [Authority { id: "local", role: AuthorityRole.Upstream, owns: List.new() }];
+    match decode_credentials(&configuration(), &upstream) {
+        Result.Err(CredentialConfigError.InvalidSchema(_)) => {},
+        _ => panic("credential grant bound to upstream authority"),
+    }
+    let duplicates: List<Authority> = [
+        Authority { id: "local", role: AuthorityRole.Local, owns: List.new() },
+        Authority { id: "local", role: AuthorityRole.Local, owns: List.new() },
+    ];
+    match decode_credentials(&configuration(), &duplicates) {
+        Result.Err(CredentialConfigError.InvalidSchema(_)) => {},
+        _ => panic("duplicate node authority silently selected"),
+    }
+    let empty = decoded(&"{\"version\":1,\"principals\":[],\"credentials\":[]}");
+    unauthenticated(&empty, &alice_token());
+}
+
+fn reload_and_bounds() {
+    let original = decoded(&configuration());
+    let disabled = decoded(&changed(&"\"active\":true", &"\"active\":false"));
+    unauthenticated(&disabled, &alice_token());
+    unauthenticated(&disabled, &rotated_token());
+    // Reload creates a new snapshot; the existing process snapshot is unchanged.
+    assert_eq(permitted(&original, &alice_token(), &"widget").principal_id(), "alice");
+    let reloaded = decoded(&configuration());
+    assert_eq(permitted(&reloaded, &bob_token(), &"other-widget").principal_id(), "bob");
+    let source = configuration();
+    let padding = " ".repeat(credential_config_limit() - source.len());
+    let bounded = f"{source}{padding}";
+    let at_limit = decoded(&bounded);
+    assert_eq(permitted(&at_limit, &bob_token(), &"other-widget").principal_id(), "bob");
+    match decode_credentials(&f"{bounded} ", &authorities()) {
+        Result.Err(CredentialConfigError.TooLarge) => {},
+        _ => panic("over-limit credential file accepted"),
+    }
+}
+
+fn main() {
+    real_verifier();
+    configuration_refusals();
+    reload_and_bounds();
+    print("publication-auth: ok");
+}

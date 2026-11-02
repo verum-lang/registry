@@ -1,0 +1,86 @@
+module verum_registry.tests.publication_archive;
+
+mount core.base.env.var;
+mount core.io.file.File;
+mount core.io.protocols.Read;
+mount verum_registry.protocol.publication_metadata.{DecodedPublication, decode_source_metadata};
+mount verum_registry.node.publication_record.publication_checksum;
+mount verum_registry.node.publication_archive.{
+    ArchiveAdmissionError, default_archive_limits, validate_publication_archive,
+};
+
+fn fixture(name: &Text) -> DecodedPublication {
+    let directory = var(&"VERUM_PUBLICATION_FIXTURES").unwrap();
+    let mut file: File = File.open(&f"{directory}/{name}.gz").unwrap();
+    let mut archive: List<Byte> = List.new();
+    let mut buffer: [Byte; 4096] = [0_u8; 4096];
+    loop {
+        let count = file.read(&mut buffer[..]).unwrap();
+        if count == 0 { break; }
+        let mut index = 0;
+        while index < count { archive.push(buffer[index]); index = index + 1; }
+    }
+    let source = """{"name":"widget","version":"1.2.3","description":null,"authors":[],"license":null,"repository":null,"homepage":null,"keywords":[],"categories":[],"readme":null,"dependencies":{},"features":{},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}""";
+    let mut metadata = decode_source_metadata(&source, 4096).unwrap();
+    metadata.checksum_spelling = publication_checksum(archive.as_slice());
+    DecodedPublication { metadata: metadata, archive: archive }
+}
+
+fn admitted(name: &Text) {
+    if !(validate_publication_archive(&fixture(name), &default_archive_limits()) is Result.Ok(())) {
+        panic(f"valid archive refused: {name}");
+    }
+}
+
+fn refused(name: &Text) {
+    match validate_publication_archive(&fixture(name), &default_archive_limits()) {
+        Result.Err(error) => {
+            if error.status_code() != 422 { panic(f"wrong archive refusal status: {name}"); }
+        },
+        Result.Ok(()) => panic(f"invalid archive admitted: {name}"),
+    }
+}
+
+fn main() {
+    for name in ["gnu", "ustar", "pax", "readme", "directory"] { admitted(&name); }
+    for name in [
+        "traversal", "absolute", "backslash", "drive", "empty-component", "device",
+        "trailing-dot", "duplicate", "duplicate-directory", "file-parent", "child-parent",
+        "symlink", "hardlink", "missing-manifest", "nested-manifest", "directory-manifest",
+        "manifest-utf8", "manifest-coordinate", "gzip-trailing", "gzip-concatenated",
+        "gzip-truncated", "gzip-crc", "tar-terminator", "tar-trailing", "tar-payload",
+    ] { refused(&name); }
+
+    let mut publication = fixture(&"readme");
+    publication.metadata.readme = Maybe.Some("# Widget\n");
+    assert(validate_publication_archive(&publication, &default_archive_limits()) is Result.Ok(()));
+    publication.metadata.readme = Maybe.Some("different");
+    assert(validate_publication_archive(&publication, &default_archive_limits())
+        is Result.Err(ArchiveAdmissionError.ReadmeMismatch));
+    publication = fixture(&"gnu"); publication.metadata.readme = Maybe.Some("");
+    assert(validate_publication_archive(&publication, &default_archive_limits())
+        is Result.Err(ArchiveAdmissionError.ReadmeMismatch));
+
+    let mut limits = default_archive_limits(); limits.expanded_bytes = 1024;
+    assert(validate_publication_archive(&fixture(&"gnu"), &limits) is Result.Err(ArchiveAdmissionError.TooLarge));
+    limits = default_archive_limits(); limits.entries = 1;
+    assert(validate_publication_archive(&fixture(&"gnu"), &limits) is Result.Err(ArchiveAdmissionError.TooLarge));
+    limits = default_archive_limits(); limits.entry_bytes = 1;
+    assert(validate_publication_archive(&fixture(&"gnu"), &limits) is Result.Err(ArchiveAdmissionError.TooLarge));
+    limits = default_archive_limits(); limits.path_bytes = 5;
+    assert(validate_publication_archive(&fixture(&"gnu"), &limits) is Result.Err(ArchiveAdmissionError.TooLarge));
+    limits = default_archive_limits(); limits.manifest_bytes = 1;
+    assert(validate_publication_archive(&fixture(&"gnu"), &limits) is Result.Err(ArchiveAdmissionError.TooLarge));
+    limits = default_archive_limits(); limits.expanded_bytes = 0;
+    assert(validate_publication_archive(&fixture(&"gnu"), &limits) is Result.Err(ArchiveAdmissionError.InvalidLimits));
+
+    publication = fixture(&"gnu"); publication.metadata.name_spelling = "../widget";
+    assert(validate_publication_archive(&publication, &default_archive_limits()) is Result.Err(ArchiveAdmissionError.InvalidName));
+    publication = fixture(&"gnu"); publication.metadata.version_spelling = "1.2";
+    assert(validate_publication_archive(&publication, &default_archive_limits()) is Result.Err(ArchiveAdmissionError.InvalidVersion));
+    publication = fixture(&"gnu"); publication.metadata.checksum_spelling = "ABC";
+    assert(validate_publication_archive(&publication, &default_archive_limits()) is Result.Err(ArchiveAdmissionError.InvalidChecksum));
+    publication = fixture(&"gnu"); publication.archive[0] = 0_u8;
+    assert(validate_publication_archive(&publication, &default_archive_limits()) is Result.Err(ArchiveAdmissionError.ChecksumMismatch));
+    print("publication-archive: ok");
+}

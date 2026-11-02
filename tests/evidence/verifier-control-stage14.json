@@ -1,0 +1,53 @@
+{
+  "runner_commit": "0495147",
+  "runner_sha256": "b15fdd9c47a029d670f54d87cd5d630e2f75e730920e2cf4fed2db04900b7817",
+  "build_manifest_sha256": "881c97f90c07cf9da8f7d7d49873548e990a07466b1413d3b63243c42caaeace",
+  "engine_commit": "fdad59f06114fd2770f3d53058373764284c7c2e",
+  "cli": {
+    "bytes": 495337656,
+    "sha256": "0e488832a40517d260e50947a8788548484c4da931f49b92e4c1c7734858719a"
+  },
+  "artifacts_rehashed": {
+    "runtime.vbca": {
+      "bytes": 30232754,
+      "sha256": "410ff097b455437cab98b651f7799b3129588820925afe98e0de9c3781530a0f"
+    },
+    "runtime.core_metadata": {
+      "bytes": 78897266,
+      "sha256": "a92bd89e649e102cdc67d7ad0032513d6448d8915e5744127e6cdf1f1e34ebbb"
+    },
+    "runtime.symbol_graph": {
+      "bytes": 5914608,
+      "sha256": "a6678c18498f7519749ca1fdf1d22629b479083f42fa95a15177e8c7acf1c722"
+    }
+  },
+  "source": "CONTROL literal in tools/verify_obligations.py",
+  "source_sha256": "6c79e2610a076f7608b5e75dc70721f74b3bf0e565affaf962095b82a4321d1d",
+  "argv": [
+    "verum",
+    "verify",
+    "control.vr"
+  ],
+  "cwd": "isolated temporary directory outside the registry",
+  "seconds": 28.026,
+  "timeout_seconds": 90,
+  "timed_out": false,
+  "exit_code": 105,
+  "log": "verifier-control-stage14.log",
+  "log_sha256": "a5e9f0dc4d31bf64d29802c73db8edc83b3c56070d56fe926c70bc5aee5e9868",
+  "expected": {
+    "theorem every_bool_is_true": "failed",
+    "theorem every_int_is_zero": "failed",
+    "theorem a_bool_equals_itself": "proved"
+  },
+  "observed": {
+    "is_false": "proved",
+    "always_zero": "proved",
+    "theorem every_bool_is_true": "failed",
+    "theorem every_int_is_zero": "failed",
+    "theorem a_bool_equals_itself": "proved",
+    "main": "proved"
+  },
+  "control_accepted": true,
+  "scope": "Real report/exit-contract control on the identified stage14 product; no registry theorem sweep or current-main compiler acceptance."
+}

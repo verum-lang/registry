@@ -1,0 +1,35 @@
+{
+  "language_commit": "3821b1961cd057fd03c9e6d39cbf50609261e4eb",
+  "build_manifest_sha256": "fc2ade43974a3049fbcb07aabe15490daf8728299413a31bbb90404bc9bc96e4",
+  "cli_sha256": "1ff8778a3db363dc81197dc2c1eb994da9c2e80a942a30ca046501ab075aa7c3",
+  "fixture_path": "/private/tmp/verum-registry-t1678/tests/language/task_handle_declared.vr",
+  "fixture_sha256": "b9723a5ee8689192bf7d1386bfe2e1b90cab1461f584e34908dee18f53f0104d",
+  "executed_fixture": "/private/tmp/verum-T1678-carrier-controls/task_handle_declared/task_handle_declared.vr",
+  "command": [
+    "/private/tmp/verum-registry-stage17-nominal-head/verum-3821b1961",
+    "run",
+    "--tier",
+    "interpret",
+    "/private/tmp/verum-T1678-carrier-controls/task_handle_declared/task_handle_declared.vr"
+  ],
+  "expected_stdout": "task-handle-declared: ok\n",
+  "deadline_seconds": 120,
+  "environment_overrides": {
+    "NO_COLOR": "1",
+    "VERUM_NO_OBJECT_CACHE": "1",
+    "TMPDIR": "/private/tmp"
+  },
+  "scope": "Standalone ordinary interpreter fixture; no whole-project, AOT, cryptographic evidence or service acceptance.",
+  "working_directory": "/private/tmp/verum-identified-jk1ikf2g",
+  "elapsed_seconds": 67.412,
+  "returncode": 1,
+  "timed_out": false,
+  "source_unchanged": true,
+  "cli_unchanged": true,
+  "exact_stdout": false,
+  "logs": {
+    "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr.log": "23d98aafb13a9fccfee9ced9676be4a7da9a8f246075840da22687418e939686"
+  },
+  "status": "failed"
+}

@@ -1,0 +1,135 @@
+Interpreting /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/main.vr
+2026-10-09T16:55:42.511817Z  WARN Type checking found 18 error(s)
+error<E101>: type not found: DecodedDependencyOptions
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:14:16
+   │
+12 │ public type DecodedDependency is
+13 │     | Requirement(Text)
+14 │     | Detailed(DecodedDependencyOptions);
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^
+15 │ 
+16 │ public type DecodedDependencyOptions is {
+   │
+error<E400>: Type mismatch: expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> <file:0>:1:5985
+error<E400>: Type mismatch: expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> <file:0>:1:6064
+error<E400>: Type mismatch: expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> <file:0>:1:6128
+error<E400>: Type mismatch: expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> <file:0>:1:6213
+error<E400>: Type mismatch: expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> <file:0>:1:8275
+error<E400>: Type mismatch: expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> <file:0>:1:8352
+error<E400>: Type mismatch in field 'name_spelling' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:232:24
+    │
+230 │     let feature_value = required(fields, &"features", &"features")?;
+231 │     Result.Ok(DecodedSourceMetadata {
+232 │         name_spelling: required_text(fields, &"name", &"name")?,
+    │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+233 │         version_spelling: required_text(fields, &"version", &"version")?,
+234 │         description: required_nullable_text(fields, &"description")?,
+    │
+error<E400>: Type mismatch in field 'version_spelling' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:233:27
+    │
+231 │     Result.Ok(DecodedSourceMetadata {
+232 │         name_spelling: required_text(fields, &"name", &"name")?,
+233 │         version_spelling: required_text(fields, &"version", &"version")?,
+    │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+234 │         description: required_nullable_text(fields, &"description")?,
+235 │         authors: required_text_list(fields, &"authors")?,
+    │
+error<E400>: Type mismatch in field 'description' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:234:22
+    │
+232 │         name_spelling: required_text(fields, &"name", &"name")?,
+233 │         version_spelling: required_text(fields, &"version", &"version")?,
+234 │         description: required_nullable_text(fields, &"description")?,
+    │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+235 │         authors: required_text_list(fields, &"authors")?,
+236 │         license: required_nullable_text(fields, &"license")?,
+    │
+error<E400>: Type mismatch in field 'authors' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:235:18
+    │
+233 │         version_spelling: required_text(fields, &"version", &"version")?,
+234 │         description: required_nullable_text(fields, &"description")?,
+235 │         authors: required_text_list(fields, &"authors")?,
+    │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+236 │         license: required_nullable_text(fields, &"license")?,
+237 │         repository: required_nullable_text(fields, &"repository")?,
+    │
+error<E400>: Type mismatch in field 'license' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:236:18
+    │
+234 │         description: required_nullable_text(fields, &"description")?,
+235 │         authors: required_text_list(fields, &"authors")?,
+236 │         license: required_nullable_text(fields, &"license")?,
+    │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+237 │         repository: required_nullable_text(fields, &"repository")?,
+238 │         homepage: required_nullable_text(fields, &"homepage")?,
+    │
+error<E400>: Type mismatch in field 'repository' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:237:21
+    │
+235 │         authors: required_text_list(fields, &"authors")?,
+236 │         license: required_nullable_text(fields, &"license")?,
+237 │         repository: required_nullable_text(fields, &"repository")?,
+    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+238 │         homepage: required_nullable_text(fields, &"homepage")?,
+239 │         keywords: required_text_list(fields, &"keywords")?,
+    │
+error<E400>: Type mismatch in field 'homepage' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:238:19
+    │
+236 │         license: required_nullable_text(fields, &"license")?,
+237 │         repository: required_nullable_text(fields, &"repository")?,
+238 │         homepage: required_nullable_text(fields, &"homepage")?,
+    │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+239 │         keywords: required_text_list(fields, &"keywords")?,
+240 │         categories: required_text_list(fields, &"categories")?,
+    │
+error<E400>: Type mismatch in field 'keywords' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:239:19
+    │
+237 │         repository: required_nullable_text(fields, &"repository")?,
+238 │         homepage: required_nullable_text(fields, &"homepage")?,
+239 │         keywords: required_text_list(fields, &"keywords")?,
+    │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+240 │         categories: required_text_list(fields, &"categories")?,
+241 │         readme: required_nullable_text(fields, &"readme")?,
+    │
+error<E400>: Type mismatch in field 'categories' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:240:21
+    │
+238 │         homepage: required_nullable_text(fields, &"homepage")?,
+239 │         keywords: required_text_list(fields, &"keywords")?,
+240 │         categories: required_text_list(fields, &"categories")?,
+    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+241 │         readme: required_nullable_text(fields, &"readme")?,
+242 │         dependencies: dependencies(&dependency_value)?,
+    │
+error<E400>: Type mismatch in field 'readme' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:241:17
+    │
+239 │         keywords: required_text_list(fields, &"keywords")?,
+240 │         categories: required_text_list(fields, &"categories")?,
+241 │         readme: required_nullable_text(fields, &"readme")?,
+    │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+242 │         dependencies: dependencies(&dependency_value)?,
+243 │         features: features(&feature_value)?,
+    │
+error<E400>: Type mismatch in field 'checksum_spelling' of 'DecodedSourceMetadata': expected 'core.collections.map.Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(List<JsonValue>) | JsonObject(Map<Text, JsonValue>)>', found 'Map<Text, core.encoding.json.JsonValue>'
+  --> /Users/taaliman/.tmp/verum-publication-metadata-bkf57hdd/src/protocol/publication_metadata.vr:244:28
+    │
+242 │         dependencies: dependencies(&dependency_value)?,
+243 │         features: features(&feature_value)?,
+244 │         checksum_spelling: required_text(fields, &"checksum", &"checksum")?,
+    │                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+245 │     })
+246 │ }
+    │
+error: Runtime error: compilation failed with 18 errors

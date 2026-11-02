@@ -1,0 +1,228 @@
+// =============================================================================
+// verum_registry.node.store — a keyed collection, written once for any value
+// =============================================================================
+// Spec: registry-federation-protocol §2.4 (consistency), §4.2 (retention)
+//
+// This module exists because the census said it did not. `tools/census.py`
+// counted `implement<T> Foo<T>` at ZERO across the whole programme and the
+// architecture note beside it argued, in advance, that the absence was the
+// gap worth closing: "a construct this program never writes is a construct
+// this program cannot find a defect in." It found one on the first try —
+// see the note at the bottom of this file.
+//
+// WHAT IS GENERIC HERE AND WHAT IS NOT, because the line is the design.
+//
+// The MECHANICS of holding things under a name do not depend on what is
+// held: put, get, forget, count, and the two-pass sweep are the same
+// operations whether the value is a verified coordinate, a revocation, or
+// a mirror's last-seen mark. Those live here, once.
+//
+// The POLICY does depend on it. `retention.verdict_for` reads an entry's
+// authority role and its fetch date; that is a statement about verified
+// coordinates and it stays in `retention`. The sweep below takes the
+// decision as a PARAMETER rather than knowing it, which is what lets the
+// same traversal serve any future store without the traversal learning
+// anything about the values.
+//
+// THE DATE IS NOT HERE, deliberately. An earlier shape of this module
+// wrapped every value as `Dated<T> { value, stored_at }`. That reads well
+// and is wrong for this programme: `CachedEntry` already carries
+// `fetched_at`, and a store that also dates its slots gives every entry
+// two dates that can disagree. Which one a consistency answer quotes then
+// becomes a coin toss no type prevents. One date, owned by the value that
+// means something.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.store;
+
+// -----------------------------------------------------------------------------
+// The store
+// -----------------------------------------------------------------------------
+
+/// Values held under the name a lookup asks for.
+///
+/// A `Map`, not a list, for the reason `cache` states in full: a registry
+/// holds millions of coordinates and a linear scan is not a smaller
+/// version of an index, it is a different asymptote — and one that only
+/// becomes visible at the scale where it is expensive to change.
+// NAMED `Keyed`, NOT `Store`, and the reason is a language defect rather
+// than taste (T1212). `core.database.sqlite.native.temp_store_pragma`
+// exports a PUBLIC `Store` — the SQLite `PRAGMA temp_store` enum, three
+// unit variants — and this cog's own `Store`, declared here and mounted
+// explicitly by name, LOST to it:
+//
+//     error<E400>: Type mismatch: expected `Store<CachedEntry>`,
+//                  found `TsDefault(Unit) | TsFile(Unit) | TsMemory(Unit)`
+//
+// Measured both ways: the same declaration in a SINGLE FILE resolves to
+// itself, so the loss is on the cross-module `mount` path and not in
+// plain name lookup. The rename is what unblocks this module today; it is
+// not the fix, and this note is here so the name can go back when the
+// resolver does rather than surviving as a mystery.
+public type Keyed<T> is {
+    entries: Map<Text, T>,
+};
+
+implement<T> Keyed<T> {
+    public fn empty() -> Keyed<T> {
+        Keyed { entries: Map.new() }
+    }
+
+    /// Hold `value` under `key`, replacing whatever was there.
+    ///
+    /// Takes no clock. A store that dated its own slots would be making a
+    /// claim about WHEN on behalf of a value that already knows — see the
+    /// note on `Dated<T>` at the top of this file.
+    public fn put(&mut self, key: Text, value: T) {
+        self.entries.insert(key, value);
+    }
+
+    /// What is held under `key`, if anything.
+    public fn get(&self, key: &Text) -> Maybe<T> {
+        self.entries.get(key.clone())
+    }
+
+    /// Every name this store holds.
+    ///
+    /// Exists so a policy can decide about entries WITHOUT reaching into
+    /// the map. That is not tidiness: the capability on `sweep` says a
+    /// pruner may evict and may not store, and a caller that can touch
+    /// `entries` directly has both rights back regardless of what its
+    /// signature claims.
+    public fn keys(&self) -> List<Text> {
+        let mut out: List<Text> = List.new();
+        for k in self.entries.keys() {
+            out.push(k.clone());
+        }
+        out
+    }
+
+    /// Forget one entry, reporting whether anything was there.
+    ///
+    /// ONE probe, not two: `remove` already reports what it took out, and
+    /// asking `get` first would be a second traversal whose answer can
+    /// only agree with this one.
+    public fn forget(&mut self, key: &Text) -> Bool {
+        match self.entries.remove(key.clone()) {
+            Some(_) => true,
+            None    => false,
+        }
+    }
+
+    /// Every value this store holds, in no promised order.
+    ///
+    /// Exists because `search` needs the values and nothing else about
+    /// them; without it that module reached into `entries` directly,
+    /// which is the access this file's own note on `keys` argues against.
+    /// A caller that can touch the map has every right the signature
+    /// withholds.
+    public fn values(&self) -> List<T> {
+        let mut out: List<T> = List.new();
+        for v in self.entries.values() {
+            out.push(v.clone());
+        }
+        out
+    }
+
+    /// How many entries this store holds.
+    ///
+    /// The refinement is an invariant of a value this module computes
+    /// about itself, so a violation is this node's own bug and halting is
+    /// right. Anything arriving from a peer is checked by a function that
+    /// RETURNS a refusal instead.
+    public fn len(&self) -> Int{it >= 0} {
+        self.entries.len()
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The sweep (spec §4.2)
+// -----------------------------------------------------------------------------
+
+/// Forget every entry `condemn` accepts, reporting how many went.
+///
+/// TWO PASSES, DELIBERATELY. Deciding while removing would mutate the map
+/// under its own traversal; collecting the condemned first means the
+/// decision is made against one consistent view, and a decision that
+/// changes with iteration order is not a policy. This is the paragraph
+/// that used to live in `retention.prune_before` — written once here, it
+/// is now true of every store rather than of one.
+///
+/// The capability list is the load-bearing part of the signature: this
+/// function may READ and REMOVE, and it may NOT store — and none of those
+/// three facts depends on anyone reading the body. `&mut` grants the right
+/// to CHANGE a value and says nothing about WHICH changes; that is the
+/// distinction ownership alone cannot draw, and the reason the capability
+/// is here rather than in a comment.
+///
+/// THE LIST IS EXACT, NOT A FLOOR, and it is measured rather than assumed.
+/// The first version of this signature wrote `with [Evict]` alone, on the
+/// reasoning that a pruner prunes. The checker refused it:
+///
+///     error<E306>: capability violation: method `get` on `Keyed`
+///                  requires `ReadOnly` capability
+///     note: available capabilities: [Evict]
+///
+/// A sweep must read before it removes. So the honest signature names both
+/// rights and not a wider set — and the narrow version I wrote first both
+/// claimed a right it does not need to justify and withheld one it does
+/// use. No reviewer would have caught either; the checker caught both.
+///
+/// The decision arrives as a PARAMETER. A sweep that knew how to judge a
+/// `CachedEntry` would be a retention policy wearing a container's name,
+/// and the next value type would need a second copy of this traversal.
+public fn sweep<T>(
+    store: &mut Keyed<T> with [ReadOnly, Evict],
+    condemn: fn(&T) -> Bool,
+) -> Int{it >= 0} {
+    let mut condemned: List<Text> = List.new();
+    for name in store.keys().iter() {
+        match store.get(name) {
+            Maybe.Some(entry) => {
+                if condemn(&entry) {
+                    condemned.push(name.clone());
+                }
+            }
+            Maybe.None => {},
+        }
+    }
+
+    let mut dropped = 0;
+    for name in condemned.iter() {
+        if store.forget(name) {
+            dropped = dropped + 1;
+        }
+    }
+    dropped
+}
+
+// -----------------------------------------------------------------------------
+// What writing this found (T1207)
+// -----------------------------------------------------------------------------
+//
+// MEASURED 2026-09-06, and stated here because the census promised this
+// module would be worth more than its coverage number.
+//
+// A value whose type is known ONLY through a type parameter loses that
+// type when compiled ahead of time. The interpreter is right; the AOT
+// binary prints the value's ADDRESS, and both exit 0:
+//
+//     a Text field read through Store<Pkg>    t0: alpha   t1: 4296327920
+//     a Float field, same shape               t0: 2.5     t1: 4612811918334230528
+//     a Text from a generic free function     t0: gamma   t1: 4296328048
+//
+// The float case is the instructive one: an address at least looks like an
+// address, whereas `4612811918334230528` is the IEEE-754 bit pattern of
+// 2.5 and reads as an ordinary large number. Nothing crashes and no gate
+// keyed to an exit code notices.
+//
+// This module's own surface stays clear of it: `Store<T>` returns `T` and
+// `Maybe<T>` to callers who know what `T` is, and every value it hands
+// back here is a `CachedEntry` read through `Cache`, whose type is
+// concrete at every use. The exposure is real but not exercised — which is
+// a claim that will rot if a later `f"{...}"` interpolates a `T` directly,
+// so it is written down rather than assumed.

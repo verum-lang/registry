@@ -1,0 +1,20 @@
+// T1678 control: the declared source JoinHandle Future output.
+// The outer result must represent the task; the inner result is its verdict.
+module task_handle_declared;
+
+mount core.async.task.{JoinError, JoinHandle};
+
+async fn verdict_child() -> Result<Int, Text> {
+    Result.Err("evidence")
+}
+
+async fn main() {
+    let handle: JoinHandle<Result<Int, Text>> = spawn(verdict_child());
+    let completed: Result<Result<Int, Text>, JoinError> = handle.await;
+    match completed {
+        Result.Ok(Result.Err(reason)) => assert_eq(reason, "evidence"),
+        Result.Ok(Result.Ok(_)) => panic("child evidence refusal was lost"),
+        Result.Err(_) => panic("ordinary child became a task failure"),
+    }
+    print("task-handle-declared: ok");
+}

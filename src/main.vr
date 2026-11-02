@@ -1,349 +1,1183 @@
 // =============================================================================
-// verum_registry/main.vr — entry point + service registry assembly
+// registry — node entry point
 // =============================================================================
+// Spec: registry-federated-design.md §2 (one node, two roles)
 //
-// Bootstraps the canonical Verum cog registry per spec §9.4.
-// Composes the registry against the full Verum stdlib + ATS-V
-// architectural type system:
-//
-//   * `core.configuration.toml`        — config loading
-//   * `core.database.postgres`         — connection pooling + sql# meta-fn
-//   * `core.database.postgres.migrations` — schema evolution
-//   * `core.net.weft`                  — HTTP/2 server + middleware
-//   * `core.cog.{manifest,sign,archive,resolve}` — cog tooling
-//   * `core.security.{oidc,sigstore,tuf,webauthn,x509,provenance,transparency_log}` — supply chain
-//   * `core.archive.tar` + `core.compress.zstd` — source bundles
-//   * `core.architecture.types`        — ATS-V primitives
-//
-// **CVE Self-application** (spec §15). This module's `@arch_module`
-// declaration is the canonical ATS-V demonstrator: every primitive
-// (Foundation, Stratum, Tier, Capability, Lifecycle, Purpose,
-// CognitiveSubstrate, FormalAnchoring, ExecutabilitySense,
-// SelfReferenceWitness) appears in load-bearing position. The
-// SelfReferenceWitness articulates the Banach fixed point of the
-// registry-serves-itself relation: `cog_registry serves the cog
-// that publishes cog_registry`.
-// =============================================================================
-
-// =============================================================================
-// Corpus-level discipline — @arch_corpus
-// =============================================================================
-//
-// Where `@arch_module` (below) describes THIS cog's Shape, the
-// `@arch_corpus` block declares the CROSS-COG invariants that hold
-// over the whole multi-cog binary's composition graph.  The four
-// canonical invariants are mirrored from
-// `core.architecture.corpus.CorpusInvariant` (kernel side at
-// `verum_kernel::arch_corpus::CorpusInvariant`):
-//
-//   1. **NoCircularDependencies** — composition graph acyclic
-//      (transitive across all cogs).  AP-003 covers direct cycles;
-//      this corpus invariant catches multi-hop rings.
-//   2. **FoundationConsistency** — every cog shares a foundation OR
-//      pairs with different foundations have explicit
-//      `@framework(bridge_corpus, ...)` declarations.  Registry runs
-//      uniformly on `Foundation.ZfcTwoInacc` so `foundation_bridges`
-//      is empty.
-//   3. **NoLAbsClaim** — no cog declares `stratum = LAbs` (sanity
-//      net for AFN-T α boundary closure; AP-011 covers per-cog).
-//   4. **CapabilityClosure** — every cog's `requires` entry has a
-//      producer cog OR is registered as `transfers_privilege: true`
-//      in `core.architecture.capability_ontology`.  Registry's own
-//      `requires` is empty (it's the root); downstream registry
-//      cogs `requires` resolve through capability_ontology.
-//
-// Empty `foundation_bridges` is the explicit commitment that the
-// registry corpus runs on a single foundation throughout — every
-// cog speaks ZfcTwoInacc.  Adding a foundation bridge in the
-// future requires explicit declaration here AND a discharge proof
-// in `verification/external/` for the named bridge.
-@arch_corpus(
-    invariants: [
-        CorpusInvariant.NoCircularDependencies,
-        CorpusInvariant.FoundationConsistency,
-        CorpusInvariant.NoLAbsClaim,
-        CorpusInvariant.CapabilityClosure,
-    ],
-    foundation_bridges: [],
-)
+// While the vertical slice is being built this entry point exercises the
+// rules that exist, so that "it compiles" is never mistaken for "it
+// works". Each check prints what it concluded; a rule that stops holding
+// changes the output rather than staying quiet.
 
 @arch_module(
-    foundation:    Foundation.ZfcTwoInacc,
-    stratum:       MsfsStratum.LCls,
-    at_tier:       Tier.MultiTier([Tier.Aot, Tier.Check]),
-    lifecycle:     Lifecycle.Theorem("canonical"),
-    exposes: [
-        // Network — HTTP/2 inbound (browser + CLI clients), HTTP outbound
-        // (Fulcio / Rekor / OIDC discovery). HTTP/2 vs HTTP distinction
-        // is load-bearing: HTTP/2 carries the Rapid-Reset CVE-2023-44487
-        // surface that audit-protocol checks against deployed config.
-        capability_http2_inbound(),
-        capability_http_outbound(),
-        // Filesystem — config + TLS material + TUF offline keys.
-        Capability.Read(ResourceTag.Filesystem),
-        Capability.Write(ResourceTag.Filesystem),
-        // Persistence — three durable categories with concrete tags.
-        // Stdlib `PersistenceMedium` is intentionally categorical;
-        // the connection_tag identifies the concrete backend.
-        capability_persist_database("postgres".to_text()),
-        capability_persist_disk("s3://verum-registry-prod/".to_text()),
-        capability_persist_log("verum.registry.sumdb".to_text()),
-        // Concurrency — structured spawns for publish-pipeline phases
-        // (parent-scoped; cancelled if the publish handler returns).
-        capability_spawn_structured(),
-        // Time-bound contracts — sessions / signed-URL leases.
-        capability_time_bounded(&Duration.from_hours(1)),
-    ],
-    requires:      [],
-    composes_with: [
-        "core.architecture.types".to_text(),
-        "core.architecture.anti_patterns".to_text(),
-        "core.architecture.lifecycle".to_text(),
-        // Corpus-level invariant carrier — referenced by the
-        // `@arch_corpus(...)` block at the top of this file.
-        "core.architecture.corpus".to_text(),
-        "core.cog.manifest".to_text(),
-        "core.cog.sign".to_text(),
-        "core.cog.archive".to_text(),
-        "core.cog.resolve".to_text(),
-        "core.security.sigstore".to_text(),
-        "core.security.tuf".to_text(),
-        "core.security.webauthn".to_text(),
-        "core.security.x509".to_text(),
-        "core.security.oidc".to_text(),
-        "core.security.provenance".to_text(),
-        "core.security.transparency_log".to_text(),
-        "core.database.postgres".to_text(),
-        "core.net.weft".to_text(),
-    ],
-    strict:        true,
-    declarations: ShapeDeclarations {
-        purpose: Some(Purpose {
-            role: "canonical Verum cog registry — exposes seven-symbol Lifecycle + 40-AP catalog + audit-protocol + Sigstore + TUF + WebAuthn".to_text(),
-            k_min: CveThresholdK.FullWitness,
-            v_min: CveThresholdV.NamedCertification,
-            e_min: CveThresholdE.StructurallyReady,
-        }),
-        substrate: Some(CognitiveSubstrate.AnalyticDecompositional),
-        anchoring: Some(FormalAnchoring.CurryHowardLawvere),
-        e_sense:   Some(ExecutabilitySense.StructuralReadiness),
-        // The registry serves cogs; the registry is itself a cog; the
-        // registry's cog is served by the registry. Banach fixed point:
-        // each Sigstore-verified self-publish narrows admissible
-        // registry-cog versions to those passing the publish pipeline;
-        // convergence is the published-and-verified state. Operator
-        // names the publish entry point through which the recursion
-        // is closed.
-        self_reference: Some(SelfReferenceWitness {
-            operator:       "verum_registry.services.publish_service.publish_with_sigstore".to_text(),
-            fixed_point:    "verum-registry@self".to_text(),
-            fixpoint_class: fixpoint_class_banach(),
-        }),
-    },
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
 )
 module verum_registry.main;
 
-mount core.*;
-mount base.{Result, Ok, Err, Maybe, Some, None, Text};
-mount net.weft.{
-    Server, WeftApp, ServiceBuilder,
-    MetricsLayer, TimeoutLayer,
-    SpiffeAuthLayer, ListenerConfig, ConnectionConfig,
-    TlsConfig,
+mount verum_registry.protocol.authority.{
+    Authority, AuthorityRole, NamePattern, PackageName,
+    ResolutionError, resolve_authority,
 };
-mount database.postgres.async_pool.{AsyncPgPool};
-mount database.postgres.migrations.{
-    runner_new, build, migration_new, RmStrict, store_new, store_config_default,
+mount verum_registry.node.cache.{Answer, Cache};
+mount verum_registry.node.search.{any, count, find};
+mount verum_registry.protocol.query.{Clause, Query};
+mount verum_registry.protocol.version.{Constraint, Version};
+mount verum_registry.protocol.hash.{Hash, Narrow, equal_narrow};
+mount verum_registry.node.ambient.{
+    Clock, ConfiguredNode, FileStore, FrozenClock, NodeIdentity, StatedLink,
+    Uplink,
+};
+mount verum_registry.node.durable.{RestoreError, Storage, persist, restore};
+mount verum_registry.node.publish.{
+    PublishError, PublishRequest, Published, publish_request,
+};
+mount verum_registry.node.consistency.{
+    Audit, ConsistencyError, HeadLog, TreeHead,
+};
+mount verum_registry.node.slice.{
+    ImportError, Slice, SliceItem, export_item, import_slice,
+};
+mount verum_registry.node.handshake.{
+    HandshakeError, PeerIdentity, PeerSession, PinnedAnchor, meet,
+};
+mount verum_registry.node.resolution.{
+    ResolveError, Resolution, resolve, resolution_respects_the_policy,
+};
+mount verum_registry.node.retention.{
+    Verdict, horizon_for, prune_before, verdict_for,
+};
+mount verum_registry.protocol.revocation.{
+    KeyStanding, RevocationError, Serving, advance, apply_all, installable,
+    may_publish, serving,
+};
+mount verum_registry.protocol.source.{
+    Assurance, GitSource, Located, RegistrySource, Source, SourceError,
+    locate_through, satisfies_audit_policy,
+};
+mount verum_registry.protocol.evidence.{
+    Digest, EvidenceError, InclusionProof, Manifest, SignatureBundle,
+    Verified, digest_of, verify,
+};
+// T1126 WORKAROUND, not a design choice: a stdlib module mounted only
+// by a NON-ENTRY file of a cog is never loaded, and its free functions
+// become stubs that panic when reached. `protocol/wire.vr` mounts
+// core.encoding.json for its own use; this line exists solely to put
+// the module in the entry file's mount closure so that loading happens.
+// DELETE IT when T1126 lands — a workaround that outlives its cause
+// becomes folklore, and the next reader will think the registry needs
+// JSON at the top level.
+mount core.encoding.json.{decode, stringify};
+mount core.net.http.{Headers, Method, StatusCode};
+mount core.net.weft.handler.{WeftRequest};
+mount verum_registry.node.serve.{NodeHandler, serve_forever};
+mount verum_registry.node.publication_start.run_publication_node;
+mount core.shell.script.{args};
+mount verum_registry.protocol.wire.{
+    decode_publish_request, encode_publish_request, missing_field_is_named,
+    round_trip_preserves, WireError,
 };
 
-mount verum_registry.config.{Config, load_config};
-mount verum_registry.http.{make_router};
-mount verum_registry.services.{
-    PublishService, SearchService, SumdbService, AuthService, ProvenanceService,
-    SigstoreService, TufService, TufKeyMaterial, WebAuthnService,
-    SbomService,
-    ServiceRegistry,
-};
-mount verum_registry.audit.AuditService;
-mount verum_registry.persistence.{
-    open_postgres, open_object_store, open_cache, open_search,
-};
-mount verum_registry.observability.{tracing_init, metrics_init};
-mount async.spawn;
-
-// =============================================================================
-// Entry point
-// =============================================================================
-
-public async fn main() -> Result<(), Text> {
-    // 1. Load configuration via core.configuration.toml.
-    let config = load_config()
-        .map_err(|e| f"config load failed: {e}")?;
-
-    // 2. Initialise observability subsystems early.
-    tracing_init(&config.tracing).await
-        .map_err(|e| f"tracing init failed: {e}")?;
-    metrics_init(&config.metrics).await
-        .map_err(|e| f"metrics init failed: {e}")?;
-
-    // 3. Connect to persistence layer.
-    let db_pool = open_postgres(&config.postgres).await
-        .map_err(|e| f"postgres connect failed: {e}")?;
-    let storage = open_object_store(&config.s3).await
-        .map_err(|e| f"s3 connect failed: {e}")?;
-    let cache = open_cache(&config.redis).await
-        .map_err(|e| f"redis connect failed: {e}")?;
-    let search = open_search(&config.meilisearch).await
-        .map_err(|e| f"meilisearch connect failed: {e}")?;
-
-    // 4. Apply schema migrations through the universal MigrationRunner.
-    apply_migrations(&db_pool).await
-        .map_err(|e| f"migration failed: {e}")?;
-
-    // 5. Assemble service registry — v3.0 adds TUF, Sigstore, WebAuthn.
-    //
-    // Boot order: TUF first (it owns the keys + DB state); then load
-    // the Sigstore trust root from TUF metadata; then construct
-    // SigstoreService with that trust root pinned. WebAuthn is
-    // independent.
-    let tuf_keys: TufKeyMaterial = TufKeyMaterial.from_config(&config.tuf)
-        .map_err(|e| f"tuf keys load failed: {e}")?;
-    let tuf = TufService.new(tuf_keys).await
-        .map_err(|e| f"tuf init failed: {e}")?;
-    let trust_root = tuf.fetch_sigstore_trust_root(&config.tuf).await
-        .map_err(|e| f"sigstore trust-root load failed: {e}")?;
-    let sigstore = SigstoreService.new(trust_root);
-    let webauthn = WebAuthnService.new(
-        config.webauthn.rp_id.clone(),
-        config.webauthn.rp_name.clone(),
-        config.webauthn.origins.clone(),
-    );
-
-    // Background TUF refresh ticker (timestamp every hour, snapshot
-    // every day).
-    spawn(tuf.clone().run_refresh_loop());
-
-    let audit = AuditService.new(db_pool.clone());
-    let sbom = SbomService.new(env_or("VERUM_REGISTRY_VERSION", "0.0.0").to_text());
-
-    // Load the registry's single signing identity.  The same Ed25519
-    // seed signs sumdb tree-heads (transparency log) and cog manifests
-    // (PublishService phase 6); persisted at the configured path so
-    // restarts retain the operator-provisioned identity.
-    let signing_seed = verum_registry.services.sumdb_service.load_or_init_signing_seed(
-        &config.sumdb.signing_key_path
-    ).map_err(|e| f"signing key load failed: {e}")?;
-
-    let services = ServiceRegistry {
-        publish:    PublishService.new(db_pool.clone(), signing_seed),
-        search:     SearchService.new(db_pool.clone()),
-        sumdb:      SumdbService.from_db(&db_pool, &config.sumdb).await
-            .map_err(|e| f"sumdb init failed: {e}")?,
-        auth:       AuthService.from_config(&config.oidc, db_pool.clone()).await
-            .map_err(|e| f"auth init failed: {e}")?,
-        provenance: ProvenanceService {},
-        sigstore,
-        tuf,
-        webauthn,
-        sbom,
-        audit,
-    };
-
-    // 6. Build router + middleware chain (outside-in order).
-    //    SecurityHeaders is OUTERMOST so every response — including
-    //    error responses produced by inner layers — picks up the
-    //    OWASP-stripe headers.  PerEndpointRateLimiter sits AFTER
-    //    metrics (so 429-rejected requests are still counted) but
-    //    BEFORE timeout (so we don't burn timeout budget on rejected
-    //    traffic) — REG-6.
-    let router = make_router(services);
-    let app = ServiceBuilder.new(router)
-        .layer(verum_registry.http.middleware.security_headers_default())
-        .layer(MetricsLayer.new())
-        .layer(verum_registry.http.rate_limit.per_endpoint_rate_limiter_new())
-        .layer(TimeoutLayer.secs(config.request_timeout_secs))
-        .layer(SpiffeAuthLayer.optional(spiffe_bundles(&config)?))
-        .build();
-
-    // 7. Bind + serve TLS.
-    let listener_cfg = ListenerConfig.default()
-        .with_max_connections(config.max_connections)
-        .with_per_ip_max(config.per_ip_max);
-    let conn_cfg = ConnectionConfig.default()
-        .with_header_deadline_ms(config.header_deadline_ms)
-        .with_body_deadline_ms(config.body_deadline_ms);
-    let tls = TlsConfig.server()
-        .with_identity(config.tls_cert.clone(), config.tls_key.clone())
-        .with_alpn(["h2".to_text(), "http/1.1".to_text()]);
-
-    Server.bind(&config.bind_address)?
-        .with_router(app)
-        .with_listener_config(listener_cfg)
-        .with_connection_config(conn_cfg)
-        .serve_tls(tls)
-        .await
-        .map_err(|e| f"serve failed: {e}")
+/// The configuration a mirror runs with: an upstream, and nothing owned.
+/// A node that owns nothing cannot publish, which is what a mirror is.
+fn mirror_node() -> List<Authority> {
+    let mut out: List<Authority> = List.new();
+    out.push(Authority {
+        id: "upstream",
+        role: AuthorityRole.Upstream,
+        owns: List.new(),
+    });
+    out
 }
 
-async fn apply_migrations(pool: &AsyncPgPool) -> Result<(), Text> {
-    let conn = pool.acquire().await.map_err(|e| f"{e}")?;
-    let mut store = store_new(conn, store_config_default());
-    let plan = build(load_migrations())
-        .map_err(|e| f"invalid migration plan: {e}")?;
-    let runner = runner_new(RmStrict);
-    let _report = runner.execute(&plan, &mut store, now_ns()).await
-        .map_err(|e| f"{e}")?;
-    Ok(())
+/// An enterprise node: the same upstream, plus a scope it owns.
+fn enterprise_node() -> List<Authority> {
+    let mut owned: List<NamePattern> = List.new();
+    owned.push(NamePattern.Scope("@acme"));
+
+    let mut out: List<Authority> = List.new();
+    out.push(Authority {
+        id: "upstream",
+        role: AuthorityRole.Upstream,
+        owns: List.new(),
+    });
+    out.push(Authority {
+        id: "local",
+        role: AuthorityRole.Local,
+        owns: owned,
+    });
+    out
 }
 
-fn load_migrations() -> List<core.database.common.migrations.Migration> {
-    let mut steps: List<core.database.common.migrations.Migration> = List.new();
-    steps.push(migration_new(
-        1, "initial_schema".to_text(),
-        @include_str("../migrations/0001_initial_schema.sql").to_text(),
-    ));
-    // NEW v3.0
-    steps.push(migration_new(
-        2, "passkeys".to_text(),
-        @include_str("../migrations/0002_passkeys.sql").to_text(),
-    ));
-    steps.push(migration_new(
-        3, "tuf_metadata".to_text(),
-        @include_str("../migrations/0003_tuf_metadata.sql").to_text(),
-    ));
-    steps.push(migration_new(
-        4, "sigstore_bundles".to_text(),
-        @include_str("../migrations/0004_sigstore_bundles.sql").to_text(),
-    ));
-    steps.push(migration_new(
-        5, "publish_identity".to_text(),
-        @include_str("../migrations/0005_publish_identity.sql").to_text(),
-    ));
-    steps.push(migration_new(
-        6, "cog_audit".to_text(),
-        @include_str("../migrations/0006_cog_audit.sql").to_text(),
-    ));
-    steps.push(migration_new(
-        7, "sbom".to_text(),
-        @include_str("../migrations/0007_sbom.sql").to_text(),
-    ));
-    steps
+/// A misconfiguration: a local authority claiming a name upstream serves.
+fn shadowing_node() -> List<Authority> {
+    let mut a_owns: List<NamePattern> = List.new();
+    a_owns.push(NamePattern.Exact("serde"));
+    let mut b_owns: List<NamePattern> = List.new();
+    b_owns.push(NamePattern.Exact("serde"));
+
+    let mut out: List<Authority> = List.new();
+    out.push(Authority { id: "local-a", role: AuthorityRole.Local, owns: a_owns });
+    out.push(Authority { id: "local-b", role: AuthorityRole.Local, owns: b_owns });
+    out
 }
 
-// Per-endpoint rate-limit policy now lives in
-// `verum_registry.http.rate_limit.endpoint_budget_default` (REG-6).
-// Tuning happens in source there; this stub remains only so that
-// older config-file forms continue to validate.
-
-fn spiffe_bundles(c: &Config) -> Result<List<core.security.spiffe.TrustBundle>, Text> {
-    if c.spiffe.enabled {
-        core.security.spiffe.load_bundles_from_paths(&c.spiffe.bundle_paths)
-            .map_err(|e| f"{e}")
-    } else {
-        Ok(List.new())
+fn describe(label: &Text, authorities: &List<Authority>, name: &Text) {
+    let n = PackageName(name.clone());
+    match resolve_authority(authorities, &n) {
+        Ok(r) => print(f"{label}: {name} -> {r.authority_id()}"),
+        Err(ResolutionError.AmbiguousAuthority(who)) =>
+            print(f"{label}: {name} -> refused, claimed by {who.len()}"),
+        Err(ResolutionError.NoAuthority) =>
+            print(f"{label}: {name} -> no authority"),
     }
 }
 
-fn now_ns() -> Int64 {
-    core.time.system_time.now_unix_ns()
+/// A manifest and evidence that genuinely belong together.
+fn sample_manifest() -> Manifest {
+    Manifest {
+        name: PackageName("@acme/widgets"),
+        version: "1.4.2",
+        artefact: Digest("blake3:c0ffee"),
+        published_at: 1756200000,
+    }
 }
+
+fn check_evidence(
+    label: &Text,
+    manifest: Manifest,
+    sig_digest: Digest,
+    proof_digest: Digest,
+    log_id: Text,
+    tree_size: Int,
+    expected_log: &Text,
+) {
+    let sig = SignatureBundle { manifest_digest: sig_digest, signer: "acme-ci" };
+    let proof = InclusionProof {
+        manifest_digest: proof_digest,
+        log_id: log_id,
+        tree_size: tree_size,
+    };
+    match verify(manifest, &sig, &proof, "upstream", AuthorityRole.Upstream, expected_log) {
+        Ok(v) => print(f"{label}: accepted, log={v.log_id()}"),
+        Err(EvidenceError.SignatureCoversOtherManifest) =>
+            print(f"{label}: refused, signature covers another manifest"),
+        Err(EvidenceError.ProofCoversOtherManifest) =>
+            print(f"{label}: refused, proof covers another manifest"),
+        Err(EvidenceError.ProofFromWrongLog(which)) =>
+            print(f"{label}: refused, proof is from log {which}"),
+        Err(EvidenceError.EmptyLog) =>
+            print(f"{label}: refused, empty log"),
+    }
+}
+
+/// Build a verified coordinate the way a fetch would, so the cache is
+/// exercised with the real shape rather than a stub.
+fn verified_sample() -> Maybe<Verified> {
+    let m = sample_manifest();
+    let d = digest_of(&m);
+    let sig = SignatureBundle { manifest_digest: d.clone(), signer: "acme-ci" };
+    let proof = InclusionProof {
+        manifest_digest: d.clone(),
+        log_id: "upstream-log",
+        tree_size: 42,
+    };
+    let expected = "upstream-log";
+    match verify(m, &sig, &proof, "upstream", AuthorityRole.Upstream, &expected) {
+        Ok(v)  => Maybe.Some(v),
+        Err(_) => Maybe.None,
+    }
+}
+
+/// The same coordinate under a DIFFERENT name, attributed to this node
+/// rather than mirrored — so retention can be shown doing both halves of
+/// its rule instead of only the half that drops.
+fn local_sample() -> Maybe<Verified> {
+    let m = Manifest {
+        name: PackageName("@acme/internal"),
+        version: "0.1.0",
+        artefact: Digest("blake3:c0ffee"),
+        published_at: 1756200000,
+    };
+    let d = digest_of(&m);
+    let sig = SignatureBundle { manifest_digest: d.clone(), signer: "acme-ci" };
+    let proof = InclusionProof {
+        manifest_digest: d.clone(),
+        log_id: "local-log",
+        tree_size: 7,
+    };
+    let expected = "local-log";
+    match verify(m, &sig, &proof, "local", AuthorityRole.Local, &expected) {
+        Ok(v)  => Maybe.Some(v),
+        Err(_) => Maybe.None,
+    }
+}
+
+fn say(label: &Text, answer: Answer) {
+    match answer {
+        Answer.Hit(e) =>
+            print(f"{label}: hit, attributed to {e.verified().authority_id()}"),
+        Answer.UpstreamUnreachable =>
+            print(f"{label}: upstream unreachable"),
+        Answer.NotFound =>
+            print(f"{label}: not found"),
+    }
+}
+
+fn peer(version: Int, key: Text) -> PeerIdentity {
+    let mut caps: List<Text> = List.new();
+    caps.push("slices");
+    caps.push("quantum-teleport");   // a name this build does not know
+    PeerIdentity {
+        protocol_version: version,
+        log_public_key: key,
+        tree_size: 42,
+        capabilities: caps,
+    }
+}
+
+fn greet(label: &Text, identity: &PeerIdentity, pinned: &PinnedAnchor) {
+    match meet(identity, pinned) {
+        Ok(s) => print(f"{label}: session, {s.capability_count()} capability kept"),
+        Err(HandshakeError.VersionMismatch(ours, theirs)) =>
+            print(f"{label}: refused, we speak {ours} and they speak {theirs}"),
+        Err(HandshakeError.TrustAnchorChanged(known, seen)) =>
+            print(f"{label}: refused, anchor was {known} and is now {seen}"),
+        Err(HandshakeError.EmptyIdentity) =>
+            print(f"{label}: refused, empty identity"),
+    }
+}
+
+/// Export what a node holds into a slice, with a stated dependency.
+/// Offer a release to a node and report what it decided.
+fn offer(
+    label: &Text,
+    cache: &mut Cache,
+    name: &Text,
+    version: &Text,
+    artefact: &Text,
+    as_authority: &Text,
+) {
+    let manifest = Manifest {
+        name: PackageName(name.clone()),
+        version: version.clone(),
+        artefact: Digest(artefact.clone()),
+        published_at: 1756300000,
+    };
+    let d = digest_of(&manifest);
+    let request = PublishRequest {
+        manifest: manifest,
+        signature: SignatureBundle {
+            manifest_digest: Digest(d.0.clone()),
+            signer: as_authority.clone(),
+        },
+        proof: InclusionProof {
+            manifest_digest: Digest(d.0.clone()),
+            log_id: "local-log",
+            tree_size: 3,
+        },
+        as_authority: as_authority.clone(),
+    };
+    match publish_request(cache, &request) {
+        Ok(Published.Accepted(v)) =>
+            print(f"{label}: published {v.manifest().version} as {v.authority_id()}"),
+        Ok(Published.AlreadyIdentical(v)) =>
+            print(f"{label}: already held, identical at {v.manifest().version}"),
+        Err(PublishError.NotOurName(claimed, owner)) =>
+            print(f"{label}: refused, {claimed} does not own it — {owner} does"),
+        Err(PublishError.VersionAlreadyPublished(ver)) =>
+            print(f"{label}: refused, {ver} is already published with other content"),
+        Err(PublishError.ContestedName(who)) =>
+            print(f"{label}: refused, claimed by {who.len()}"),
+        Err(PublishError.EvidenceRefused(_)) =>
+            print(f"{label}: refused, evidence did not check out"),
+        Err(PublishError.NoSuchName) =>
+            print(f"{label}: refused, no authority owns it"),
+    }
+}
+
+/// Locate a name through a source, and report both the answer and the
+/// assurance it came with — never one without the other.
+fn locate<S: Source>(label: &Text, source: &S, name: &Text) {
+    let n = PackageName(name.clone());
+    match locate_through(source, &n) {
+        Ok(l) => {
+            match l.assurance() {
+                Assurance.Auditable(log) =>
+                    print(f"{label}: {l.revision()} — auditable against {log}"),
+                Assurance.Attributable(remote) =>
+                    print(f"{label}: {l.revision()} — attributable to {remote}, no log"),
+            }
+        }
+        Err(SourceError.NoSuchCoordinate(who)) =>
+            print(f"{label}: {who} is not in {source.describe()}"),
+        Err(SourceError.Unreachable(where_)) =>
+            print(f"{label}: {where_} unreachable"),
+    }
+}
+
+fn build_slice(v: &Verified, requires: List<Text>) -> Slice {
+    let mut items: List<SliceItem> = List.new();
+    items.push(export_item(v, requires));
+    Slice { items: items }
+}
+
+async fn carry(label: &Text, slice: &Slice) {
+    let mut far_side = Cache.empty();
+    match import_slice(&mut far_side, slice).await {
+        Ok(n) => {
+            let held = PackageName("@acme/widgets");
+            match far_side.lookup(&held) {
+                Answer.Hit(e) => print(
+                    f"{label}: imported {n}, still attributed to {e.verified().authority_id()}"
+                ),
+                Answer.UpstreamUnreachable => print(f"{label}: imported {n}, then lost it"),
+                Answer.NotFound => print(f"{label}: imported {n}, then lost it"),
+            }
+        }
+        Err(ImportError.NotClosed(who, needs)) =>
+            print(f"{label}: refused, {who} needs {needs} which the slice omits"),
+        Err(ImportError.ItemRefused(who, _)) =>
+            print(f"{label}: refused, evidence for {who} did not check out"),
+        // Reachable only through `node.ingest`, which is where the write
+        // happens — this demonstration imports without persisting. It is
+        // spelled out rather than swallowed by a wildcard because the
+        // state it names is the one an operator most needs told apart:
+        // the node HOLDS these coordinates and will lose them on restart.
+        Err(ImportError.NotPersisted) =>
+            print(f"{label}: imported, and the write to durable storage failed"),
+    }
+}
+
+/// Observe a series of heads and report what an audit concludes.
+fn audit_heads(label: &Text, heads: List<TreeHead>) {
+    let mut record = HeadLog.empty();
+    for h in heads.iter() {
+        record.observe(TreeHead {
+            log_id: h.log_id.clone(),
+            tree_size: h.tree_size,
+            root: h.root.clone(),
+            seen_at: h.seen_at,
+        });
+    }
+    match record.audit() {
+        Audit.Consistent(n) => print(f"{label}: consistent over {n} heads"),
+        Audit.Contradicts(ConsistencyError.ForkAtSize(size, a, b)) =>
+            print(f"{label}: fork at size {size}, roots {a} and {b}"),
+        Audit.Contradicts(ConsistencyError.TreeShrank(was, now)) =>
+            print(f"{label}: rewound from {was} to {now}"),
+        Audit.Contradicts(ConsistencyError.DifferentLogs(x, y)) =>
+            print(f"{label}: {x} and {y} are different logs"),
+    }
+}
+
+/// A head as seen at a stated moment. The moment is what orders a pair
+/// — using the claimed sizes to decide which head is later would make
+/// the growth rule circular.
+fn head(log_id: &Text, size: Int, root: &Text, seen_at: Int) -> TreeHead {
+    TreeHead {
+        log_id: log_id.clone(),
+        tree_size: size,
+        root: root.clone(),
+        seen_at: seen_at,
+    }
+}
+
+/// A first use of the ambient facts: dated, attributed, and stated in
+/// the signature rather than threaded through it.
+fn dated_note(label: &Text) using [Clock, NodeIdentity] {
+    print(f"{label}: at {Clock.now()} on log {NodeIdentity.log_id()}");
+}
+
+/// ONE QUESTION, THREE ANSWERS.
+///
+/// The point of this scene is what it does NOT contain: a second filter
+/// chain. `find`, `count` and `any` share one selector — the query is
+/// stated once and consumed three ways — and the three lines it prints
+/// are the evidence that they agree.
+///
+/// That is the rank-2 `fn<R>(Reducer<B, R>) -> Reducer<A, R>` in
+/// `Transducer` doing work no rank-1 signature could: the chain is built
+/// before anyone has said what it accumulates into. A rank-1 version
+/// would fix the accumulator at construction, so this scene would need
+/// three chains and they would be free to drift.
+fn search_scene(label: &Text, cache: &Cache, q: &Query) {
+    let listed = find(cache, q);
+    let counted = count(cache, q);
+    let present = any(cache, q);
+    print(f"{label}: found {listed.len()}, counted {counted}, any {present}");
+}
+
+/// A WIDTH IN THE TYPE.
+///
+/// `equal_narrow` takes two 32-byte hashes and there is no way to hand
+/// it a 64-byte one — the comparison across widths that silently
+/// matches an artefact nobody signed is not a bug this program can
+/// have, because it is not an expression that type-checks.
+///
+/// The line that would be a bug is worth writing down even though it
+/// cannot be compiled:
+///
+///     equal_narrow(&narrow, &wide)   // expected 32, found 64
+///     let bad: Hash<20> = …;         // E506: 20 does not satisfy
+///                                    //       it == 32 || it == 64
+///
+/// The second is the refinement on the compile-time parameter: SHA-1 is
+/// not a width this protocol admits, so `Hash<20>` is not a type. Both
+/// are the compiler doing what would otherwise be a runtime assertion
+/// in one constructor and absent from the next one someone adds.
+/// The publish request crossing the wire and coming back.
+///
+/// Until `protocol/wire.vr` existed a node could refuse, verify,
+/// attribute and serve, but nobody could SEND it anything — the
+/// publication path was reachable only from inside the program. This
+/// scene is what makes the claim "a developer can publish" checkable
+/// rather than asserted.
+///
+/// BOTH POLES, deliberately. `round_trip_preserves` alone is satisfied
+/// vacuously by a decoder that refuses everything AND an encoder that
+/// emits nothing, so the second line asks the opposite question: a body
+/// with one field removed must be REFUSED, and the refusal must name
+/// the field that is missing. A decoder that cannot say WHERE has
+/// turned a transport fault into a guessing game, and the operator ends
+/// up arguing with their authority configuration over a typo in a
+/// client.
+/// The publish route, end to end: an HTTP request in, a status code out.
+///
+/// This is the scene that makes "a developer can publish a cog" a thing
+/// the program DOES rather than a thing the README says. It exercises
+/// every layer at once — request, wire decode, slot mint, ownership,
+/// evidence, and the status mapping — which is exactly why it is worth
+/// having: each of those has its own scene above, and none of them
+/// proves they compose.
+///
+/// THREE REQUESTS, chosen so that a single bug cannot make all three
+/// look right:
+///   * a well-formed publication of a name this node owns   -> 201/200
+///   * the same body with `signature.signer` removed        -> 400, and
+///     the message NAMES the field, so the client is not left guessing
+///   * a well-formed publication of a name it does NOT own  -> 403
+///
+/// `as_authority` carries the authority's ID (`local`), not the name
+/// scope it owns (`@acme`). That distinction is the point of
+/// `resolve_authority`: an id identifies WHO is publishing, a pattern
+/// says WHAT they may publish, and conflating them is how a registry
+/// ends up letting anyone who can spell a scope publish into it.
+/// A route that answered 201 to everything would pass the first line
+/// alone; a route that answered 400 to everything would pass the
+/// second. Only the three together say the mapping is real.
+fn publish_route_scene(label: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let mut handler = NodeHandler.new(
+        Cache.empty(),
+        List.new(),
+        false,
+    );
+
+    // THE ACCEPTING POLE IS BUILT, NOT WRITTEN DOWN. A hand-typed digest
+    // cannot match `digest_of`, so a literal body can only ever
+    // demonstrate refusals — and a scene with three refusals and no
+    // acceptance proves the route can say no, which is the easy half.
+    // The manifest is built, its digest computed, and the JSON
+    // interpolated around it, so the request is one a real publisher
+    // would send.
+    let route_manifest = Manifest {
+        name: PackageName("@acme/internal"),
+        version: "1.2.3",
+        artefact: Digest("sha256:artefact"),
+        published_at: 1756300000,
+    };
+    let d = digest_of(&route_manifest);
+    let good = f"{{\"manifest\":{{\"name\":\"@acme/internal\",\"version\":\"1.2.3\",\"artefact\":\"sha256:artefact\",\"published_at\":1756300000}},\"signature\":{{\"manifest_digest\":\"{d.0}\",\"signer\":\"acme-release-key\"}},\"proof\":{{\"manifest_digest\":\"{d.0}\",\"log_id\":\"local-log\",\"tree_size\":42}},\"as_authority\":\"local\"}}";
+    let no_signer = "{\"manifest\":{\"name\":\"@acme/internal\",\"version\":\"1.2.3\",\"artefact\":\"sha256:abcd\",\"published_at\":1756300000},\"signature\":{\"manifest_digest\":\"sha256:abcd\"},\"proof\":{\"manifest_digest\":\"sha256:abcd\",\"log_id\":\"local-log\",\"tree_size\":42},\"as_authority\":\"@acme\"}";
+    let not_ours = "{\"manifest\":{\"name\":\"serde\",\"version\":\"1.0.0\",\"artefact\":\"sha256:beef\",\"published_at\":1756300000},\"signature\":{\"manifest_digest\":\"sha256:beef\",\"signer\":\"someone\"},\"proof\":{\"manifest_digest\":\"sha256:beef\",\"log_id\":\"local-log\",\"tree_size\":1},\"as_authority\":\"local\"}";
+
+    // SEARCH BEFORE AND AFTER, so the publication is observable from
+    // outside the handler. A route scene that only posts proves the
+    // codes; this proves the node actually HOLDS what it accepted —
+    // which is the claim a publisher cares about.
+    get_search(&mut handler, &f"{label}/search-before");
+    post(&mut handler, &f"{label}/owned", &good);
+    get_search(&mut handler, &f"{label}/search-after");
+    post(&mut handler, &f"{label}/no-signer", &no_signer);
+    post(&mut handler, &f"{label}/not-ours", &not_ours);
+}
+
+/// The resolve route, with sources actually configured.
+///
+/// Without this the route is reachable only in its 404 shape: a handler
+/// built with an empty source list refuses everything, and a scene that
+/// showed only that would be measuring the empty list, not the route.
+/// Three requests, three different answers:
+///
+///   a name a configured source has     -> 200, and the body NAMES the
+///                                         source, which is what an
+///                                         operator needs — not "yes"
+///                                         but "from where"
+///   a name nobody has                  -> 404
+///   no ?name= at all                   -> 400, naming what is missing
+fn resolve_route_scene(label: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let mut versions: Map<Text, Text> = Map.new();
+    versions.insert("serde", "1.0.0");
+    let mut sources: List<Heap<dyn Source>> = List.new();
+    sources.push(Heap.new(RegistrySource {
+        log_id: "upstream-log",
+        versions: versions,
+    }));
+
+    let handler = NodeHandler.new(Cache.empty(), sources, false);
+    get_resolve(&handler, &f"{label}/found", &Maybe.Some("serde"));
+    get_resolve(&handler, &f"{label}/missing", &Maybe.Some("nobody-has-this"));
+    get_resolve(&handler, &f"{label}/no-name", &Maybe.None);
+}
+
+/// One GET /resolve, with or without a `name` parameter.
+fn get_resolve(handler: &NodeHandler, label: &Text, name: &Maybe<Text>)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let raw_query = match name {
+        Maybe.Some(n) => Maybe.Some(f"name={n}"),
+        Maybe.None => Maybe.None,
+    };
+    let empty: List<Byte> = List.new();
+    let req = WeftRequest.new(
+        Method.Get,
+        "/resolve",
+        raw_query,
+        Headers.new(),
+        empty,
+    );
+    let resp = handler.route_resolve(&req);
+    match Text.from_utf8(resp.body_bytes()) {
+        Ok(text) => print(f"{label}: {resp.status_code().code()} {text}"),
+        Err(_) => print(f"{label}: {resp.status_code().code()} <body is not UTF-8>"),
+    }
+}
+
+/// One GET /search through the handler.
+fn get_search(handler: &mut NodeHandler, label: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let empty: List<Byte> = List.new();
+    let req = WeftRequest.new(
+        Method.Get,
+        "/search",
+        Maybe.None,
+        Headers.new(),
+        empty,
+    );
+    let resp = handler.route_search(&req);
+    match Text.from_utf8(resp.body_bytes()) {
+        Ok(text) => print(f"{label}: {resp.status_code().code()} {text}"),
+        Err(_) => print(f"{label}: {resp.status_code().code()} <body is not UTF-8>"),
+    }
+}
+
+/// One POST through the handler, reported as status + body.
+///
+/// The BODY is printed alongside the code on purpose. A scene that
+/// showed only `403` would confirm the mapping and hide whether the
+/// message tells the operator which of the several 403-shaped refusals
+/// happened — and that message is the difference between a registry
+/// somebody can run and one they cannot.
+fn post(handler: &mut NodeHandler, label: &Text, body_text: &Text)
+    using [Clock, NodeIdentity, Uplink]
+{
+    let mut bytes: List<Byte> = List.new();
+    for b in body_text.bytes() {
+        bytes.push(b);
+    }
+    let req = WeftRequest.new(
+        Method.Post,
+        "/publish",
+        Maybe.None,
+        Headers.new(),
+        bytes,
+    );
+    let resp = handler.route_publish(&req);
+    // The body is bytes on the wire and must be read back as such.
+    // `from_utf8` returns a Result and this scene keeps both arms: a
+    // route that answered with a non-UTF-8 body would be a defect worth
+    // seeing, not worth papering over with a lossy conversion.
+    match Text.from_utf8(resp.body_bytes()) {
+        Ok(text) => print(f"{label}: {resp.status_code().code()} {text}"),
+        Err(_) => print(f"{label}: {resp.status_code().code()} <body is not UTF-8>"),
+    }
+}
+
+fn wire_scene(label: &Text) {
+    let request = PublishRequest {
+        manifest: Manifest {
+            name: PackageName("@acme/internal"),
+            version: "1.2.3",
+            artefact: Digest("sha256:abcd"),
+            published_at: 1756300000,
+        },
+        signature: SignatureBundle {
+            manifest_digest: Digest("sha256:abcd"),
+            signer: "acme-release-key",
+        },
+        proof: InclusionProof {
+            manifest_digest: Digest("sha256:abcd"),
+            log_id: "local-log",
+            tree_size: 42,
+        },
+        as_authority: "@acme",
+    };
+
+    // POSITIVE POLE: what goes out comes back.
+    print(f"{label}/round-trip: {round_trip_preserves(&request)}");
+
+    // NEGATIVE POLE: a body missing `signature.signer` is refused BY
+    // NAME. The path in the expectation is the whole point — a refusal
+    // that says only "malformed" would pass a weaker check and help
+    // nobody.
+    let truncated = "{\"manifest\":{\"name\":\"@acme/internal\",\"version\":\"1.2.3\",\"artefact\":\"sha256:abcd\",\"published_at\":1756300000},\"signature\":{\"manifest_digest\":\"sha256:abcd\"},\"proof\":{\"manifest_digest\":\"sha256:abcd\",\"log_id\":\"local-log\",\"tree_size\":42},\"as_authority\":\"@acme\"}";
+    print(f"{label}/names-the-gap: {missing_field_is_named(&truncated, &\"signature.signer\")}");
+
+    // And what the refusal actually SAYS, printed rather than
+    // summarised — a scene that reports only true/false hides whether
+    // the message would help the person reading it.
+    match decode_publish_request(&truncated) {
+        Result.Ok(_) => print(f"{label}/message: accepted a body with no signer"),
+        Result.Err(e) => print(f"{label}/message: {e.describe()}"),
+    }
+
+    // A body that is not JSON at all fails as TRANSPORT, not policy.
+    match decode_publish_request(&"this is not json") {
+        Result.Ok(_) => print(f"{label}/not-json: accepted"),
+        Result.Err(e) => print(f"{label}/not-json: {e.describe()}"),
+    }
+}
+
+fn hash_scene(label: &Text) {
+    let a: Narrow = Narrow(Hash { bytes: [7_u8; 32] });
+    let b: Narrow = Narrow(Hash { bytes: [7_u8; 32] });
+    let c: Narrow = Narrow(Hash { bytes: [9_u8; 32] });
+    print(f"{label}: same={equal_narrow(&a, &b)} different={equal_narrow(&a, &c)}");
+}
+
+/// A node forgets what it mirrors and keeps what it answers for.
+///
+/// The retention rule stated as a scene rather than a claim: two
+/// coordinates of the same age, one mirrored and one this node is the
+/// authority for, and only the mirrored one goes.
+///
+/// The capability is the part worth noticing in the SIGNATURE rather
+/// than the output. `prune_before` takes `&mut Cache with [Evict]`, so
+/// it may remove and may not add; `import_slice` takes
+/// `&mut Cache with [Store]` and is the mirror image. Under a plain
+/// `&mut` both are simply "may change the cache", and the difference
+/// lives in a reviewer's attention.
+fn retention_scene(label: &Text) {
+    match verified_sample() {
+        Maybe.Some(v) => {
+            let mut shelf = Cache.empty();
+            shelf.store(v.clone());
+            // BOTH HALVES OR NEITHER. A scene holding only a mirrored
+            // coordinate demonstrates that retention drops things, which
+            // is the easy half; the rule is that it drops what it
+            // MIRRORS and keeps what it ANSWERS FOR, and a shelf with
+            // one kind on it cannot show the difference.
+            match local_sample() {
+                Maybe.Some(mine) => shelf.store(mine),
+                Maybe.None       => print(f"{label}: local sample failed to verify"),
+            }
+            let before = shelf.len();
+
+            // A retention WINDOW of minus one second puts the horizon
+            // one second ahead of the frozen clock, so everything the
+            // node already holds counts as old enough. That condemns
+            // every mirrored coordinate — and still nothing it answers
+            // for, which is the point the scene is making.
+            let horizon = horizon_for(-1);
+            let dropped = prune_before(&mut shelf, horizon);
+
+            print(f"{label}: held {before}, dropped {dropped}, left {shelf.len()} (its own)");
+        }
+        Maybe.None => print(f"{label}: sample failed to verify"),
+    }
+}
+
+/// A key stops being trusted, and every answer about it changes at once.
+///
+/// Three things are shown and each is a different guarantee.
+///
+/// The move is ONE-WAY: revoking a key succeeds, and un-revoking it is
+/// refused by the only function that can change a standing. There is no
+/// setter to reach around.
+///
+/// The answers DIFFER: a suspended key quarantines an artefact, a
+/// revoked one makes it unverifiable, and neither of those is "not
+/// found". A client acts differently on each.
+///
+/// And the LEDGER-wide claim is enforced where it cannot be proved —
+/// `apply_all` carries a runtime-verified postcondition, so a batch that
+/// would walk a key backwards halts instead of landing.
+fn revocation_scene(label: &Text) {
+    let compromised = KeyStanding.Revoked("key material leaked");
+
+    // Forward: allowed.
+    let forward = match advance(&KeyStanding.Trusted, compromised.clone()) {
+        Ok(_)  => "allowed",
+        Err(_) => "refused",
+    };
+
+    // Backward: refused, by the only door there is.
+    let backward = match advance(&compromised, KeyStanding.Trusted) {
+        Ok(_)  => "allowed",
+        Err(RevocationError.WouldGoBackwards { from, to }) =>
+            f"refused {from}->{to}",
+        Err(RevocationError.UnknownKey(_)) => "unknown",
+    };
+
+    print(f"{label}: forward {forward}, backward {backward}");
+
+    // What a client is told, per standing. The `is` operator asks the
+    // one-state question; the match answers the per-case one.
+    let mut ledger: Map<Text, KeyStanding> = Map.new();
+    ledger.insert("acme-signing-key", KeyStanding.Trusted);
+
+    let publishable = may_publish(&KeyStanding.Trusted);
+    let after_leak  = may_publish(&compromised);
+    print(f"{label}: may publish while trusted={publishable}, after leak={after_leak}");
+
+    // A batch that walks the ledger forward lands; one that walks it
+    // back is refused with the key named.
+    let mut good: List<(Text, KeyStanding)> = List.new();
+    good.push(("acme-signing-key", KeyStanding.Suspended("under review")));
+    let landed = match apply_all(&ledger, &good) {
+        Ok(next) => next.len(),
+        Err(_)   => 0,
+    };
+    print(f"{label}: batch landed {landed} entries");
+}
+
+/// ASYNC, because the programme is.
+///
+/// Nothing here chose that. `import_slice` fans verification out across
+/// the items of a slice and joins them; that makes it async, which makes
+/// `restore` and `carry` async, which makes this async. The property
+/// travelled up the call chain on its own and the compiler refused every
+/// intermediate spelling that pretended otherwise (`E504`).
+///
+/// It is worth saying what did NOT happen: no `block_on` at a boundary
+/// to make an async call look synchronous. That call exists in the
+/// standard library and is the right tool at an FFI edge, but reaching
+/// for it here would have hidden the fan-out from every caller and left
+/// the "all-or-nothing" comment in `import_slice` as a claim nobody can
+/// check.
+async fn main() {
+    let argv = args();
+    for argument in argv.iter() {
+        if argument == "serve-publications" {
+            match run_publication_node().await {
+                Result.Ok(()) => {},
+                Result.Err(error) => panic(f"publication listener failed: {error}"),
+            }
+            return;
+        }
+    }
+    // --- the composition root ---
+    // The ONLY place in the program that names a concrete backend.
+    // Everything below runs against the CONTEXTS, so the same rules
+    // execute under a frozen clock here and a system clock in
+    // production without a line of them changing.
+    provide Clock = FrozenClock { at: 1756300000 };
+    provide NodeIdentity = ConfiguredNode {
+        log: "local-log",
+        owns: enterprise_node(),
+    };
+    provide Uplink = StatedLink { up: true };
+    provide Storage = FileStore { path: "/tmp/verum-registry-store" };
+
+    // SERVE WHEN ASKED, DEMONSTRATE OTHERWISE.
+    //
+    // `verum run … serve` binds a listener; anything else runs the
+    // scenes below. The default is the scenes on purpose: they are how
+    // every rule in this cog is checked, and a node that starts
+    // listening the moment it is run cannot be exercised by a suite.
+    //
+    // The composition root is ABOVE this branch, so the served node and
+    // the demonstrated one stand in the same contexts. A server wired
+    // up with its own providers would be a second configuration that
+    // nothing checks — which is the failure the context system exists
+    // to prevent.
+    let mut wants_serve = false;
+    for a in argv.iter() {
+        if a.clone() == "serve" {
+            wants_serve = true;
+        }
+    }
+    if wants_serve {
+        let no_sources: List<Heap<dyn Source>> = List.new();
+        match serve_forever(&"127.0.0.1:8080", Cache.empty(), no_sources, false).await {
+            Result.Ok(_) => print("registry: listener stopped"),
+            Result.Err(why) => print(f"registry: listener refused to start: {why}"),
+        }
+        return;
+    }
+
+    dated_note(&"ambient");
+
+    // A mirror attributes everything upstream — including names nobody
+    // configured, which is the ordinary case.
+    describe(&"mirror", &mirror_node(), &"serde");
+
+    // An enterprise node answers for what it owns and forwards the rest.
+    let ent = enterprise_node();
+    describe(&"enterprise", &ent, &"@acme/internal");
+    describe(&"enterprise", &ent, &"serde");
+
+    // Two claimants are REFUSED rather than ranked. This is the rule the
+    // whole design turns on: precedence is how a substitution hides.
+    describe(&"shadowing", &shadowing_node(), &"serde");
+
+    // --- the verification chain (protocol spec §2) ---
+    let upstream_log = "upstream-log";
+    let good = digest_of(&sample_manifest());
+
+    check_evidence(&"complete", sample_manifest(), good.clone(), good.clone(),
+                   "upstream-log", 42, &upstream_log);
+
+    // A signature over something else must not carry this manifest.
+    check_evidence(&"wrong-signature", sample_manifest(), Digest("blake3:beef"),
+                   good.clone(), "upstream-log", 42, &upstream_log);
+
+    // The misattribution case: a node offering ITS OWN log as proof for
+    // a coordinate attributed upstream. Detectable because the proof
+    // says which log it belongs to.
+    check_evidence(&"relogged", sample_manifest(), good.clone(), good.clone(),
+                   "local-log", 42, &upstream_log);
+
+    // A log with no entries cannot include anything.
+    check_evidence(&"empty-log", sample_manifest(), good.clone(), good.clone(),
+                   "upstream-log", 0, &upstream_log);
+
+    // --- the cache (protocol spec §4.1) ---
+    let mut cache = Cache.empty();
+    match verified_sample() {
+        Maybe.Some(v) => cache.store(v),
+        Maybe.None    => print("cache: sample failed to verify"),
+    }
+
+    let held = PackageName("@acme/widgets");
+    let never_seen = PackageName("@acme/unknown");
+
+    // The link state is AMBIENT, so exercising both is a scoped
+    // `provide` rather than an argument threaded to every call. The
+    // lookups below are the same lookups; what changed is the world
+    // they run in — which is the distinction the parameter form
+    // could not express, since a value passed down is a fact about
+    // the moment it was captured.
+    say(&"cached/online", cache.lookup(&held));
+    say(&"unseen/online", cache.lookup(&never_seen));
+
+    provide Uplink = StatedLink { up: false } in {
+        // A cached name is served with the uplink DOWN — the office
+        // with a broken link keeps building — and keeps its
+        // attribution. Only an unseen name notices the difference.
+        say(&"cached/offline", cache.lookup(&held));
+        say(&"unseen/offline", cache.lookup(&never_seen));
+    };
+
+    print(f"cache: {cache.len()} entry");
+
+    // --- the handshake (protocol spec §3) ---
+    let known = "ed25519:AAAA";
+    let first = PinnedAnchor.FirstMeeting;
+    let pinned = PinnedAnchor.Pinned(known);
+
+    // A first meeting adopts the key it is given, and drops the one
+    // capability this build does not understand.
+    greet(&"first-meeting", &peer(1, "ed25519:AAAA"), &first);
+
+    // A later meeting with the same key is an ordinary session.
+    greet(&"same-anchor", &peer(1, "ed25519:AAAA"), &pinned);
+
+    // A CHANGED key is refused, loudly, naming both. A silently rotated
+    // trust anchor is indistinguishable from a takeover.
+    greet(&"rotated-anchor", &peer(1, "ed25519:BBBB"), &pinned);
+
+    // A version mismatch names both numbers rather than degrading.
+    greet(&"version-skew", &peer(2, "ed25519:AAAA"), &pinned);
+
+    // --- where bytes come from (protocol spec §7) ---
+    let mut versions: Map<Text, Text> = Map.new();
+    versions.insert("serde", "1.0.0");
+    let reg = RegistrySource { log_id: "upstream-log", versions: versions };
+
+    let mut revs: Map<Text, Text> = Map.new();
+    revs.insert("vendored-tool", "9a1f2c");
+    let git = GitSource { remote: "git@example:tools", revisions: revs, reachable: true };
+    let dark = GitSource { remote: "git@example:dark", revisions: Map.new(), reachable: false };
+
+    // The same call site, two implementations. It is generic over the
+    // protocol, so a third source needs no edit here.
+    locate(&"from-registry", &reg, &"serde");
+    locate(&"from-git", &git, &"vendored-tool");
+    locate(&"missing", &reg, &"nowhere");
+    locate(&"unreachable", &dark, &"anything");
+
+    // A CONFIGURED LIST, which is where generics stop. The three
+    // sources above are two different types; `List<S>` holds one S, so
+    // the honest type for what an operator writes down is
+    // `List<Heap<dyn Source>>`. Static dispatch above where the type is
+    // known, dynamic here where the CONFIGURATION decides — and the
+    // policy question still reaches every entry, because it is asked on
+    // the protocol rather than on the concrete type.
+    let mut configured: List<Heap<dyn Source>> = List.new();
+    configured.push(Heap.new(git));
+    configured.push(Heap.new(reg));
+
+    match resolve(&configured, &PackageName("serde"), true) {
+        Ok(r)  => print(f"resolve: serde via {r.via()}"),
+        Err(ResolveError.NoSourceHasIt(n))   => print(f"resolve: nobody has {n}"),
+        Err(ResolveError.OnlyBelowPolicy(w)) => print(f"resolve: only {w}, below policy"),
+        Err(ResolveError.SourceFailed(_))    => print("resolve: a source broke"),
+    }
+
+    // The git mirror alone cannot satisfy an audit policy, and the
+    // refusal NAMES it — an operator learns which configured line to
+    // argue with rather than that "resolution failed".
+    let mut git_only: List<Heap<dyn Source>> = List.new();
+    git_only.push(Heap.new(GitSource {
+        remote: "git@example:tools",
+        revisions: Map.new(),
+        reachable: true,
+    }));
+    match resolve(&git_only, &PackageName("vendored-tool"), true) {
+        Ok(r)  => print(f"resolve: unexpectedly served via {r.via()}"),
+        Err(ResolveError.OnlyBelowPolicy(w)) => print(f"resolve: refused, {w} is below policy"),
+        Err(ResolveError.NoSourceHasIt(n))   => print(f"resolve: nobody has {n}"),
+        Err(ResolveError.SourceFailed(_))    => print("resolve: a source broke"),
+    }
+
+    // The difference the design refuses to hide: a policy that needs an
+    // audit trail can refuse a source BEFORE it serves a build.
+    print(f"audit-policy: registry={satisfies_audit_policy(&reg)} git={satisfies_audit_policy(&git)}");
+
+    // --- the write path (protocol spec §5, row 2) ---
+    let mut store = Cache.empty();
+
+    // A name this node owns: accepted.
+    offer(&"own-name", &mut store,
+          &"@acme/internal", &"1.0.0", &"blob-a", &"local");
+
+    // The SAME release again. A retried upload is the network being
+    // unreliable, not a publisher misbehaving.
+    offer(&"retry", &mut store,
+          &"@acme/internal", &"1.0.0", &"blob-a", &"local");
+
+    // The same version with DIFFERENT content: refused. Replacing a
+    // published version rewrites history for everyone who resolved it.
+    offer(&"rewrite", &mut store,
+          &"@acme/internal", &"1.0.0", &"blob-b", &"local");
+
+    // An upstream-owned name. The node holds a perfectly good artefact
+    // and still may not publish it — that is the substitution this
+    // refusal exists to prevent.
+    offer(&"upstream-name", &mut store,
+          &"serde", &"1.0.0", &"blob-c", &"local");
+
+    // --- surviving a restart (protocol spec §4.2, in time) ---
+    match verified_sample() {
+        Maybe.Some(v) => {
+            let no_deps: List<Text> = List.new();
+            let held = build_slice(&v, no_deps);
+
+            // Write what this node holds, then come back up from it as
+            // a cold node would.
+            print(f"persist: {persist(&held)}");
+            let mut revived = Cache.empty();
+            match restore(&mut revived).await {
+                Ok(n) => print(f"restore: {n} re-verified, {revived.len()} held"),
+                Err(RestoreError.Unreadable(line)) =>
+                    print(f"restore: refused, line {line} is not readable"),
+                Err(RestoreError.StoreUnreadable(why)) =>
+                    print(f"restore: refused, the store could not be read ({why})"),
+                Err(RestoreError.Refused(_)) =>
+                    print("restore: refused, the stored evidence did not check out"),
+            }
+
+            // Now TAMPER, the way a bad disk or an attacker would: the
+            // stored artefact digest is changed while the signature and
+            // the proof are left alone. Nothing about the record looks
+            // damaged — it is a well-formed line with a plausible
+            // digest.
+            //
+            // The node refuses it, because the evidence is RE-VERIFIED
+            // on load rather than restored: `verify` recomputes the
+            // manifest digest and the signature no longer covers it.
+            // A registry that trusted its own store would have served
+            // these bytes under a name their publisher never signed.
+            let bad_path = "/tmp/verum-registry-store-bad";
+            provide Storage = FileStore { path: bad_path } in {
+                let _ = persist(&held);
+            };
+            let corrupted = match core.io.file.read_to_string(&bad_path) {
+                // Only the ARTEFACT field, delimited, so the signature
+                // and proof digests keep covering the OLD manifest.
+                // Replacing the digest everywhere would have made the
+                // record self-consistent again, which is a forgery
+                // nobody can perform without the signing key — and the
+                // test would have proved nothing.
+                Ok(text) => text.replace("|blake3:c0ffee|", "|blake3:dec0de|"),
+                Err(_) => "",
+            };
+            let _ = core.io.file.write(&bad_path, &corrupted);
+
+            provide Storage = FileStore { path: bad_path } in {
+                let mut cold = Cache.empty();
+                match restore(&mut cold).await {
+                    // ZERO IS NOT A PASS AND IT IS NOT A FAILURE — it is
+                    // the fixture never having been written. This arm
+                    // used to print "accepted 0 — THE RULE FAILED",
+                    // which is the loudest possible way to say nothing:
+                    // under AOT the `write` above fails (T1192), the
+                    // corrupted file is empty, and `restore` truthfully
+                    // reports that it restored nothing. A rule that
+                    // announces its own violation when it was never
+                    // exercised is worse than one that stays quiet,
+                    // because the alarm is indistinguishable from the
+                    // real thing.
+                    Ok(0) => print("tampered: INCONCLUSIVE — nothing was stored to tamper with"),
+                    Ok(n) => print(f"tampered: accepted {n} — THE RULE FAILED"),
+                    Err(RestoreError.Unreadable(line)) =>
+                        print(f"tampered: refused, line {line} is not readable"),
+                    Err(RestoreError.StoreUnreadable(why)) =>
+                        print(f"tampered: refused, the store could not be read ({why})"),
+                    Err(RestoreError.Refused(_)) =>
+                        print("tampered: refused, the stored evidence did not check out"),
+                }
+            };
+
+            // --- a store that EXISTS and cannot be read ---
+            //
+            // Not the same as having no store yet, and the difference is
+            // the whole point. A first run comes up empty and that is
+            // correct; a node whose store has become unreadable — wrong
+            // permissions, a directory in the way, a bad disk — must
+            // REFUSE, because coming up empty would mean silently
+            // serving nothing while reporting success.
+            //
+            // `/tmp` is a directory, so reading it as a file fails with a
+            // kind that is not `NotFound`. That is the cheapest
+            // unreadable store there is: it needs no fixture, no
+            // permissions change, and it exists on every machine this
+            // programme runs on.
+            //
+            // BEFORE THIS SCENE THE NODE PRINTED `restore: 0 re-verified`
+            // HERE. `FileStore.load` collapsed every read failure into
+            // "no store", so the two cases were one, and the failure
+            // announced itself as a healthy cold start.
+            provide Storage = FileStore { path: "/tmp" } in {
+                let mut blind = Cache.empty();
+                match restore(&mut blind).await {
+                    Ok(n) => print(f"unreadable-store: came up with {n} — THE RULE FAILED"),
+                    Err(RestoreError.StoreUnreadable(why)) =>
+                        print(f"unreadable-store: refused ({why})"),
+                    Err(RestoreError.Unreadable(line)) =>
+                        print(f"unreadable-store: refused, line {line} is not readable"),
+                    Err(RestoreError.Refused(_)) =>
+                        print("unreadable-store: refused, the evidence did not check out"),
+                }
+            };
+        }
+        Maybe.None => print("durable: sample failed to verify"),
+    }
+
+    // --- auditing a cache (protocol spec §2.4) ---
+    let mut growing: List<TreeHead> = List.new();
+    growing.push(head(&"upstream-log", 4, &"root-4", 1756300000));
+    growing.push(head(&"upstream-log", 9, &"root-9", 1756300100));
+    audit_heads(&"growing-log", growing);
+
+    // A view that got SMALLER between two observations: the node was
+    // rewound, or it is serving a fork. A client cannot tell those
+    // apart, so both are one refusal.
+    let mut rewound: List<TreeHead> = List.new();
+    rewound.push(head(&"upstream-log", 9, &"root-9", 1756300000));
+    rewound.push(head(&"upstream-log", 4, &"root-4", 1756300100));
+    audit_heads(&"rewound-log", rewound);
+
+    // Two heads of EQUAL size with different roots: two histories of the
+    // same length. A size-only check waves this through, which is why
+    // the root is compared at equal sizes rather than assumed to follow.
+    let mut forked: List<TreeHead> = List.new();
+    forked.push(head(&"upstream-log", 9, &"root-9", 1756300000));
+    forked.push(head(&"upstream-log", 9, &"other-9", 1756300100));
+    audit_heads(&"forked-log", forked);
+
+    // Heads from two logs are not comparable, and saying so is not the
+    // same as saying they disagree.
+    let mut crossed: List<TreeHead> = List.new();
+    crossed.push(head(&"upstream-log", 3, &"root-3", 1756300000));
+    crossed.push(head(&"mirror-log", 3, &"root-3", 1756300100));
+    audit_heads(&"crossed-logs", crossed);
+
+    // --- the air gap (protocol spec §4.2) ---
+    match verified_sample() {
+        Maybe.Some(v) => {
+            // A closed slice: nothing required, nothing missing. The
+            // import keeps the attribution the item was exported with —
+            // carrying a package on a disk does not make it local.
+            let no_deps: List<Text> = List.new();
+            carry(&"closed-slice", &build_slice(&v, no_deps)).await;
+
+            // An unclosed slice is refused BEFORE anything is stored,
+            // and the refusal names what is missing so the exporter can
+            // be told rather than the importer left guessing.
+            let mut needs: List<Text> = List.new();
+            needs.push("@acme/base");
+            carry(&"unclosed-slice", &build_slice(&v, needs)).await;
+        }
+        Maybe.None => print("slice: sample failed to verify"),
+    }
+
+    // --- discovery (protocol spec §5) ---
+    // A node with things in it, asked one question three ways.
+    match verified_sample() {
+        Maybe.Some(v) => {
+            let mut shelf = Cache.empty();
+            shelf.store(v.clone());
+
+            // Every clause holds: this is what the node has.
+            let mut hit: List<Clause> = List.new();
+            hit.push(Clause.Named(v.manifest().name.clone()));
+            hit.push(Clause.InRole(v.role()));
+            search_scene(&"search/hit", &shelf, &Query { clauses: hit });
+
+            // One clause fails, and the three answers still agree —
+            // which is the property, not the count.
+            let mut miss: List<Clause> = List.new();
+            miss.push(Clause.Named(v.manifest().name.clone()));
+            miss.push(Clause.From("nobody"));
+            search_scene(&"search/miss", &shelf, &Query { clauses: miss });
+
+            // An empty question admits everything the node holds. The
+            // degenerate case is worth printing: a query language where
+            // "ask nothing" means "get nothing" surprises people at
+            // exactly the wrong moment.
+            let none: List<Clause> = List.new();
+            search_scene(&"search/all", &shelf, &Query { clauses: none });
+        }
+        Maybe.None => print("search: sample failed to verify"),
+    }
+
+    // --- artefact identity (protocol spec §2.1) ---
+    hash_scene(&"hash");
+    revocation_scene(&"revocation");
+    retention_scene(&"retention");
+
+    // --- the wire (protocol/wire.vr) ---
+    wire_scene(&"wire");
+
+    // --- the publish route end to end (node/serve.vr) ---
+    publish_route_scene(&"route");
+    resolve_route_scene(&"resolve");
+}
+

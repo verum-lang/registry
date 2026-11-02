@@ -1,0 +1,10 @@
+RUNNER ERROR: <registry>/src/node/cache.vr: expected one complete verification summary, found 0
+Verifier output:
+         --> Verifying <registry>/src/node/cache.vr
+error: cannot index type '&node.cache.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'node.cache.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: compilation failed with 2 errors
+
+control ok: both false theorems failed; true theorem proved

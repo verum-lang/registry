@@ -1,0 +1,141 @@
+    Checking verum-registry v0.1.0 (/private/tmp/verum-registry-t1632-project-controls/catalog)
+2026-10-09T14:22:25.941388Z  WARN Context: Context 'Storage' in function 'write_down' has no matching context declaration
+2026-10-09T14:22:25.941436Z  WARN Context: Context 'Storage' declared in 'using' clause but never used in function 'write_down'
+2026-10-09T14:22:25.941442Z  WARN Context: Context 'Clock' in function 'ingest' has no matching context declaration
+2026-10-09T14:22:25.941446Z  WARN Context: Context 'Storage' in function 'ingest' has no matching context declaration
+2026-10-09T14:22:25.941450Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'ingest'
+2026-10-09T14:22:25.941453Z  WARN Context: Context 'Clock' in function 'ingest_volatile' has no matching context declaration
+2026-10-09T14:22:25.941457Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'ingest_volatile'
+2026-10-09T14:22:25.944119Z  WARN Context: Context 'Clock' in function 'horizon_for' has no matching context declaration
+2026-10-09T14:22:25.945250Z  WARN Context: Context 'Clock' in function 'restore' has no matching context declaration
+2026-10-09T14:22:25.945267Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'restore'
+2026-10-09T14:22:25.949938Z  WARN Context: Context 'Clock' in function 'publish' has no matching context declaration
+2026-10-09T14:22:25.949997Z  WARN Context: Context 'NodeIdentity' in function 'publish' has no matching context declaration
+2026-10-09T14:22:25.950002Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'publish'
+2026-10-09T14:22:25.958051Z  WARN Context: Context 'Clock' in function 'route_publish' has no matching context declaration
+2026-10-09T14:22:25.958083Z  WARN Context: Context 'NodeIdentity' in function 'route_publish' has no matching context declaration
+2026-10-09T14:22:25.958088Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T14:22:25.958091Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'route_publish'
+2026-10-09T14:22:25.958095Z  WARN Context: Context 'Clock' in function 'serve_forever' has no matching context declaration
+2026-10-09T14:22:25.958099Z  WARN Context: Context 'NodeIdentity' in function 'serve_forever' has no matching context declaration
+2026-10-09T14:22:25.958103Z  WARN Context: Context 'Uplink' in function 'serve_forever' has no matching context declaration
+2026-10-09T14:22:25.958106Z  WARN Context: Context 'Uplink' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T14:22:25.958110Z  WARN Context: Context 'NodeIdentity' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T14:22:25.958113Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'serve_forever'
+2026-10-09T14:22:25.962512Z  WARN Context: Context 'Clock' in function 'import_slice' has no matching context declaration
+2026-10-09T14:22:25.962540Z  WARN Context: Context 'Clock' declared in 'using' clause but never used in function 'import_slice'
+2026-10-09T14:22:25.964354Z  WARN Context: Context 'Clock' in function 'store' has no matching context declaration
+2026-10-09T14:22:25.964375Z  WARN Context: Context 'Uplink' in function 'lookup' has no matching context declaration
+2026-10-09T14:26:19.417805Z  WARN Type checking found 49 error(s)
+
+error: cannot index type 'verum_registry.main.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.main.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.main.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: no method named `empty` found for type `verum_registry.main.PublicationCatalog`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.main:77:23
+error<E400>: no method named `empty` found for type `verum_registry.main.PublicationCatalog`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.main:106:23
+error: cannot index type '&verum_registry.node.resolution.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.node.resolution.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: Pattern expects a variant type, but scrutinee has type IoResult<Text> at verum_registry.node.ambient:132:13
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.durable.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.evidence.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.publish.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.publish.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:183:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:191:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:200:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:210:28
+error: cannot index type 'verum_registry.protocol.wire.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:347:17
+error<E400>: Type mismatch: expected 'USize<Text, JsonValue>', found 'Map<Text, JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:379:28
+error: cannot index type 'verum_registry.protocol.wire.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.wire.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.wire.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.protocol.wire.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'USize<JsonValue>', found 'core.collections.list.List<JsonNull(Unit) | JsonBool(Bool) | JsonInt(Int) | JsonFloat(Float) | JsonString(Text) | JsonArray(USize<JsonValue>) | JsonObject(USize<Text, JsonValue>)>'
+  --> verum_registry.protocol.wire:378:41
+error: cannot index type 'verum_registry.node.catalog.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.Digest' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type 'verum_registry.node.slice.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'core.async.future.Future<Ok(verum_registry.node.slice.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))>', found 'JoinHandle<Ok(verum_registry.node.slice.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))>'
+  --> verum_registry.node.slice:188:22
+error: Pattern expects a variant type, but scrutinee has type core.async.future.Future<Ok(verum_registry.node.slice.Verified) | Err(SignatureCoversOtherManifest(Unit) | ProofCoversOtherManifest(Unit) | ProofFromWrongLog(Text) | EmptyLog(Unit))> at verum_registry.node.slice:201:13
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.source.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.source.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.authority.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.authority.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&verum_registry.protocol.authority.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&checked verum_registry.protocol.hash.Narrow' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error: cannot index type '&checked verum_registry.protocol.hash.Wide' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: no method named `empty` found for type `Keyed<_>`
+  help: check method name spelling
+  help: ensure type implements a protocol with this method
+  help: check available methods in protocol documentation
+  --> verum_registry.node.cache:90:26
+error: cannot index type 'verum_registry.protocol.query.PackageName' — only tuple types support .0, .1, etc.
+  --> <no source location attached to this diagnostic>
+error<E400>: Type mismatch: expected 'core.base.iterator.Transducer<verum_registry.protocol.query.Verified, verum_registry.protocol.query.Verified>', found 'Transducer<_, &verum_registry.protocol.query.Verified>'
+  --> verum_registry.protocol.query:170:5
+error<E400>: Type mismatch: expected 'core.base.iterator.Transducer<verum_registry.protocol.query.Verified, verum_registry.protocol.query.Verified>', found 'Transducer<_, _>'
+  --> verum_registry.protocol.query:165:51
+
+error: compilation failed with 49 errors
+
+error: compilation failed with 49 errors

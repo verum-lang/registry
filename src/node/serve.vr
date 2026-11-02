@@ -1,0 +1,419 @@
+// ====================================================================
+// serve.vr — the node's HTTP surface
+// ====================================================================
+// Three routes, and only two of them are reachable from a client:
+//
+//     GET  /search             the matches, with their provenance
+//     GET  /resolve?name=<pkg> where a coordinate comes from
+//     POST /publish            written, exercised, NOT wired in
+//
+// The asymmetry is a language fact rather than an unfinished thought,
+// and it is worth stating precisely because "the route exists" and
+// "the route answers" are different claims. `Handler.handle` is
+// declared, at `core/net/weft/handler.vr:188`,
+//
+//     async fn handle(&self, req: WeftRequest) -> Result<Response, Self.Error>;
+//
+// — a SHARED receiver, and no contexts. Publishing needs both of the
+// things that signature refuses — `&mut self`, because accepting a
+// publication changes what the node holds, and
+// `using [Clock, NodeIdentity, Uplink]`, because `node/publish.vr`
+// declares them.
+//
+// So `route_publish` below is complete and is exercised end to end by
+// `main.vr`'s publish scene, which calls it directly with the contexts
+// provided; what is missing is a `Handler` whose receiver and contexts
+// can carry it. That is a change to `core/net/weft`, not to this file,
+// and inventing a way around it here — interior mutability, an ambient
+// clock — would trade a checkable design for a working demo.
+//
+// The decision this file exists to make is not "how do I call the node
+// layer" — that part is one line each. It is **what an HTTP client is
+// told when the registry refuses**, and the registry refuses in kinds
+// that a single error code would flatten:
+//
+//     NoSourceHasIt     404  nobody has this name — the client asked
+//                            for something that does not exist
+//     OnlyBelowPolicy   403  it EXISTS and the node will not serve it;
+//                            an operator has to change a policy line,
+//                            and 404 would send them looking for a
+//                            missing package instead
+//     SourceFailed      502  a source that should have answered broke;
+//                            the client's request was well-formed and
+//                            retrying may work — the opposite advice
+//                            from the two above
+//
+// Flattening those three into one status is the cheapest way to make a
+// registry that cannot be operated: every failure looks like a typo.
+// `protocol/source.vr` keeps a broken mirror and a missing name as
+// different facts on purpose; the HTTP surface keeps that distinction
+// rather than spending it.
+//
+// What this file deliberately does NOT do yet:
+//   * parse a query language for /search — the empty query is honest,
+//     a half-parser is not;
+//   * serialise `Resolution` / `Verified` as JSON — each route answers
+//     with the one fact it can state truthfully, and a wrong body is
+//     worse than a small one;
+//   * serve `/publish` over HTTP — the route is written and exercised;
+//     the gap is `Handler`'s receiver, see above.
+// Each is a named next step rather than a silent gap.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.serve;
+
+mount verum_registry.protocol.query.{from_authority, named, Clause, Query};
+mount core.net.weft.handler.{Handler, WeftRequest};
+mount core.net.weft.app.{WeftApp};
+mount core.net.http.{Response, StatusCode};
+mount core.net.weft.error.{WeftError};
+mount verum_registry.node.cache.{Cache};
+mount verum_registry.node.ambient.{Clock, NodeIdentity, Uplink};
+mount verum_registry.node.publish.{
+    publish_request, PublishError, Published,
+};
+mount verum_registry.protocol.wire.{decode_publish_request, encode_search_answer, WireError};
+mount verum_registry.node.resolution.{resolve, ResolveError};
+mount verum_registry.node.search.{count, find};
+mount verum_registry.protocol.authority.{PackageName};
+mount verum_registry.protocol.source.{Source};
+mount verum_registry.protocol.evidence.{EvidenceError, Verified};
+
+/// The node's HTTP handler.
+///
+/// Holds its state by value: a handler is shared across connections and
+/// must not lend out a reference whose lifetime the framework decides.
+///
+/// `require_audit` is a FIELD, not a per-request parameter, for the
+/// reason `node/resolution.vr` gives for making it an argument rather
+/// than a context: it is the operator's policy, and two callers of the
+/// same node must not be able to disagree about it. A client that could
+/// pass `?require_audit=false` would be choosing the node's assurance
+/// level for it.
+public type NodeHandler is {
+    cache: Cache,
+    sources: List<Heap<dyn Source>>,
+    require_audit: Bool,
+};
+
+implement NodeHandler {
+    public fn new(
+        cache: Cache,
+        sources: List<Heap<dyn Source>>,
+        require_audit: Bool,
+    ) -> NodeHandler {
+        NodeHandler {
+            cache: cache,
+            sources: sources,
+            require_audit: require_audit,
+        }
+    }
+
+    /// How many held artefacts match this query.
+    ///
+    /// `count` rather than `find` for the body: the number is a fact the
+    /// node can state without committing to a wire format for
+    /// `Verified`, and a route that answers a smaller question
+    /// truthfully can be widened later without breaking a client.
+    fn answer_count(&self, q: &Query) -> Int {
+        count(&self.cache, q)
+    }
+
+    /// Text as a response body. Every route here answers with one fact.
+    fn text_response(status: StatusCode, text: &Text) -> Response {
+        let mut body: List<Byte> = List.new();
+        for b in text.bytes() {
+            body.push(b);
+        }
+        Response.new(status)
+            .header("Content-Length", f"{body.len()}")
+            .body(body)
+    }
+
+    /// The empty query admits everything the node holds. That
+    /// degenerate case is the one worth getting right first: a query
+    /// language where "ask nothing" means "get nothing" surprises
+    /// people at exactly the wrong moment, and `node/search.vr` already
+    /// decided it the other way.
+    public fn route_search(&self, req: &WeftRequest) -> Response {
+        // THE QUERY IS A CONJUNCTION, and the URL says so plainly:
+        // `?name=X&from=Y` means both, in the order the clauses are
+        // pushed. `protocol/query.vr` deliberately has no disjunction —
+        // "A or B" over a registry is two questions, and a node that
+        // answers one of them silently has answered neither — so there
+        // is nothing here to translate a `|` into, and nothing that
+        // could accidentally widen the question.
+        //
+        // An UNRECOGNISED parameter is ignored rather than refused, and
+        // that is a decision worth naming: a client that sends
+        // `?nmae=serde` gets everything the node holds instead of an
+        // error. It is the wrong default and it is temporary — the
+        // refusal belongs here, next to the parse, once the parameter
+        // set is fixed. Recorded rather than left silent so the next
+        // reader sees it was asked.
+        let mut clauses: List<Clause> = List.new();
+        if let Maybe.Some(n) = req.query_param(&"name") {
+            clauses.push(named(n));
+        }
+        if let Maybe.Some(a) = req.query_param(&"from") {
+            clauses.push(from_authority(a));
+        }
+
+        let q = Query { clauses: clauses };
+        // The answer carries the matches WITH their provenance, not a
+        // bare count. When this route first existed it answered with a
+        // number, which was the honest thing to say before a wire format
+        // existed — a wrong body is worse than a small one. Now that
+        // `protocol/wire.vr` can state a `Verified` faithfully, the
+        // smaller answer would be hiding information the node has.
+        //
+        // `count` is still consulted, and it is not redundant: it is the
+        // node's own answer to "how many", and `node/search.vr` carries
+        // `count_agrees_with_find` as a checkable property precisely
+        // because the two could drift. Serving the count computed
+        // independently of the list is what makes that property
+        // observable from outside.
+        let results = find(&self.cache, &q);
+        let total = self.answer_count(&q);
+        NodeHandler.text_response(
+            StatusCode.ok(),
+            &encode_search_answer(&results, total),
+        )
+    }
+
+    /// `GET /resolve?name=<pkg>` — which configured source has it.
+    ///
+    /// The answer body is the source's own description, which is what
+    /// an operator actually needs: not "yes" but "from where". A
+    /// resolution that cannot say which source answered is the failure
+    /// `node/resolution.vr` was written to prevent.
+    public fn route_resolve(&self, req: &WeftRequest) -> Response {
+        match req.query_param(&"name") {
+            Maybe.None => NodeHandler.text_response(
+                StatusCode.bad_request(),
+                &"resolve requires ?name=<package>",
+            ),
+            Maybe.Some(raw) => {
+                let name = PackageName(raw);
+                match resolve(&self.sources, &name, self.require_audit) {
+                    Result.Ok(found) => {
+                        NodeHandler.text_response(StatusCode.ok(), &found.via())
+                    }
+                    // Three refusals, three answers — see the header.
+                    Result.Err(ResolveError.NoSourceHasIt(what)) => {
+                        NodeHandler.text_response(
+                            StatusCode.not_found(),
+                            &f"no configured source has {what}",
+                        )
+                    }
+                    Result.Err(ResolveError.OnlyBelowPolicy(who)) => {
+                        NodeHandler.text_response(
+                            StatusCode.forbidden(),
+                            &f"only {who} has it, and it is below this node's audit policy",
+                        )
+                    }
+                    Result.Err(ResolveError.SourceFailed(_)) => {
+                        NodeHandler.text_response(
+                            StatusCode.new(502),
+                            &"a configured source failed",
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+implement NodeHandler {
+    /// `POST /publish` — the route the registry exists for.
+    ///
+    /// THE STATUS CODES ARE THE DESIGN. `node/publish.vr` refuses in
+    /// five distinguishable ways and an HTTP surface that flattens them
+    /// makes the node unoperable — every failure would read as "try
+    /// again" or "typo":
+    ///
+    ///     WireError.*               400  the BODY is wrong; the request
+    ///                                    never reached policy at all.
+    ///                                    Named field, named path.
+    ///     NotOurName                403  authenticated, and not allowed
+    ///                                    to publish under that name
+    ///     NoSuchName                404  the name is not one this node
+    ///                                    answers for
+    ///     ContestedName             409  two authorities claim it; the
+    ///                                    node REFUSES rather than
+    ///                                    ranking, and the client must
+    ///                                    know it was a conflict and not
+    ///                                    a permission problem
+    ///     VersionAlreadyPublished   409  the version exists with other
+    ///                                    content — a conflict, not a
+    ///                                    bad request; resubmitting the
+    ///                                    same body will never help
+    ///     EvidenceRefused           422  the request is well-formed and
+    ///                                    the name is theirs, but the
+    ///                                    evidence does not hold. 400
+    ///                                    would send them to check their
+    ///                                    JSON, which is fine.
+    ///     Accepted                  201  created
+    ///     AlreadyIdentical          200  nothing changed, and that is
+    ///                                    success, not a conflict —
+    ///                                    republishing identical content
+    ///                                    is how a retry after a dropped
+    ///                                    response behaves
+    ///
+    /// `publish_request` checks local name ownership before issuing an
+    /// affine slot and consuming it through `publish`. Request fields
+    /// cannot construct a slot or bypass the authority check.
+    public fn route_publish(&mut self, req: &WeftRequest) -> Response
+        using [Clock, NodeIdentity, Uplink]
+    {
+        // `Text.from_utf8` returns a Result, not a Maybe — a body that
+        // is not UTF-8 is a transport fault with a REASON, and the
+        // reason is worth keeping even though this route does not print
+        // it: a client sending latin-1 and a client sending a truncated
+        // multi-byte sequence have made different mistakes.
+        // T1130 WORKAROUND — the `[..]` is load-bearing, not style.
+        // `&req.body` is a reference to a RECORD FIELD, and the
+        // `&List<Byte>` -> `&[Byte]` coercion at a call to a
+        // slice-taking stdlib function silently yields an EMPTY slice
+        // in that position: `from_utf8` returned `Ok("")` for a
+        // 282-byte body, so every publication answered 400 with an
+        // empty message. A user function taking `&List<Byte>` reads the
+        // same expression correctly; the spelling below is what makes
+        // the stdlib one see the bytes. DELETE the `[..]` when T1130
+        // lands, and not before.
+        let body = match Text.from_utf8(&req.body[..]) {
+            Ok(t) => t,
+            Err(_) => return NodeHandler.text_response(
+                StatusCode.bad_request(),
+                &"body is not valid UTF-8",
+            ),
+        };
+
+        let request = match decode_publish_request(&body) {
+            Err(e) => return NodeHandler.text_response(
+                StatusCode.bad_request(),
+                &e.describe(),
+            ),
+            Ok(r) => r,
+        };
+
+        match publish_request(&mut self.cache, &request) {
+            Ok(Published.Accepted(v)) => NodeHandler.text_response(
+                StatusCode.created(),
+                &f"published {v.manifest().version}",
+            ),
+            Ok(Published.AlreadyIdentical(v)) => NodeHandler.text_response(
+                StatusCode.ok(),
+                &f"already held, identical at {v.manifest().version}",
+            ),
+            Err(PublishError.NotOurName(claimed, owner)) =>
+                NodeHandler.text_response(
+                    StatusCode.forbidden(),
+                    &f"{claimed} does not own that name — {owner} does",
+                ),
+            Err(PublishError.NoSuchName) => NodeHandler.text_response(
+                StatusCode.not_found(),
+                &"this node answers for no such name",
+            ),
+            Err(PublishError.ContestedName(who)) => NodeHandler.text_response(
+                StatusCode.new(409),
+                &f"the name is claimed by {who.len()} authorities and will not be ranked",
+            ),
+            Err(PublishError.VersionAlreadyPublished(ver)) =>
+                NodeHandler.text_response(
+                    StatusCode.new(409),
+                    &f"{ver} is already published with other content",
+                ),
+            Err(PublishError.EvidenceRefused(_)) => NodeHandler.text_response(
+                StatusCode.new(422),
+                &"the evidence does not hold",
+            ),
+        }
+    }
+}
+
+implement Handler for NodeHandler {
+    async fn handle(&self, req: WeftRequest) -> Result<Response, WeftError> {
+        // An unknown path is a refusal that NAMES what was refused, not
+        // a silent 200 — the same rule the protocol layer follows for
+        // every other decision.
+        if req.path == "/search" {
+            return Result.Ok(self.route_search(&req));
+        }
+        if req.path == "/resolve" {
+            return Result.Ok(self.route_resolve(&req));
+        }
+        Result.Err(WeftError.RouteNotFound)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// The listener
+// -----------------------------------------------------------------------------
+
+/// Bind and serve until stopped.
+///
+/// This is the line that turns the registry from a program that
+/// DEMONSTRATES its rules into one that ANSWERS them. Everything above
+/// is reachable from a scene; this is reachable from a client.
+///
+/// It is deliberately NOT what `main` does by default. A node that
+/// starts listening the moment it is run cannot be exercised in a test
+/// suite, and the scenes are how every rule in this cog is checked —
+/// so serving is what you get when you ASK for it (`verum run … serve`),
+/// and the scenes are what you get otherwise. The alternative, a
+/// listener that starts and a suite that has to kill it, trades a
+/// checkable program for a demonstrable one.
+///
+/// The contexts are the node's configuration and they are passed, not
+/// read from a global: the same handler serves under a frozen clock in
+/// a test and a system clock in production without a line of it
+/// changing. That is the whole reason `publish` takes them as contexts
+/// rather than reaching for an ambient now().
+///
+/// MEASURED LIMIT — THIS BINDS AND THEN STOPS, and the cause has moved
+/// once already, so read the dates.
+///
+/// 2026-09-03: `select` was inoperative (T1131) — it type-checked,
+/// produced no arm value, and as a statement ran no arm at all — and
+/// `core/net/tcp.vr`'s `accept_cancellable` is a `select` between
+/// `accept_async()` and `token.cancelled()`. That is FIXED (f0a27ae53).
+///
+/// 2026-09-04, on a binary carrying that fix: the node still stops.
+/// The blocker is now one layer lower — TCP `accept` fails at Tier 0
+/// the moment a connection arrives:
+///
+///     FFI marshal error: unsupported conversion from Unknown to Ptr
+///
+/// `bind` works and a blocking accept with no client blocks correctly,
+/// so it is the marshalling of the `accept(sockfd, addr, addrlen)`
+/// extern, not the socket. That is T1135, and it stops every HTTP
+/// server written in Verum on this platform, not just this one.
+///
+/// Either way the Weft accept loop turns the failure into `Ok(())`, so
+/// "could not accept" and "was asked to stop" remain the same
+/// observation at the call site — worth its own repair whichever
+/// blocker is current.
+///
+/// The code below is correct against the API and is left in place
+/// deliberately: it is the thing that will start working when T1131
+/// lands, and it is what MEASURED the defect. What must not happen is
+/// someone reading "the registry has a listener" and believing it
+/// serves — hence this paragraph rather than a silent TODO.
+public async fn serve_forever(
+    addr: &Text,
+    cache: Cache,
+    sources: List<Heap<dyn Source>>,
+    require_audit: Bool,
+) -> Result<(), Text> using [Clock, NodeIdentity, Uplink] {
+    let handler = NodeHandler.new(cache, sources, require_audit);
+    match WeftApp.new(handler).bind(addr.clone()) {
+        Result.Err(why) => Result.Err(why),
+        Result.Ok(server) => server.serve().await,
+    }
+}
+

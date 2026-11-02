@@ -1,0 +1,290 @@
+// Spec: Cog Publication Protocol v1 — authenticated request preparation.
+module verum_registry.node.publication_prepare;
+
+mount core.net.http.{Method, Response, StatusCode};
+mount core.net.weft.handler.{WeftRequest};
+mount verum_registry.protocol.authority.{Authority, NamePattern, PackageName};
+mount verum_registry.protocol.publication.{EnvelopeError, PublicationLimits, publication_body_limit};
+mount verum_registry.protocol.publication_metadata.{
+    DecodedDependency, DecodedDependencyOptions, DecodedPublication,
+    DecodedSourceMetadata, PublicationDecodeError, decode_publication,
+};
+mount verum_registry.node.publication_auth.{
+    CredentialStore, PublisherAttribution, AuthorizationError, authenticate, authorize,
+};
+
+/// Decoded and scope-authorized input. Semantic, archive and durable admission
+/// remain separate; no successful receipt or evidence can be derived here.
+public type affine PreparedPublication is {
+    private attribution: PublisherAttribution,
+    private publication: DecodedPublication,
+};
+
+/// Retains the original input and its attribution behind private fields.
+/// Inspection returns independent, untrusted snapshots. This type is not affine;
+/// the future admission boundary must establish its own consuming lifecycle.
+public type PreparedContents is {
+    private attribution: PublisherAttribution,
+    private publication: DecodedPublication,
+};
+
+implement PreparedContents {
+    public fn principal_id(&self) -> Text {
+        snapshot_text(&self.attribution.principal_id())
+    }
+
+    public fn credential_id(&self) -> Text {
+        snapshot_text(&self.attribution.credential_id())
+    }
+
+    public fn authority_id(&self) -> Text {
+        snapshot_text(&self.attribution.authority_id())
+    }
+
+    public fn scope_snapshot(&self) -> NamePattern {
+        match self.attribution.scope_snapshot() {
+            NamePattern.Exact(name) => NamePattern.Exact(snapshot_text(&name)),
+            NamePattern.Scope(scope) => NamePattern.Scope(snapshot_text(&scope)),
+        }
+    }
+
+    /// Caller edits to this untrusted value do not change the retained input.
+    /// A snapshot carries no authentication or admission authority.
+    public fn publication_snapshot(&self) -> DecodedPublication {
+        snapshot_publication(&self.publication)
+    }
+}
+
+// Domain snapshots reconstruct every mutable layer explicitly. Language value
+// copies are one level deep and cannot establish this association on their own.
+fn snapshot_text(source: &Text) -> Text {
+    let mut result = Text.with_capacity(source.len());
+    result.push_str(source);
+    result
+}
+
+fn snapshot_optional_text(source: &Maybe<Text>) -> Maybe<Text> {
+    match source {
+        Maybe.None => Maybe.None,
+        Maybe.Some(text) => Maybe.Some(snapshot_text(text)),
+    }
+}
+
+fn snapshot_text_list(source: &List<Text>) -> List<Text> {
+    let mut result: List<Text> = List.with_capacity(source.len());
+    for text in source.iter() { result.push(snapshot_text(text)); }
+    result
+}
+
+fn snapshot_optional_features(source: &Maybe<List<Text>>) -> Maybe<List<Text>> {
+    match source {
+        Maybe.None => Maybe.None,
+        Maybe.Some(features) => Maybe.Some(snapshot_text_list(features)),
+    }
+}
+
+fn snapshot_optional_bool(source: &Maybe<Bool>) -> Maybe<Bool> {
+    match source {
+        Maybe.None => Maybe.None,
+        Maybe.Some(value) => Maybe.Some(*value),
+    }
+}
+
+fn snapshot_dependency(source: &DecodedDependency) -> DecodedDependency {
+    match source {
+        DecodedDependency.Requirement(version) =>
+            DecodedDependency.Requirement(snapshot_text(version)),
+        DecodedDependency.Detailed(options) =>
+            DecodedDependency.Detailed(DecodedDependencyOptions {
+                version_spelling: snapshot_text(&options.version_spelling),
+                features: snapshot_optional_features(&options.features),
+                optional: snapshot_optional_bool(&options.optional),
+                default_features: snapshot_optional_bool(&options.default_features),
+            }),
+    }
+}
+
+fn snapshot_metadata(source: &DecodedSourceMetadata) -> DecodedSourceMetadata {
+    let mut dependencies: Map<Text, DecodedDependency> = Map.new();
+    for (name, specification) in source.dependencies.iter() {
+        dependencies.insert(snapshot_text(&name), snapshot_dependency(&specification));
+    }
+    let mut features: Map<Text, List<Text>> = Map.new();
+    for (name, members) in source.features.iter() {
+        features.insert(snapshot_text(&name), snapshot_text_list(&members));
+    }
+    DecodedSourceMetadata {
+        name_spelling: snapshot_text(&source.name_spelling),
+        version_spelling: snapshot_text(&source.version_spelling),
+        description: snapshot_optional_text(&source.description),
+        authors: snapshot_text_list(&source.authors),
+        license: snapshot_optional_text(&source.license),
+        repository: snapshot_optional_text(&source.repository),
+        homepage: snapshot_optional_text(&source.homepage),
+        keywords: snapshot_text_list(&source.keywords),
+        categories: snapshot_text_list(&source.categories),
+        readme: snapshot_optional_text(&source.readme),
+        dependencies: dependencies,
+        features: features,
+        checksum_spelling: snapshot_text(&source.checksum_spelling),
+    }
+}
+
+fn snapshot_publication(source: &DecodedPublication) -> DecodedPublication {
+    let mut archive: List<Byte> = List.with_capacity(source.archive.len());
+    for byte in source.archive.iter() { archive.push(*byte); }
+    DecodedPublication {
+        metadata: snapshot_metadata(&source.metadata),
+        archive: archive,
+    }
+}
+
+implement PreparedPublication {
+    public fn into_parts(self) -> PreparedContents {
+        let PreparedPublication { attribution, publication } = self;
+        PreparedContents { attribution: attribution, publication: publication }
+    }
+}
+
+public type PreparationError is
+    | NotPublicationRoute
+    | MethodNotAllowed
+    | MalformedRequest
+    | UnsupportedMediaType
+    | RequestTooLarge
+    | Unauthenticated
+    | Forbidden
+    | AuthorityConflict
+    | Decode(PublicationDecodeError);
+
+// HTTP optional whitespace is ASCII SP/HTAB, not Unicode Text.trim.
+fn trim_ows(value: &Text) -> Text {
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    let mut end = bytes.len();
+    while start < end && (bytes[start] == 0x20 || bytes[start] == 0x09) {
+        start = start + 1;
+    }
+    while end > start && (bytes[end - 1] == 0x20 || bytes[end - 1] == 0x09) {
+        end = end - 1;
+    }
+    value.slice(start, end)
+}
+
+fn bearer(req: &WeftRequest) -> Result<Text, PreparationError> {
+    let values = req.headers.get_all(&"authorization");
+    if values.len() == 0 { return Result.Err(PreparationError.Unauthenticated); }
+    if values.len() != 1 { return Result.Err(PreparationError.MalformedRequest); }
+    let raw = values[0];
+    // Bound the raw value before trimming so whitespace cannot bypass it.
+    if raw.len() > 256 { return Result.Err(PreparationError.Unauthenticated); }
+    let value = trim_ows(raw);
+    let bytes = value.as_bytes();
+    // An arbitrary UTF-8 header cannot be sliced at byte 6 before proving
+    // the scheme is ASCII: that offset may split a multibyte character.
+    if bytes.len() < 8
+        || (bytes[0] != 0x42 && bytes[0] != 0x62)
+        || (bytes[1] != 0x45 && bytes[1] != 0x65)
+        || (bytes[2] != 0x41 && bytes[2] != 0x61)
+        || (bytes[3] != 0x52 && bytes[3] != 0x72)
+        || (bytes[4] != 0x45 && bytes[4] != 0x65)
+        || (bytes[5] != 0x52 && bytes[5] != 0x72)
+        || bytes[6] != 0x20 {
+        return Result.Err(PreparationError.Unauthenticated);
+    }
+    let mut start = 6;
+    while start < bytes.len() && bytes[start] == 0x20 { start = start + 1; }
+    if start == bytes.len() { return Result.Err(PreparationError.Unauthenticated); }
+    // The actual verifier checks complete fixed token syntax, including all
+    // remaining whitespace, commas and additional values.
+    Result.Ok(value.slice(start, value.len()))
+}
+
+fn transport(req: &WeftRequest, limits: &PublicationLimits) -> Result<(), PreparationError> {
+    if req.path != "/api/v1/cogs/publish" { return Result.Err(PreparationError.NotPublicationRoute); }
+    if !(req.method is Method.Post) { return Result.Err(PreparationError.MethodNotAllowed); }
+    match &req.raw_query {
+        Maybe.Some(query) => {
+            if query.len() != 0 { return Result.Err(PreparationError.MalformedRequest); }
+        },
+        Maybe.None => {},
+    }
+    if req.headers.get_all(&"authorization").len() > 1 {
+        return Result.Err(PreparationError.MalformedRequest);
+    }
+    let content_types = req.headers.get_all(&"content-type");
+    if content_types.len() > 1 { return Result.Err(PreparationError.MalformedRequest); }
+    if content_types.len() == 0 { return Result.Err(PreparationError.UnsupportedMediaType); }
+    let media_type = trim_ows(content_types[0]);
+    if !media_type.is_ascii() || !media_type.eq_ignore_case(&"application/vnd.verum.cog-publish.v1")
+        || req.headers.get_all(&"content-encoding").len() != 0 {
+        return Result.Err(PreparationError.UnsupportedMediaType);
+    }
+    if req.body.len() > publication_body_limit(limits) {
+        return Result.Err(PreparationError.RequestTooLarge);
+    }
+    Result.Ok(())
+}
+
+/// Prepare one canonical request against immutable operator configuration.
+/// This runs after Weft has received a body; receive-time limits remain required.
+public fn prepare_publication(
+    req: &WeftRequest,
+    credentials: &CredentialStore,
+    authorities: &List<Authority>,
+    limits: &PublicationLimits,
+) -> Result<PreparedPublication, PreparationError> {
+    transport(req, limits)?;
+    let token = bearer(req)?;
+    let publisher = match authenticate(credentials, &token) {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PreparationError.Unauthenticated),
+    };
+    let publication = match decode_publication(&req.body, limits) {
+        Result.Ok(value) => value,
+        Result.Err(error) => return Result.Err(PreparationError.Decode(error)),
+    };
+    // The name wrapper preserves identity; it does not assert syntax validity.
+    let name = PackageName(publication.metadata.name_spelling.clone());
+    let attribution = match authorize(publisher, &name, authorities) {
+        Result.Ok(value) => value,
+        Result.Err(AuthorizationError.Forbidden) => return Result.Err(PreparationError.Forbidden),
+        Result.Err(AuthorizationError.AuthorityConflict) => return Result.Err(PreparationError.AuthorityConflict),
+    };
+    Result.Ok(PreparedPublication { attribution: attribution, publication: publication })
+}
+
+implement PreparationError {
+    public fn status_code(&self) -> Int {
+        match self {
+            PreparationError.NotPublicationRoute => 404,
+            PreparationError.MethodNotAllowed => 405,
+            PreparationError.MalformedRequest => 400,
+            PreparationError.UnsupportedMediaType => 415,
+            PreparationError.RequestTooLarge => 413,
+            PreparationError.Unauthenticated => 401,
+            PreparationError.Forbidden => 403,
+            PreparationError.AuthorityConflict => 409,
+            PreparationError.Decode(PublicationDecodeError.Metadata(_)) => 400,
+            PreparationError.Decode(PublicationDecodeError.Envelope(error)) => match error {
+                EnvelopeError.MetadataTooLarge => 413,
+                EnvelopeError.ArchiveTooLarge => 413,
+                EnvelopeError.InvalidLimits => 500,
+                _ => 400,
+            },
+        }
+    }
+
+    /// Refusal-only rendering. Never echo credentials, metadata or config values.
+    public fn response(&self) -> Response {
+        let status = self.status_code();
+        let mut response = Response.new(StatusCode.new(status))
+            .header("content-type", "text/plain; charset=utf-8");
+        if status == 401 { response = response.header("www-authenticate", "Bearer"); }
+        if status == 405 { response = response.header("allow", "POST"); }
+        let message = "publication request refused";
+        let mut body: List<Byte> = List.new();
+        for byte in message.bytes() { body.push(byte); }
+        response.body(body)
+    }
+}

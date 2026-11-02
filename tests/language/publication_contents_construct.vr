@@ -1,0 +1,10 @@
+// T1722 negative: callers cannot recombine attribution and arbitrary input.
+module verum_registry.tests.publication_contents_construct;
+mount verum_registry.node.publication_auth.PublisherAttribution;
+mount verum_registry.protocol.publication_metadata.DecodedPublication;
+mount verum_registry.node.publication_prepare.PreparedContents;
+
+fn forged_contents(attribution: PublisherAttribution, publication: DecodedPublication) -> PreparedContents {
+    PreparedContents { attribution: attribution, publication: publication }
+}
+fn main() {}

@@ -1,0 +1,209 @@
+// =============================================================================
+// verum_registry.protocol.source — where a coordinate's bytes come from
+// =============================================================================
+// Spec: registry-federation-protocol §7 (content-addressed transports)
+//
+// The spec names two implementations, registry and git, and calls others
+// "an extension point, not an axis of the design". A protocol with two
+// implementations is the smallest number that keeps that promise
+// honest: with one, the protocol is a description of that one, and
+// nobody finds out until the second arrives.
+//
+// THE TWO ARE NOT EQUIVALENT, and this module's job is to make the
+// difference impossible to forget rather than to paper over it.
+//
+// A registry source publishes into an append-only LOG, so a coordinate
+// it answers for can carry an inclusion proof — it is AUDITABLE: anyone
+// can check later that the answer given today is the answer everyone
+// else got.
+//
+// A git source has no log. A revision is content-addressed, so it is
+// IMMUTABLE and it is ATTRIBUTABLE — you know exactly which bytes you
+// got and which remote they came from — but there is nothing to prove
+// inclusion IN, so "everyone got the same answer" is not a claim it can
+// make.
+//
+// A design that hid that behind a common `fetch` returning `Verified`
+// would be lying by uniformity: it would let a caller written against
+// the registry silently accept a git dependency with weaker guarantees.
+// So the protocol answers with what a source CAN offer, and the caller
+// matches on it.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.source;
+
+mount verum_registry.protocol.authority.{PackageName};
+
+// -----------------------------------------------------------------------------
+// What a source can promise
+// -----------------------------------------------------------------------------
+
+/// The guarantees a coordinate arrives with.
+///
+/// Named rather than boolean: `auditable: Bool` reads as a quality
+/// setting, and a caller that wants "the strongest available" writes
+/// `if !auditable` and gets the logic backwards half the time. A match
+/// on this type has to name the case it is handling.
+public type Assurance is
+    /// Content-addressed AND in an append-only log: the bytes are what
+    /// they claim, and the claim is public and checkable later.
+    | Auditable(Text)
+    /// Content-addressed only: the bytes are what they claim, and there
+    /// is no log to check the claim against. The `Text` names the remote,
+    /// because "where did this come from" is the question an operator
+    /// asks about exactly these.
+    | Attributable(Text);
+
+/// A resolved coordinate, with the assurance its source could offer.
+public type Located is {
+    name: PackageName,
+    /// How the source names these bytes — a version, a revision.
+    revision: Text,
+    assurance: Assurance,
+};
+
+implement Located {
+    public fn assurance(&self) -> Assurance { self.assurance.clone() }
+    public fn revision(&self) -> Text { self.revision.clone() }
+}
+
+/// Why a source could not answer. `NoSuchCoordinate` is separate from
+/// `Unreachable` for the reason §4.1 gives: "I cannot see" and "it does
+/// not exist" are different facts, and every layer that conflates them
+/// costs an operator an afternoon.
+public type SourceError is
+    | NoSuchCoordinate(Text)
+    | Unreachable(Text);
+
+// -----------------------------------------------------------------------------
+// The protocol
+// -----------------------------------------------------------------------------
+
+/// Where a coordinate's bytes come from.
+///
+/// The associated `Reference` is what THIS source calls a revision — a
+/// version string for a registry, a commit for git. It is associated
+/// rather than a common `Text` so that a caller holding a git reference
+/// cannot pass it to a registry source: the two are both text and mean
+/// different things, which is the mistake a type system exists to catch.
+public type Source is protocol {
+    type Reference;
+
+    /// What this source is, for a diagnostic an operator has to read.
+    fn describe(&self) -> Text;
+
+    /// The assurance this source can offer AT ALL. A caller can refuse a
+    /// weaker source before asking it anything, which is the check that
+    /// belongs at configuration time rather than at fetch time.
+    fn assurance_offered(&self) -> Assurance;
+
+    /// Resolve a name to a located coordinate.
+    fn locate(&self, name: &PackageName) -> Result<Located, SourceError>;
+};
+
+// -----------------------------------------------------------------------------
+// The two implementations (spec §7)
+// -----------------------------------------------------------------------------
+
+/// A registry: names resolve to versions, and publications land in a log.
+public type RegistrySource is {
+    /// The authority whose log this source's proofs belong to.
+    public log_id: Text,
+    /// What it holds, as name → version. Indexed, not scanned: a
+    /// registry answers for as many coordinates as it has.
+    public versions: Map<Text, Text>,
+};
+
+implement Source for RegistrySource {
+    type Reference = Text;
+
+    fn describe(&self) -> Text {
+        f"registry backed by log {self.log_id}"
+    }
+
+    fn assurance_offered(&self) -> Assurance {
+        Assurance.Auditable(self.log_id.clone())
+    }
+
+    fn locate(&self, name: &PackageName) -> Result<Located, SourceError> {
+        match self.versions.get(name.0.clone()) {
+            Some(v) => Result.Ok(Located {
+                name: PackageName(name.0.clone()),
+                revision: v.clone(),
+                assurance: Assurance.Auditable(self.log_id.clone()),
+            }),
+            None => Result.Err(SourceError.NoSuchCoordinate(name.0.clone())),
+        }
+    }
+}
+
+/// A git remote: names resolve to revisions, and there is no log.
+public type GitSource is {
+    public remote: Text,
+    /// name → revision. A revision is content-addressed, which is why
+    /// this source can promise attribution without a log.
+    public revisions: Map<Text, Text>,
+    /// Whether the remote can be reached. A git source has no cache of
+    /// its own, so being unreachable is its own answer rather than a
+    /// degraded one.
+    public reachable: Bool,
+};
+
+implement Source for GitSource {
+    type Reference = Text;
+
+    fn describe(&self) -> Text {
+        f"git remote {self.remote}"
+    }
+
+    fn assurance_offered(&self) -> Assurance {
+        Assurance.Attributable(self.remote.clone())
+    }
+
+    fn locate(&self, name: &PackageName) -> Result<Located, SourceError> {
+        if !self.reachable {
+            return Result.Err(SourceError.Unreachable(self.remote.clone()));
+        }
+        match self.revisions.get(name.0.clone()) {
+            Some(r) => Result.Ok(Located {
+                name: PackageName(name.0.clone()),
+                revision: r.clone(),
+                assurance: Assurance.Attributable(self.remote.clone()),
+            }),
+            None => Result.Err(SourceError.NoSuchCoordinate(name.0.clone())),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Using a source without knowing which one it is
+// -----------------------------------------------------------------------------
+
+/// Locate `name` through any source, and say what came back.
+///
+/// Generic over the protocol rather than taking a sum of the two
+/// implementations: adding a third source must not require editing this
+/// function, which is what "an extension point, not an axis of the
+/// design" has to mean in code.
+public pure fn locate_through<S: Source>(
+    source: &S,
+    name: &PackageName,
+) -> Result<Located, SourceError> {
+    source.locate(name)
+}
+
+/// Would this source satisfy a policy that requires an audit trail?
+///
+/// Asked of the SOURCE rather than of a fetched coordinate, so a
+/// configuration can be refused before it is used rather than after it
+/// has already served a build.
+public pure fn satisfies_audit_policy<S: Source>(source: &S) -> Bool {
+    match source.assurance_offered() {
+        Auditable(_) => true,
+        Attributable(_) => false,
+    }
+}

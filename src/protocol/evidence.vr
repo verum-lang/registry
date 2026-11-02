@@ -1,0 +1,253 @@
+// =============================================================================
+// verum_registry.protocol.evidence — what a client checks before believing
+// =============================================================================
+// Spec: registry-federation-protocol §2
+//
+// The rule this module carries: an artefact reaches storage only with ALL
+// THREE pieces of evidence, checked HERE, against the log belonging to
+// the authority that answered.
+//
+// It is carried by construction, not by discipline. `Verified` has no
+// constructor a caller can reach — the only way to obtain one is
+// `verify`, which returns it or a typed refusal. So "we checked" is not
+// a claim a code path can make about itself; it is a value it either
+// holds or does not.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.evidence;
+
+mount verum_registry.protocol.authority.{AuthorityRole, PackageName};
+
+// -----------------------------------------------------------------------------
+// The pieces
+// -----------------------------------------------------------------------------
+
+/// A content digest, as bytes rendered hex. A newtype because a digest
+/// and a name are both text, and the compiler should be the one that
+/// notices when they are swapped.
+public type Digest is (Text);
+
+/// The canonical serialisation a signature covers: the coordinate, the
+/// artefact digest, and when it was published. Artefact bytes are
+/// covered transitively through their digest, so signing this signs the
+/// release.
+public type Manifest is {
+    public name: PackageName,
+    public version: Text,
+    public artefact: Digest,
+    public published_at: Int,
+};
+
+/// A signature over a manifest digest, and the identity that made it.
+public type SignatureBundle is {
+    public manifest_digest: Digest,
+    public signer: Text,
+};
+
+/// An inclusion proof placing a manifest digest in an append-only log.
+///
+/// `log_id` is what makes misattribution DETECTABLE: a node that re-logs
+/// upstream publications into its own log and offers that as proof is
+/// telling the client the wrong provenance, and the client can see it
+/// because the proof says which log it belongs to.
+public type InclusionProof is {
+    public manifest_digest: Digest,
+    public log_id: Text,
+    public tree_size: Int,
+};
+
+// -----------------------------------------------------------------------------
+// The verdict
+// -----------------------------------------------------------------------------
+
+/// A manifest whose evidence was checked. Unreachable except through
+/// `verify` — see the module note.
+public type Verified is {
+    manifest: Manifest,
+    /// Which authority answered, so a stored artefact keeps its
+    /// provenance rather than becoming anonymous once it is on disk.
+    authority_id: Text,
+    role: AuthorityRole,
+    /// The log the inclusion proof belonged to, kept for the same reason.
+    log_id: Text,
+};
+
+fn snapshot_text(value: &Text) -> Text {
+    let mut copy = Text.with_capacity(value.len());
+    copy.push_str(value);
+    copy
+}
+
+implement Manifest {
+    public fn snapshot(&self) -> Manifest {
+        Manifest {
+            name: PackageName(snapshot_text(&self.name.0)),
+            version: snapshot_text(&self.version),
+            artefact: Digest(snapshot_text(&self.artefact.0)),
+            published_at: self.published_at,
+        }
+    }
+}
+
+implement Verified {
+    public fn manifest(&self) -> Manifest { self.manifest.snapshot() }
+    public fn authority_id(&self) -> Text { snapshot_text(&self.authority_id) }
+    public fn role(&self) -> AuthorityRole { self.role.clone() }
+    public fn log_id(&self) -> Text { snapshot_text(&self.log_id) }
+}
+
+/// Why evidence was refused. Each case names something an operator or a
+/// client can act on; none of them is "verification failed".
+public type EvidenceError is
+    /// The signature covers a different manifest than the one supplied.
+    | SignatureCoversOtherManifest
+    /// The inclusion proof is for a different manifest.
+    | ProofCoversOtherManifest
+    /// The proof belongs to a log other than the answering authority's —
+    /// the misattribution case (spec §2.3).
+    | ProofFromWrongLog(Text)
+    /// A log with no entries cannot include anything.
+    | EmptyLog;
+
+// -----------------------------------------------------------------------------
+// The check (spec §2.2, §2.3)
+// -----------------------------------------------------------------------------
+
+/// Check the three pieces against each other and against the authority
+/// that answered, and return a `Verified` or a typed refusal.
+///
+/// `expected_log` is the log the ANSWERING AUTHORITY owns — for an
+/// upstream-attributed coordinate that is the upstream's log, and a
+/// local node forwarding the upstream proof unchanged is what makes the
+/// two agree.
+public pure fn verify(
+    manifest: Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    authority_id: Text,
+    role: AuthorityRole,
+    expected_log: &Text,
+) -> Result<Verified, EvidenceError> {
+    let manifest_digest = digest_of(&manifest);
+
+    if signature.manifest_digest.0 != manifest_digest.0 {
+        return Result.Err(EvidenceError.SignatureCoversOtherManifest);
+    }
+    if proof.manifest_digest.0 != manifest_digest.0 {
+        return Result.Err(EvidenceError.ProofCoversOtherManifest);
+    }
+    if proof.tree_size <= 0 {
+        return Result.Err(EvidenceError.EmptyLog);
+    }
+    if proof.log_id != expected_log.clone() {
+        return Result.Err(EvidenceError.ProofFromWrongLog(proof.log_id.clone()));
+    }
+
+    Result.Ok(Verified {
+        manifest: manifest.snapshot(),
+        authority_id: snapshot_text(&authority_id),
+        role: role,
+        log_id: snapshot_text(&proof.log_id),
+    })
+}
+
+/// The manifest digest — the canonical serialisation, hashed.
+///
+/// Placeholder while the slice is about the RULES: a stable rendering
+/// stands in for the hash, so the shape of the evidence chain can be
+/// exercised before the hash function is wired. The rendering is
+/// canonical (fixed field order, no optional whitespace), which is the
+/// property the real digest needs too.
+public pure fn digest_of(m: &Manifest) -> Digest {
+    Digest(f"{m.name.0}@{m.version}:{m.artefact.0}:{m.published_at}")
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+//
+// STATE: these obligations are STATED and NOT YET DISCHARGED, and what
+// stops them has moved. They used to be UNSTATEABLE — the predicate's
+// parameters and its own declaration disagreed about what sort a record
+// or a variant has, so the claim never reached the solver at all, which
+// prints almost the same as a claim that failed. That is fixed: `let`
+// bindings, field reads, records, variants and `match` over an enum are
+// all inside the reach now, and every obligation here is put to the
+// solver.
+//
+// What is left is genuine reach. Each of these predicates walks a LIST
+// or matches over a `Result`, and the prover unfolds neither, so it
+// answers with a counterexample it invented rather than a proof. That is
+// a limit of the prover, not a doubt about the properties.
+//
+// The theorems stay: an obligation nobody has discharged is an audit
+// finding, which is the honest record, and it becomes a proof the day
+// the reach covers it — without anyone having to remember to come back.
+
+/// Do all three pieces describe the SAME manifest, in the SAME log?
+///
+/// Written as a predicate over the inputs rather than a property of the
+/// output, because the claim is about what `verify` may accept — a
+/// property read off the result could be satisfied by a `verify` that
+/// accepts everything and reports what it accepted.
+public pure fn evidence_agrees(
+    manifest: &Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    expected_log: &Text,
+) -> Bool {
+    let d = digest_of(manifest);
+    signature.manifest_digest.0 == d.0
+        && proof.manifest_digest.0 == d.0
+        && proof.tree_size > 0
+        && proof.log_id == expected_log.clone()
+}
+
+/// `verify` succeeds exactly when the evidence agrees.
+///
+/// Both directions matter and they fail differently. Accepting when the
+/// evidence disagrees admits an artefact nobody vouched for. REFUSING
+/// when it agrees looks like caution and is not: a check that also
+/// refuses valid evidence teaches operators to route around it, and a
+/// check that is routinely bypassed protects nothing.
+public pure fn verify_accepts_exactly_agreeing_evidence(
+    manifest: Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    authority_id: Text,
+    role: AuthorityRole,
+    expected_log: &Text,
+) -> Bool {
+    let agrees = evidence_agrees(&manifest, signature, proof, expected_log);
+    match verify(manifest, signature, proof, authority_id, role, expected_log) {
+        Ok(_)  => agrees,
+        Err(_) => !agrees,
+    }
+}
+
+@verify(formal)
+public theorem verified_implies_evidence(
+    manifest: Manifest,
+    signature: &SignatureBundle,
+    proof: &InclusionProof,
+    authority_id: Text,
+    role: AuthorityRole,
+    expected_log: &Text,
+)
+    ensures verify_accepts_exactly_agreeing_evidence(
+        manifest, signature, proof, authority_id, role, expected_log
+    )
+    // `verify` refuses on the negation of each conjunct of
+    // `evidence_agrees`, in the same order, and constructs the only
+    // reachable `Verified` after the last of them. So its Ok path is
+    // guarded by precisely that conjunction — one direction — and every
+    // Err arises from one conjunct being false — the other.
+    //
+    // The equivalence is what makes `Verified` mean something: a value of
+    // that type cannot exist without the evidence having agreed, and no
+    // code path can claim it did.
+    proof by auto;

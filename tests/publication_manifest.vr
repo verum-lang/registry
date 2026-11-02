@@ -1,0 +1,190 @@
+module verum_registry.tests.publication_manifest;
+
+mount verum_registry.node.publication_manifest.{ManifestAgreementError, verify_manifest_metadata};
+mount verum_registry.protocol.publication_metadata.{
+    DecodedDependency, DecodedDependencyOptions, DecodedSourceMetadata,
+};
+
+fn minimal_source() -> Text {
+    """[cog]
+name = "codec"
+version = "1.2.3"
+"""
+}
+
+fn minimal_metadata() -> DecodedSourceMetadata {
+    DecodedSourceMetadata {
+        name_spelling: "codec", version_spelling: "1.2.3",
+        description: Maybe.None, authors: [], license: Maybe.None,
+        repository: Maybe.None, homepage: Maybe.None, keywords: [], categories: [],
+        readme: Maybe.None, dependencies: Map.new(), features: Map.new(),
+        checksum_spelling: "0000000000000000000000000000000000000000000000000000000000000000",
+    }
+}
+
+fn full_source() -> Text {
+    """[cog]
+name = "codec"
+version = "1.2.3-alpha.1+source"
+description = "A UTF-8 codec — λ"
+authors = ["Ada", "Lin"]
+license = "MIT"
+repository = "https://example.invalid/codec.git"
+homepage = "https://example.invalid/codec"
+keywords = ["encoding", "unicode"]
+categories = ["text"]
+edition = "2026"
+[dependencies]
+base = "^1.2"
+extra = { version = ">=1.0, <2", features = ["fast", "utf8"], optional = false, default-features = true }
+[features]
+default = ["fast"]
+fast = ["extra/fast"]
+"""
+}
+
+fn full_metadata() -> DecodedSourceMetadata {
+    let mut dependencies: Map<Text, DecodedDependency> = Map.new();
+    dependencies.insert("extra", DecodedDependency.Detailed(DecodedDependencyOptions {
+        version_spelling: ">=1.0, <2", features: Maybe.Some(["fast", "utf8"]),
+        optional: Maybe.Some(false), default_features: Maybe.Some(true),
+    }));
+    dependencies.insert("base", DecodedDependency.Requirement("^1.2"));
+    let mut features: Map<Text, List<Text>> = Map.new();
+    features.insert("fast", ["extra/fast"]);
+    features.insert("default", ["fast"]);
+    DecodedSourceMetadata {
+        name_spelling: "codec", version_spelling: "1.2.3-alpha.1+source",
+        description: Maybe.Some("A UTF-8 codec — λ"), authors: ["Ada", "Lin"],
+        license: Maybe.Some("MIT"), repository: Maybe.Some("https://example.invalid/codec.git"),
+        homepage: Maybe.Some("https://example.invalid/codec"), keywords: ["encoding", "unicode"],
+        categories: ["text"], readme: Maybe.None, dependencies: dependencies, features: features,
+        checksum_spelling: "0000000000000000000000000000000000000000000000000000000000000000",
+    }
+}
+
+fn accepts(source: &Text, metadata: &DecodedSourceMetadata) {
+    match verify_manifest_metadata(source, metadata, 1048576) {
+        Result.Ok(_) => {},
+        Result.Err(error) => {
+            let reason = match error {
+                ManifestAgreementError.Syntax(_) => "TOML syntax error",
+                ManifestAgreementError.MissingField(path) => f"missing {path}",
+                ManifestAgreementError.WrongType(path) => f"wrong type {path}",
+                ManifestAgreementError.Mismatch(path) => f"mismatch {path}",
+                ManifestAgreementError.InvalidVersion => "invalid version",
+                ManifestAgreementError.InvalidRequirement(path) => f"invalid requirement {path}",
+                ManifestAgreementError.UnsupportedDependencyField(path) => f"unsupported {path}",
+                ManifestAgreementError.DuplicateDependencyOption(path) => f"duplicate {path}",
+                ManifestAgreementError.InvalidLimit => "invalid limit",
+                ManifestAgreementError.TooLarge => "too large",
+            };
+            panic(f"matching publisher projection refused: {reason}; source: {source}");
+        },
+    }
+}
+
+fn failure(source: &Text, metadata: &DecodedSourceMetadata) -> ManifestAgreementError {
+    match verify_manifest_metadata(source, metadata, 1048576) {
+        Result.Ok(_) => panic("inconsistent manifest was accepted"),
+        Result.Err(error) => error,
+    }
+}
+
+fn mismatch(source: &Text, metadata: &DecodedSourceMetadata, path: &Text) {
+    match failure(source, metadata) {
+        ManifestAgreementError.Mismatch(actual) => assert_eq(actual, path),
+        _ => panic("expected exact disagreement path"),
+    }
+}
+
+fn dependency_source(specification: &Text) -> Text {
+    let root = minimal_source();
+    f"{root}\n[dependencies]\nbase = {specification}\n"
+}
+
+fn dependency_metadata(specification: DecodedDependency) -> DecodedSourceMetadata {
+    let mut metadata = minimal_metadata();
+    metadata.dependencies.insert("base", specification);
+    metadata
+}
+
+fn detailed(features: Maybe<List<Text>>, optional: Maybe<Bool>, defaults: Maybe<Bool>) -> DecodedDependency {
+    DecodedDependency.Detailed(DecodedDependencyOptions {
+        version_spelling: "*", features: features, optional: optional, default_features: defaults,
+    })
+}
+
+fn source_fields() {
+    accepts(&minimal_source(), &minimal_metadata());
+    accepts(&full_source(), &full_metadata());
+    accepts(&full_source().replace(&"default-features", &"default_features"), &full_metadata());
+    let source = full_source();
+    let metadata = full_metadata();
+    mismatch(&source.replace(&"name = \"codec\"", &"name = \"other\""), &metadata, &"cog.name");
+    mismatch(&source.replace(&"+source", &"+other"), &metadata, &"cog.version");
+    mismatch(&source.replace(&"A UTF-8 codec — λ", &"different description"), &metadata, &"cog.description");
+    mismatch(&source.replace(&"[\"Ada\", \"Lin\"]", &"[\"Lin\", \"Ada\"]"), &metadata, &"cog.authors");
+    mismatch(&source.replace(&"license = \"MIT\"", &"license = \"BSD\""), &metadata, &"cog.license");
+    mismatch(&source.replace(&"codec.git", &"other.git"), &metadata, &"cog.repository");
+    mismatch(&source.replace(&"homepage = \"https://example.invalid/codec\"", &"homepage = \"https://example.invalid/other\""), &metadata, &"cog.homepage");
+    mismatch(&source.replace(&"[\"encoding\", \"unicode\"]", &"[\"encoding\"]"), &metadata, &"cog.keywords");
+    mismatch(&source.replace(&"[\"text\"]", &"[\"binary\"]"), &metadata, &"cog.categories");
+    mismatch(&source.replace(&"base = \"^1.2\"", &"base = \"^2\""), &metadata, &"dependencies.base");
+    mismatch(&source.replace(&"base = \"^1.2\"", &"other = \"^1.2\""), &metadata, &"dependencies.other");
+    mismatch(&source.replace(&"[\"extra/fast\"]", &"[]"), &metadata, &"features.fast");
+    mismatch(&source.replace(&"default = [\"fast\"]", &"other = [\"fast\"]"), &metadata, &"features.other");
+}
+
+fn option_presence() {
+    let omitted = dependency_source(&"{ version = \"*\" }");
+    let empty = dependency_source(&"{ version = \"*\", features = [] }");
+    let no_optional = dependency_source(&"{ version = \"*\", optional = false }");
+    let defaults = dependency_source(&"{ version = \"*\", default-features = true }");
+    let absent = dependency_metadata(detailed(Maybe.None, Maybe.None, Maybe.None));
+    accepts(&omitted, &absent);
+    accepts(&empty, &dependency_metadata(detailed(Maybe.Some([]), Maybe.None, Maybe.None)));
+    accepts(&no_optional, &dependency_metadata(detailed(Maybe.None, Maybe.Some(false), Maybe.None)));
+    accepts(&defaults, &dependency_metadata(detailed(Maybe.None, Maybe.None, Maybe.Some(true))));
+    mismatch(&empty, &absent, &"dependencies.base.features");
+    mismatch(&no_optional, &absent, &"dependencies.base.optional");
+    mismatch(&defaults, &absent, &"dependencies.base.default-features");
+    mismatch(&omitted, &dependency_metadata(detailed(Maybe.Some([]), Maybe.None, Maybe.None)), &"dependencies.base.features");
+    mismatch(&omitted, &dependency_metadata(detailed(Maybe.None, Maybe.Some(false), Maybe.None)), &"dependencies.base.optional");
+    mismatch(&omitted, &dependency_metadata(detailed(Maybe.None, Maybe.None, Maybe.Some(true))), &"dependencies.base.default-features");
+    mismatch(&dependency_source(&"\"*\""), &absent, &"dependencies.base");
+    mismatch(&omitted, &dependency_metadata(DecodedDependency.Requirement("*")), &"dependencies.base");
+    let duplicate = dependency_source(&"{ version = \"*\", default-features = true, default_features = true }");
+    assert(failure(&duplicate, &absent) is ManifestAgreementError.DuplicateDependencyOption(_));
+}
+
+fn malformed_and_bounds() {
+    let metadata = minimal_metadata();
+    if !(failure(&"[cog\n", &metadata) is ManifestAgreementError.Syntax(_)) { panic("malformed table header must be a syntax error"); }
+    if !(failure(&"cog = 1\n", &metadata) is ManifestAgreementError.WrongType(_)) { panic("scalar cog must be a type error"); }
+    if !(failure(&"[other]\nname = \"codec\"\n", &metadata) is ManifestAgreementError.MissingField(_)) { panic("missing cog must identify the missing field"); }
+    if !(failure(&minimal_source().replace(&"1.2.3", &"1.02.3"), &metadata) is ManifestAgreementError.InvalidVersion) { panic("leading-zero version must be invalid"); }
+    let invalid = dependency_metadata(DecodedDependency.Requirement(">=1 || <2"));
+    if !(failure(&dependency_source(&"\">=1 || <2\""), &invalid) is ManifestAgreementError.InvalidRequirement(_)) { panic("invalid requirement must be refused"); }
+    let absent = dependency_metadata(detailed(Maybe.None, Maybe.None, Maybe.None));
+    let local = dependency_source(&"{ version = \"*\", path = \"../local\" }");
+    if !(failure(&local, &absent) is ManifestAgreementError.UnsupportedDependencyField(_)) { panic("path dependency must be refused"); }
+    let git = dependency_source(&"{ version = \"*\", git = \"https://example.invalid/source\" }");
+    if !(failure(&git, &absent) is ManifestAgreementError.UnsupportedDependencyField(_)) { panic("git dependency must be refused"); }
+    let unsupported = dependency_source(&"{ version = \"*\", registry = \"other\" }");
+    if !(failure(&unsupported, &absent) is ManifestAgreementError.UnsupportedDependencyField(_)) { panic("registry dependency must be refused"); }
+    if !(failure(&dependency_source(&"{ optional = false }"), &absent) is ManifestAgreementError.MissingField(_)) { panic("missing dependency version must be refused"); }
+    if !(failure(&dependency_source(&"{ version = \"*\", optional = \"false\" }"), &absent) is ManifestAgreementError.WrongType(_)) { panic("nonboolean dependency option must be refused"); }
+    let source = minimal_source();
+    if !(verify_manifest_metadata(&source, &metadata, 0) is Result.Err(ManifestAgreementError.InvalidLimit)) { panic("zero byte budget must be refused"); }
+    if !(verify_manifest_metadata(&source, &metadata, 1048577) is Result.Err(ManifestAgreementError.InvalidLimit)) { panic("over-ceiling byte budget must be refused"); }
+    if !(verify_manifest_metadata(&source, &metadata, source.len() - 1) is Result.Err(ManifestAgreementError.TooLarge)) { panic("undersized byte budget must be refused"); }
+    if !(verify_manifest_metadata(&source, &metadata, source.len()) is Result.Ok(_)) { panic("exact byte budget must succeed"); }
+}
+
+fn main() {
+    source_fields();
+    option_presence();
+    malformed_and_bounds();
+    print("publication-manifest: ok");
+}

@@ -1,0 +1,166 @@
+module verum_registry.node.publication_commit;
+
+mount core.encoding.json.{JsonValue, stringify};
+mount core.net.http.{Response, StatusCode};
+mount core.time.system_time.SystemTime;
+mount verum_registry.protocol.authority.NamePattern;
+mount verum_registry.node.publication_prepare.PreparedPublication;
+mount verum_registry.node.publication_archive.{
+    ArchiveAdmissionLimits, ArchiveAdmissionError, validate_publication_archive,
+    valid_publication_name, valid_publication_version,
+};
+mount verum_registry.node.publication_record.{
+    DecodedPublicationRecord, PublicationRecordError, publication_record_key,
+    encode_publication_record, decode_publication_record, same_publication_record,
+};
+mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
+
+/// Constructible only after validated bytes and attribution are durable.
+/// This receipt acknowledges local admission; it is not signature/log evidence.
+public type PublicationReceipt is {
+    private name: Text,
+    private version: Text,
+    private checksum: Text,
+    private created: Bool,
+};
+
+public type PublicationCommitError is
+    | Admission(ArchiveAdmissionError)
+    | Conflict
+    | Storage(PublicationStorageError)
+    | CorruptRecord
+    | RecordTooLarge
+    | InvalidClock;
+
+fn receipt(record: &DecodedPublicationRecord, created: Bool) -> PublicationReceipt {
+    PublicationReceipt {
+        name: record.metadata.name_spelling.clone(),
+        version: record.metadata.version_spelling.clone(),
+        checksum: record.metadata.checksum_spelling.clone(), created: created,
+    }
+}
+
+/// Exact-coordinate reads expose stored data, never a receipt or capability.
+/// Corruption is an error rather than an empty catalog or a missing version.
+public fn load_publication(
+    storage: &PublicationStorage, name: &Text, version: &Text,
+) -> Result<Maybe<DecodedPublicationRecord>, PublicationCommitError> {
+    if !valid_publication_name(name) || !valid_publication_version(version) {
+        return Result.Err(PublicationCommitError.CorruptRecord);
+    }
+    let key = publication_record_key(name, version);
+    let bytes = match storage.load(&key) {
+        Result.Ok(Maybe.Some(value)) => value,
+        Result.Ok(Maybe.None) => return Result.Ok(Maybe.None),
+        Result.Err(error) => return Result.Err(PublicationCommitError.Storage(error)),
+    };
+    let record = match decode_publication_record(&bytes) {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PublicationCommitError.CorruptRecord),
+    };
+    if record.metadata.name_spelling != name || record.metadata.version_spelling != version {
+        return Result.Err(PublicationCommitError.CorruptRecord);
+    }
+    Result.Ok(Maybe.Some(record))
+}
+
+fn existing_receipt(
+    storage: &PublicationStorage, candidate: &DecodedPublicationRecord,
+    existing: &DecodedPublicationRecord,
+) -> Result<PublicationReceipt, PublicationCommitError> {
+    if !same_publication_record(candidate, existing) { return Result.Err(PublicationCommitError.Conflict); }
+    let bytes = match encode_publication_record(existing) {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PublicationCommitError.CorruptRecord),
+    };
+    let key = publication_record_key(&existing.metadata.name_spelling, &existing.metadata.version_spelling);
+    // A preceding writer may have linked its file but failed directory sync.
+    // Seeing the file alone is insufficient: recommit the ORIGINAL bytes so
+    // retry acknowledgement also follows durable storage confirmation.
+    match storage.commit(&key, &bytes) {
+        Result.Ok(_) => Result.Ok(receipt(existing, false)),
+        Result.Err(PublicationStorageError.Conflict) => Result.Err(PublicationCommitError.Conflict),
+        Result.Err(error) => Result.Err(PublicationCommitError.Storage(error)),
+    }
+}
+
+/// Consume authenticated preparation, admit the complete source archive and
+/// atomically commit all source data/provenance. No in-memory reservation is
+/// acknowledged, and no caller-supplied timestamp or authority is accepted.
+public fn commit_prepared_publication(
+    prepared: PreparedPublication, storage: &PublicationStorage, limits: &ArchiveAdmissionLimits,
+) -> Result<PublicationReceipt, PublicationCommitError> {
+    let contents = prepared.into_parts();
+    let publication = contents.publication_snapshot();
+    match validate_publication_archive(&publication, limits) {
+        Result.Ok(()) => {},
+        Result.Err(error) => return Result.Err(PublicationCommitError.Admission(error)),
+    }
+    let published_at = SystemTime.now().duration_since_epoch().as_secs();
+    if published_at < 0 { return Result.Err(PublicationCommitError.InvalidClock); }
+    let (scope_kind, scope) = match contents.scope_snapshot() {
+        NamePattern.Exact(name) => ("exact", name),
+        NamePattern.Scope(scope) => ("scope", scope),
+    };
+    let record = DecodedPublicationRecord {
+        principal: contents.principal_id(), credential: contents.credential_id(),
+        authority: contents.authority_id(), scope_kind: scope_kind, scope: scope,
+        published_at: published_at, metadata: publication.metadata, archive: publication.archive,
+    };
+    match load_publication(storage, &record.metadata.name_spelling, &record.metadata.version_spelling)? {
+        Maybe.Some(existing) => return existing_receipt(storage, &record, &existing),
+        Maybe.None => {},
+    }
+    let bytes = match encode_publication_record(&record) {
+        Result.Ok(value) => value,
+        Result.Err(PublicationRecordError.TooLarge) => return Result.Err(PublicationCommitError.RecordTooLarge),
+        Result.Err(_) => return Result.Err(PublicationCommitError.CorruptRecord),
+    };
+    let key = publication_record_key(&record.metadata.name_spelling, &record.metadata.version_spelling);
+    match storage.commit(&key, &bytes) {
+        Result.Ok(RecordWrite.Created) => Result.Ok(receipt(&record, true)),
+        Result.Ok(RecordWrite.Existing) => Result.Ok(receipt(&record, false)),
+        Result.Err(PublicationStorageError.Conflict) => {
+            // A competing request won the atomic link. Compare its complete
+            // record and keep its timestamp/credential even for an exact retry.
+            match load_publication(storage, &record.metadata.name_spelling, &record.metadata.version_spelling)? {
+                Maybe.Some(existing) => existing_receipt(storage, &record, &existing),
+                Maybe.None => Result.Err(PublicationCommitError.CorruptRecord),
+            }
+        },
+        Result.Err(error) => Result.Err(PublicationCommitError.Storage(error)),
+    }
+}
+
+implement PublicationReceipt {
+    public fn status_code(&self) -> Int { if self.created { 201 } else { 200 } }
+
+    public fn response(&self) -> Response {
+        let name = stringify(&JsonValue.JsonString(self.name.clone()));
+        let version = stringify(&JsonValue.JsonString(self.version.clone()));
+        let checksum = stringify(&JsonValue.JsonString(self.checksum.clone()));
+        let json = "{\"name\":" + name + ",\"version\":" + version + ",\"checksum\":" + checksum + "}";
+        let mut body: List<Byte> = List.with_capacity(json.len());
+        for byte in json.bytes() { body.push(byte); }
+        Response.new(StatusCode.new(self.status_code()))
+            .header("content-type", "application/json").body(body)
+    }
+}
+
+implement PublicationCommitError {
+    public fn status_code(&self) -> Int {
+        match self {
+            PublicationCommitError.Admission(error) => error.status_code(),
+            PublicationCommitError.Conflict => 409,
+            PublicationCommitError.RecordTooLarge => 413,
+            _ => 500,
+        }
+    }
+
+    public fn response(&self) -> Response {
+        let mut body: List<Byte> = List.new();
+        for byte in "publication was not acknowledged".bytes() { body.push(byte); }
+        Response.new(StatusCode.new(self.status_code()))
+            .header("content-type", "text/plain; charset=utf-8").body(body)
+    }
+}

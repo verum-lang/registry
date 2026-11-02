@@ -1,0 +1,9 @@
+// T1722 negative: the old borrowed attribution method is not available.
+module verum_registry.tests.publication_contents_removed_attribution;
+mount verum_registry.node.publication_auth.PublisherAttribution;
+mount verum_registry.node.publication_prepare.PreparedContents;
+
+fn borrowed_attribution(contents: &PreparedContents) -> &PublisherAttribution {
+    contents.attribution()
+}
+fn main() {}

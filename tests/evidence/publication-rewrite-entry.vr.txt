@@ -1,0 +1,93 @@
+// T1632 baseline control for the original publish(cache, slot, request) API.
+// Correct behavior must refuse the third request after accepting both versions.
+// This fixture uses the current placeholder evidence model, not real signatures.
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.main;
+
+mount verum_registry.node.ambient.{
+    Clock, ConfiguredNode, FrozenClock, NodeIdentity, StatedLink, Uplink,
+};
+mount verum_registry.node.cache.{Cache};
+mount verum_registry.node.publish.{
+    PublishError, PublishRequest, PublishSlot, Published, publish,
+};
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern, PackageName};
+mount verum_registry.protocol.evidence.{
+    Digest, InclusionProof, Manifest, SignatureBundle, digest_of,
+};
+
+fn identity() -> ConfiguredNode {
+    let mut scopes: List<NamePattern> = List.new();
+    scopes.push(NamePattern.Scope("@acme"));
+    let mut authorities: List<Authority> = List.new();
+    authorities.push(Authority {
+        id: "local",
+        role: AuthorityRole.Local,
+        owns: scopes,
+    });
+    ConfiguredNode { log: "test-log", owns: authorities }
+}
+
+fn submit(cache: &mut Cache, version: Text, artefact: Text)
+    -> Result<Published, PublishError> using [Clock, NodeIdentity, Uplink]
+{
+    let manifest = Manifest {
+        name: PackageName("@acme/tool"),
+        version: version,
+        artefact: Digest(artefact),
+        published_at: 42,
+    };
+    let digest = digest_of(&manifest);
+    let request = PublishRequest {
+        manifest: manifest,
+        signature: SignatureBundle {
+            manifest_digest: digest.clone(),
+            signer: "local",
+        },
+        proof: InclusionProof {
+            manifest_digest: digest,
+            log_id: "test-log",
+            tree_size: 1,
+        },
+        as_authority: "local",
+    };
+    let slot = PublishSlot { for_authority: "local" };
+    publish(cache, slot, &request)
+}
+
+fn main() {
+    provide Clock = FrozenClock { at: 99 };
+    provide NodeIdentity = identity();
+    provide Uplink = StatedLink { up: true };
+    let mut cache = Cache.empty();
+
+    assert(submit(&mut cache, "1.0.0", "blob-v1") is Ok(Accepted(_)), "first version must be accepted");
+    print("publication_rewrite: v1 accepted");
+    assert(submit(&mut cache, "2.0.0", "blob-v2") is Ok(Accepted(_)), "second version must be accepted");
+    print("publication_rewrite: v2 accepted");
+
+    let refused = match submit(&mut cache, "1.0.0", "rewritten") {
+        Result.Err(PublishError.VersionAlreadyPublished(version)) => {
+            print(f"publication_rewrite: rewrite of {version} refused");
+            version == "1.0.0"
+        }
+        Result.Ok(Published.Accepted(accepted)) => {
+            print(f"publication_rewrite: rewrite accepted as {accepted.manifest.artefact.0}");
+            false
+        }
+        Result.Ok(Published.AlreadyIdentical(_)) => {
+            print("publication_rewrite: rewrite incorrectly reported identical");
+            false
+        }
+        Result.Err(_) => {
+            print("publication_rewrite: unrelated refusal");
+            false
+        }
+    };
+    assert(refused, "a newer version must not permit rewriting an older release");
+    print("publication_rewrite: passed");
+}

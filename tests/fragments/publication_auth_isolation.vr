@@ -1,0 +1,44 @@
+// T1636 test fragment. Append to the exact publication_auth module only for
+// the separately identified isolation component. No production function is
+// replaced and no helper is exposed by the shipped module.
+public fn publication_auth_isolation_control() {
+    let owners: List<Authority> = [Authority {
+        id: "local", role: AuthorityRole.Local, owns: [NamePattern.Exact("widget"), NamePattern.Scope("@acme")],
+    }];
+    let source = """{"version":1,"principals":[{"id":"alice","grants":[{"authority":"local","names":[{"exact":"widget"},{"scope":"@acme"}]}]}],"credentials":[{"id":"active","principal":"alice","token_sha256":"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee","active":true}]}""";
+    let token = "vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    let mut store = match decode_credentials(&source, &owners) {
+        Result.Ok(value) => value, _ => panic("isolation fixture config"),
+    };
+    let mut publisher = match authenticate(&store, &token) {
+        Result.Ok(value) => value, _ => panic("isolation fixture authentication"),
+    };
+    // Each wrapper, grant record and nested list is a distinct snapshot.
+    store.principals[0].id.value = "changed-store-principal";
+    store.credentials[0].id.value = "changed-store-credential";
+    store.principals[0].grants[0].authority.value = "changed-store-authority";
+    store.principals[0].grants[0].names[0] = NamePattern.Exact("changed-store-name");
+    store.principals[0].grants[0].names.push(NamePattern.Scope("@forged"));
+    store.principals[0].grants.push(PublicationGrant {
+        authority: AuthorityId { value: "added-store-authority" }, names: List.new(),
+    });
+    assert_eq(publisher.principal.value, "alice");
+    assert_eq(publisher.credential.value, "active");
+    assert_eq(publisher.grants.len(), 1);
+    assert_eq(publisher.grants[0].authority.value, "local");
+    assert_eq(publisher.grants[0].names.len(), 2);
+    assert(same_pattern(&publisher.grants[0].names[0], &NamePattern.Exact("widget")));
+    let attribution = match authorize(publisher, &PackageName("widget"), &owners) {
+        Result.Ok(value) => value, _ => panic("store edits changed retained publisher scope"),
+    };
+    // A caller retaining the original non-affine publisher cannot mutate the
+    // attribution returned by the consuming-by-value scope operation.
+    publisher.principal.value = "changed-publisher-principal";
+    publisher.credential.value = "changed-publisher-credential";
+    publisher.grants[0].authority.value = "changed-publisher-authority";
+    publisher.grants[0].names[0] = NamePattern.Exact("changed-publisher-name");
+    assert_eq(attribution.principal_id(), "alice");
+    assert_eq(attribution.credential_id(), "active");
+    assert_eq(attribution.authority_id(), "local");
+    assert(same_pattern(&attribution.scope_snapshot(), &NamePattern.Exact("widget")));
+}

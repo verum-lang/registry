@@ -1,0 +1,270 @@
+// Spec: Cog Publication Protocol v1 — source metadata schema.
+module verum_registry.protocol.publication_metadata;
+
+mount core.encoding.json.{JsonValue, JsonError, parse_strict};
+mount verum_registry.protocol.publication.{
+    EnvelopeError, PublicationLimits, decode_publication_envelope,
+    publication_metadata_limit,
+};
+
+/// A schema-decoded dependency, retaining its publisher-supplied form.
+/// Version spellings still require semantic requirement validation.
+public type DecodedDependency is
+    | Requirement(Text)
+    | Detailed(DecodedDependencyOptions);
+
+public type DecodedDependencyOptions is {
+    public version_spelling: Text,
+    public features: Maybe<List<Text>>,
+    public optional: Maybe<Bool>,
+    public default_features: Maybe<Bool>,
+};
+
+/// Typed wire data, not an admitted publication. Name, exact version and
+/// checksum spellings must become validated domain values during admission.
+/// Source text confers no authority, timestamp, signature or proof status.
+public type DecodedSourceMetadata is {
+    public name_spelling: Text,
+    public version_spelling: Text,
+    public description: Maybe<Text>,
+    public authors: List<Text>,
+    public license: Maybe<Text>,
+    public repository: Maybe<Text>,
+    public homepage: Maybe<Text>,
+    public keywords: List<Text>,
+    public categories: List<Text>,
+    public readme: Maybe<Text>,
+    public dependencies: Map<Text, DecodedDependency>,
+    public features: Map<Text, List<Text>>,
+    public checksum_spelling: Text,
+};
+
+/// The next admission stage receives decoded source metadata and exact bytes.
+/// No catalog or storage mutation has occurred, and no capability is minted.
+public type DecodedPublication is {
+    public metadata: DecodedSourceMetadata,
+    public archive: List<Byte>,
+};
+
+public type MetadataError is
+    | Syntax(JsonError)
+    | MissingField(Text)
+    | UnknownField(Text)
+    | WrongType(Text, Text);
+
+public type PublicationDecodeError is
+    | Envelope(EnvelopeError)
+    | Metadata(MetadataError);
+
+fn known_source_field(key: &Text) -> Bool {
+    key == "name" || key == "version" || key == "description"
+        || key == "authors" || key == "license" || key == "repository"
+        || key == "homepage" || key == "keywords" || key == "categories"
+        || key == "readme" || key == "dependencies" || key == "features"
+        || key == "checksum"
+}
+
+fn required(
+    fields: &Map<Text, JsonValue>, key: &Text, path: &Text,
+) -> Result<JsonValue, MetadataError> {
+    match fields.get(key) {
+        Maybe.Some(value) => Result.Ok(value),
+        Maybe.None => Result.Err(MetadataError.MissingField(path.clone())),
+    }
+}
+
+fn text_value(value: &JsonValue, path: &Text) -> Result<Text, MetadataError> {
+    match value.as_string() {
+        Maybe.Some(text) => Result.Ok(text),
+        Maybe.None => Result.Err(MetadataError.WrongType(path.clone(), "string")),
+    }
+}
+
+fn nullable_text(value: &JsonValue, path: &Text) -> Result<Maybe<Text>, MetadataError> {
+    if value.is_null() {
+        return Result.Ok(Maybe.None);
+    }
+    match value.as_string() {
+        Maybe.Some(text) => Result.Ok(Maybe.Some(text)),
+        Maybe.None => Result.Err(MetadataError.WrongType(path.clone(), "string or null")),
+    }
+}
+
+fn text_list(value: &JsonValue, path: &Text) -> Result<List<Text>, MetadataError> {
+    let values = match value.as_array() {
+        Maybe.Some(values) => values,
+        Maybe.None => return Result.Err(MetadataError.WrongType(path.clone(), "array of strings")),
+    };
+    let mut result: List<Text> = List.with_capacity(values.len());
+    let mut index = 0;
+    while index < values.len() {
+        let item = &values[index];
+        let text = match item.as_string() {
+            Maybe.Some(text) => text,
+            // The path can contain long publisher-supplied keys. Construct
+            // its indexed form only when this element must be refused.
+            Maybe.None => return Result.Err(MetadataError.WrongType(f"{path}[{index}]", "string")),
+        };
+        result.push(text);
+        index = index + 1;
+    }
+    Result.Ok(result)
+}
+
+fn required_text(
+    fields: &Map<Text, JsonValue>, key: &Text, path: &Text,
+) -> Result<Text, MetadataError> {
+    let value = required(fields, key, path)?;
+    text_value(&value, path)
+}
+
+fn required_nullable_text(
+    fields: &Map<Text, JsonValue>, key: &Text,
+) -> Result<Maybe<Text>, MetadataError> {
+    let value = required(fields, key, key)?;
+    nullable_text(&value, key)
+}
+
+fn required_text_list(
+    fields: &Map<Text, JsonValue>, key: &Text,
+) -> Result<List<Text>, MetadataError> {
+    let value = required(fields, key, key)?;
+    text_list(&value, key)
+}
+
+fn optional_bool(
+    fields: &Map<Text, JsonValue>, key: &Text, path: &Text,
+) -> Result<Maybe<Bool>, MetadataError> {
+    match fields.get(key) {
+        Maybe.None => Result.Ok(Maybe.None),
+        Maybe.Some(value) => {
+            if value.is_null() {
+                return Result.Ok(Maybe.None);
+            }
+            match value.as_bool() {
+                Maybe.Some(flag) => Result.Ok(Maybe.Some(flag)),
+                Maybe.None => Result.Err(MetadataError.WrongType(path.clone(), "boolean or null")),
+            }
+        },
+    }
+}
+
+fn optional_features(
+    fields: &Map<Text, JsonValue>, path: &Text,
+) -> Result<Maybe<List<Text>>, MetadataError> {
+    match fields.get(&"features") {
+        Maybe.None => Result.Ok(Maybe.None),
+        Maybe.Some(value) => {
+            if value.is_null() {
+                return Result.Ok(Maybe.None);
+            }
+            Result.Ok(Maybe.Some(text_list(&value, path)?))
+        },
+    }
+}
+
+fn dependency(value: &JsonValue, path: &Text) -> Result<DecodedDependency, MetadataError> {
+    if let Maybe.Some(version) = value.as_string() {
+        return Result.Ok(DecodedDependency.Requirement(version));
+    }
+    let fields = match value.as_object() {
+        Maybe.Some(fields) => fields,
+        Maybe.None => return Result.Err(MetadataError.WrongType(path.clone(), "string or object")),
+    };
+    for (key, _) in fields.iter() {
+        if key != "version" && key != "features"
+            && key != "optional" && key != "default_features" {
+            return Result.Err(MetadataError.UnknownField(f"{path}.{key}"));
+        }
+    }
+    // Missing or null versions are shape errors. A present string is not yet
+    // a valid SemVer requirement; admission must use the shared authority.
+    let version = required_text(fields, &"version", &f"{path}.version")?;
+    let features = optional_features(fields, &f"{path}.features")?;
+    let optional = optional_bool(fields, &"optional", &f"{path}.optional")?;
+    let default_features = optional_bool(fields, &"default_features", &f"{path}.default_features")?;
+    Result.Ok(DecodedDependency.Detailed(DecodedDependencyOptions {
+        version_spelling: version,
+        features: features,
+        optional: optional,
+        default_features: default_features,
+    }))
+}
+
+fn dependencies(value: &JsonValue) -> Result<Map<Text, DecodedDependency>, MetadataError> {
+    let fields = match value.as_object() {
+        Maybe.Some(fields) => fields,
+        Maybe.None => return Result.Err(MetadataError.WrongType("dependencies", "object")),
+    };
+    let mut result: Map<Text, DecodedDependency> = Map.new();
+    for (name, specification) in fields.iter() {
+        result.insert(name.clone(), dependency(specification, &f"dependencies.{name}")?);
+    }
+    Result.Ok(result)
+}
+
+fn features(value: &JsonValue) -> Result<Map<Text, List<Text>>, MetadataError> {
+    let fields = match value.as_object() {
+        Maybe.Some(fields) => fields,
+        Maybe.None => return Result.Err(MetadataError.WrongType("features", "object")),
+    };
+    let mut result: Map<Text, List<Text>> = Map.new();
+    for (name, members) in fields.iter() {
+        result.insert(name.clone(), text_list(members, &f"features.{name}")?);
+    }
+    Result.Ok(result)
+}
+
+/// Decode the complete bounded JSON document before projecting its schema.
+/// Duplicate-key errors retain decoded-key and source-position evidence.
+public fn decode_source_metadata(
+    source: &Text, max_bytes: Int,
+) -> Result<DecodedSourceMetadata, MetadataError> {
+    let document = match parse_strict(source, max_bytes) {
+        Result.Ok(value) => value,
+        Result.Err(error) => return Result.Err(MetadataError.Syntax(error)),
+    };
+    let fields = match document.as_object() {
+        Maybe.Some(fields) => fields,
+        Maybe.None => return Result.Err(MetadataError.WrongType("$", "object")),
+    };
+    for (key, _) in fields.iter() {
+        if !known_source_field(key) {
+            return Result.Err(MetadataError.UnknownField(key.clone()));
+        }
+    }
+    let dependency_value = required(fields, &"dependencies", &"dependencies")?;
+    let feature_value = required(fields, &"features", &"features")?;
+    Result.Ok(DecodedSourceMetadata {
+        name_spelling: required_text(fields, &"name", &"name")?,
+        version_spelling: required_text(fields, &"version", &"version")?,
+        description: required_nullable_text(fields, &"description")?,
+        authors: required_text_list(fields, &"authors")?,
+        license: required_nullable_text(fields, &"license")?,
+        repository: required_nullable_text(fields, &"repository")?,
+        homepage: required_nullable_text(fields, &"homepage")?,
+        keywords: required_text_list(fields, &"keywords")?,
+        categories: required_text_list(fields, &"categories")?,
+        readme: required_nullable_text(fields, &"readme")?,
+        dependencies: dependencies(&dependency_value)?,
+        features: features(&feature_value)?,
+        checksum_spelling: required_text(fields, &"checksum", &"checksum")?,
+    })
+}
+
+/// Compose the production framing and schema stages for the v1 body.
+/// Authentication, semantic metadata validation, digest/archive validation and
+/// a durable commit are still required before a publication can be admitted.
+public fn decode_publication(
+    body: &List<Byte>, limits: &PublicationLimits,
+) -> Result<DecodedPublication, PublicationDecodeError> {
+    let envelope = match decode_publication_envelope(body, limits) {
+        Result.Ok(value) => value,
+        Result.Err(error) => return Result.Err(PublicationDecodeError.Envelope(error)),
+    };
+    let metadata = match decode_source_metadata(&envelope.metadata, publication_metadata_limit(limits)) {
+        Result.Ok(value) => value,
+        Result.Err(error) => return Result.Err(PublicationDecodeError.Metadata(error)),
+    };
+    Result.Ok(DecodedPublication { metadata: metadata, archive: envelope.archive })
+}

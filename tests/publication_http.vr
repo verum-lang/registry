@@ -1,0 +1,10 @@
+module verum_registry.tests.publication_http;
+
+mount verum_registry.node.publication_start.run_publication_node;
+
+async fn main() {
+    match run_publication_node().await {
+        Result.Ok(()) => print("publication listener stopped"),
+        Result.Err(_) => panic("publication listener failed"),
+    }
+}

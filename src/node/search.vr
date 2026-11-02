@@ -1,0 +1,136 @@
+// =============================================================================
+// verum_registry.node.search — one question, three answers
+// =============================================================================
+// Spec: registry-federation-protocol §5 (discovery)
+//
+// The policy layer over `protocol/query`. The rules say what a query
+// MEANS; this says how a node runs one against what it holds, and what
+// it is allowed to say about the result.
+//
+// THE DEMONSTRATION, and it is the reason this module is worth reading:
+// the three functions below share ONE definition of the filter chain.
+// Each consumes it into a different accumulator — a list, a count, a
+// boolean — and none of them restates the query. That is not a
+// convention anyone has to keep; it is what `Transducer`'s rank-2
+// `fn<R>(Reducer<B, R>) -> Reducer<A, R>` makes possible and a rank-1
+// signature would forbid.
+//
+// The alternative is three filter chains that agree today. A count that
+// disagrees with the list it counts is a bug nobody sees until it is
+// someone else's incident, and the language can rule it out at the type
+// level rather than in review.
+//
+// A LIMITATION THE LANGUAGE HAD, and the record of it is worth keeping
+// because of how it was found. The project-wide `verum check` refused
+// these three calls with
+//
+//     expected 'Item<ListIter<Verified>>', found 'Verified'
+//
+// while the same file checked clean on its own and the programme ran and
+// printed three agreeing answers. `Item<ListIter<Verified>>` IS
+// `Verified`, so the checker was refusing working code — in the mode
+// that gates everything.
+//
+// The natural spelling stayed instead of being worked around, and this
+// file became the reproduction: a plain `ListIter`, no adapter chain,
+// three functions differing only in their accumulator, which is smaller
+// than anything the projection-normalisation task had. The root turned
+// out not to be a missing reduction at all — the resolver was called and
+// answered correctly in the same run that reported the mismatch, and the
+// comparison simply did not ask it. Fixed at the comparison; these three
+// functions check clean now.
+//
+// The rule this leaves behind: when a programme refuses to work around
+// the language, the workaround it did not write is the reproduction
+// somebody else needed.
+//
+// WHAT THIS DOES NOT DO, deliberately: it never contacts an upstream.
+// Search answers from what this node HOLDS, so its answer is a fact
+// about this node and not a claim about the world. `cache.lookup` is
+// where reachability enters, and it is a different question with a
+// different failure mode.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.node.search;
+
+mount verum_registry.protocol.evidence.{Verified};
+mount verum_registry.protocol.query.{Clause, Query, selector};
+mount verum_registry.node.cache.{Cache};
+
+// -----------------------------------------------------------------------------
+// What a node holds, as a sequence
+// -----------------------------------------------------------------------------
+
+/// Everything this node holds, in one list.
+///
+/// The cache is indexed by NAME because a lookup by coordinate must be
+/// one probe; a search is the other shape, and it walks. Both are right
+/// for their question, and pretending one structure serves both is how
+/// a registry ends up scanning for a lookup or indexing for a scan.
+///
+/// A second index — by authority, by role — belongs here when a query
+/// shape earns it, and it earns it when a measurement says so rather
+/// than when someone anticipates it.
+public fn held(cache: &Cache) -> List<Verified> {
+    let mut out: List<Verified> = List.new();
+    for entry in cache.all().iter() {
+        out.push(entry.verified());
+    }
+    out
+}
+
+// -----------------------------------------------------------------------------
+// One selector, three consumers
+// -----------------------------------------------------------------------------
+
+/// Every coordinate the query admits.
+///
+/// What a resolver asks for.
+public fn find(cache: &Cache, q: &Query) -> List<Verified> {
+    let all = held(cache);
+    all.iter().transduce(selector(q)).collect()
+}
+
+/// How many the query admits.
+///
+/// What a health check asks for, and it does not build the list. The
+/// same selector, a counting accumulator — no second filter chain, so
+/// this figure cannot drift from `find`'s length.
+public fn count(cache: &Cache, q: &Query) -> Int{it >= 0} {
+    let all = held(cache);
+    all.iter().transduce(selector(q)).fold(0, |n, _v| n + 1)
+}
+
+/// Whether the query admits anything at all.
+///
+/// What an availability probe asks. Stops at the first match — the
+/// accumulator is a boolean and the traversal has nothing left to learn
+/// once it is true.
+public pure fn any(cache: &Cache, q: &Query) -> Bool {
+    let all = held(cache);
+    all.iter().transduce(selector(q)).fold(false, |seen, _v| true)
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+
+/// The count agrees with the list it counts.
+///
+/// This is the property the shared selector exists to guarantee, so it
+/// is worth stating as a claim rather than trusting to the fact that
+/// both functions were written on the same afternoon. If someone later
+/// "optimises" `count` into its own filter chain, this is what stops
+/// compiling.
+public pure fn count_agrees_with_find(cache: &Cache, q: &Query) -> Bool {
+    count(cache, q) == find(cache, q).len()
+}
+
+/// And `any` agrees with both.
+public pure fn any_agrees_with_count(cache: &Cache, q: &Query) -> Bool {
+    any(cache, q) == (count(cache, q) > 0)
+}

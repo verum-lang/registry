@@ -1,0 +1,331 @@
+{
+  "task": "T1635",
+  "language_commit": "49559a042a30f65c524c753d2f13c9f2838f9818",
+  "registry_candidate": "c02238261fee7cf7a0885886e5e3cf9928e7a73d",
+  "registry_main_when_recorded": "2f33df8bfada325ea6fbbc36b7150bf503d46785",
+  "language_evidence_commit": "70f52bd8c",
+  "cli_sha256": "e29bc1de67057c286cc845e45371167c04bb8ddfe07e0ad24db15bd0e6480cab",
+  "earlier_whole_project_receipt": "../project-check-stage20.json",
+  "whole_project_receipt": "whole-project/result.json",
+  "unchanged_earlier_compilation_inputs": {
+    "mod.vr": "9203950bb3c5312b5a0133a9f24eac9f7e2af155c41d753533ad0bbdec744f3a",
+    "src/main.vr": "55ab8786027237991f7640348afe2bc7f45b4ae7557d97461345822798a8a898",
+    "src/node/ambient.vr": "8ff91bb7058c78eed68cfa1184e02ca561795ab402c55cf7110c67b407c74351",
+    "src/node/cache.vr": "cc5cc7f55e22c087ef7b2390315ae7a555286861e8c90870f1f2c305ef36061e",
+    "src/node/consistency.vr": "c291453cbb116e9a55ffdb09aaa572360873e3973472f178a11cdd1e734e897a",
+    "src/node/durable.vr": "901f398b8e3c4129982f75bddfb528415b12e26c1cd1673dc8667ef71cf9e5cb",
+    "src/node/handshake.vr": "5b5125d407aac14399bba58ced3d2796a11c852abd4923a960e56f871834511f",
+    "src/node/ingest.vr": "cd277e0011bd67e8ece8de97b8392bd860caa722fd5fdf2f158a576cd6b47c79",
+    "src/node/mod.vr": "0dd278c452b14562a24238bc3056b578101daed3741c96918c4235ababf5287c",
+    "src/node/publish.vr": "69b48b22fd01d45332b426aeb2c2219f3f6f3ee528fbdb88d95358d1bbee314a",
+    "src/node/resolution.vr": "3b7455eb090a1c898949c4884d07d6078ecb3739efb00d795a36a543257bda22",
+    "src/node/retention.vr": "c1b1c36610f21e3df61e9b15168ec431569856060cada6263eafc9d01c6e3d56",
+    "src/node/search.vr": "0c28815d21ddee295a391df112b8e559ecd7c8cbf7d5d6773abe4b4398179639",
+    "src/node/serve.vr": "65517889504e1833105243e937b078b7ca5940b27150efb7931d14874d82042f",
+    "src/node/slice.vr": "620bb830718004bdba14c472a0828fb1ac9e99f5fe90435856e879f29f2f3f67",
+    "src/node/store.vr": "e002192839392fbd0e34835f04fca56c74547531c71fd8d5b6318db0e603531c",
+    "src/protocol/authority.vr": "315fc641b19910be3fbc0add4b666771052f8b42af16e8a98e38fac002c5e3f6",
+    "src/protocol/evidence.vr": "e0418e0692a78052d52a877ccb2c465878ea2f3e7fb96eb85343362067da6a1e",
+    "src/protocol/hash.vr": "44d95118c6c234d06e33ca08e7f5d800e6b6031b90d693652854fd9cff91a434",
+    "src/protocol/mod.vr": "5962e5eb1af98da707a05b2225fbee2973045ccfd1f0cc5ba456ff0afd095d53",
+    "src/protocol/publication.vr": "a76e24d9ef9086bd81d665d3113f60e8949bdac6b6b5bb6be2087781b5047516",
+    "src/protocol/publication_metadata.vr": "558a1a0de43bebdca1f5f2bc718786feb3a32e8a45a212f3d4001dffc0b88148",
+    "src/protocol/query.vr": "f3705e4e2ec8db2bd3dab62b875c72f532c31e67a029cdd63be337fa2124198d",
+    "src/protocol/revocation.vr": "3d3e41e544d523104b799688b5c5371af207cccaf1e9e9e771140daf98ddb9f6",
+    "src/protocol/source.vr": "4fe2b043a29629d95bdc0b150e43cbf1d461e574867d3928621e190bd870a3cb",
+    "src/protocol/version.vr": "4d5ab56b37fa9de33945754df8441b6ce66b536719b13233d3655ff0b6276d08",
+    "src/protocol/wire.vr": "2332becc5dcdb5f7308c17e3daae721916f4a23e948d0e5b69c931a3ee8d3d0c",
+    "tests/language/task_handle_declared.vr": "b9723a5ee8689192bf7d1386bfe2e1b90cab1461f584e34908dee18f53f0104d",
+    "tests/language/task_handle_inferred.vr": "ff1007749604888bd0cdc99f35e4f11ce91a6fbf26fe6cd0ac0dd89e6bdfec3e",
+    "tests/language/task_handle_record.vr": "39c3635545014eb0823027c372557f85a1edc3ad1c2394698501501bd4922891",
+    "tests/publication_envelope.vr": "f7c2f32338678405134f9e5bc1bbedda78e64093d6924db7ec8c8234b77e85d5",
+    "tests/publication_metadata.vr": "da97742d7844cd9de7da326ef352276c8b686079ca824f6793c116c8a241efa6",
+    "verum.toml": "714dc553a828ccefbefb6f5a7d011924376172a820a58955cbb15fe36ba33d1f"
+  },
+  "added_compilation_inputs": {
+    "src/node/publication_auth.vr": "f070dbe89ec702c74057796cb8672274f14419689bcf0d0149c0e669baabd22f",
+    "src/node/publication_credentials_file.vr": "c80b2e6c598951656e6143d7e0572a7b40fd522e86ca046543e371fd51a0005a",
+    "src/node/publication_prepare.vr": "07a0ee43a30a46c34fef7bf3b2778bd87fa46f943e34940d04d6d1e5ca163b0e",
+    "tests/design/publication-auth-types.vr": "e6653a6d76d121d32f6e4459654545e8792341f6feba32cd163f5a87324c83c1",
+    "tests/fragments/publication_auth_isolation.vr": "373dd1061c52aff07f53bca3682c0da09c70c2f19aa4877b703fd3cebd380638",
+    "tests/language/publication_auth_construct_store.vr": "f8e68bfa14d3dfa72ecd8384b298150145bcb31f6a58a30908564ec49cf3c06b",
+    "tests/language/publication_auth_private_store.vr": "56317ef4fca4529a7cb56f49a7fef130354fd83a95c321c0b6bfd3337116395a",
+    "tests/language/publication_prepare_affine_reuse.vr": "779663cdead5984df739a4d5806b8219b55125b25694a3230c4a262187168bca",
+    "tests/language/publication_prepare_construct.vr": "3a05b847a71afadf53881087ac2a0e7ea6583c3aae59b105f4672515cd06b347",
+    "tests/language/publication_prepare_consume.vr": "776c3626f16f5523cf1114509965ff0725cca4ed059ec7c7fd293d68164d4f3e",
+    "tests/language/publication_prepare_private_field.vr": "fb37be3da0652941d40422a9edb9a45abe716f61c62d9043a3b8d6dbccc07a64",
+    "tests/publication_auth.vr": "d2fbecbee875f470b0a1e4f4d36ce5174ab03b0f33a756d5ca74ade12a546117",
+    "tests/publication_auth_bounds.vr": "73f81cb413d405411eb2da0e65041e60456dfd0e2cc0800128f3f860b59e3c71",
+    "tests/publication_auth_isolation.vr": "c8208b329172a3f258f8a60b093b0cb6d18df2c72a6710cfddc388229291cdd7",
+    "tests/publication_credentials_file.vr": "0ecd529f6557837e4269a86bb637d94467379815e2d3668ae1337d1203e66733",
+    "tests/publication_prepare.vr": "4da6282bd5f2722190386d05c0b639332e387dbb6ca70086330968ae459e658b"
+  },
+  "changed_earlier_compilation_inputs": {},
+  "whole_project_errors": 2,
+  "whole_project_seconds": 349.31,
+  "remaining_whole_project_boundary": "T1681: slice spawn returns JoinHandle while pending expects Future; await result pattern disagrees.",
+  "candidate_not_integrated": true,
+  "cases": {
+    "prepare": {
+      "classification": "compile_failure: eight returned-public-method errors (T1711), plus one borrowed fixed-array versus List mismatch; no preparation runtime result",
+      "receipt": "prepare/result.json",
+      "elapsed_seconds": 86.56,
+      "input_retention": "Reconstructed byte-for-byte from pinned source and recorded assembly; all original receipt hashes match."
+    },
+    "credentials_file": {
+      "classification": "compile_failure: return-inferred PublisherAttribution.principal_id is missing (T1711); file-loading runtime not reached",
+      "receipt": "credentials_file/result.json",
+      "elapsed_seconds": 73.0,
+      "input_retention": "Reconstructed byte-for-byte from pinned source and recorded assembly; all original receipt hashes match."
+    },
+    "auth_bounds": {
+      "classification": "compile_failure: mounted core.text.builder.TextBuilder.new returns a foreign same-leaf owner (T1212); bound tests not reached",
+      "receipt": "auth_bounds/result.json",
+      "elapsed_seconds": 69.17,
+      "input_retention": "Reconstructed byte-for-byte from pinned source and recorded assembly; all original receipt hashes match."
+    },
+    "auth_isolation": {
+      "classification": "passed: exact private-state isolation fixture with an explicitly appended test helper; no external privacy conclusion",
+      "receipt": "auth_isolation/result.json",
+      "elapsed_seconds": 111.27,
+      "input_retention": "Reconstructed byte-for-byte from pinned source and recorded assembly; all original receipt hashes match."
+    },
+    "publication_prepare_consume": {
+      "classification": "accepted: one public consuming into_parts call checks",
+      "receipt": "type-boundaries/publication_prepare_consume/result.json",
+      "elapsed_seconds": 78.887,
+      "input_retention": "Original complete project snapshot."
+    },
+    "publication_auth_private_store": {
+      "classification": "incorrectly accepted: external private-field access or construction (T1713)",
+      "receipt": "type-boundaries/publication_auth_private_store/result.json",
+      "elapsed_seconds": 97.57,
+      "input_retention": "Original complete project snapshot."
+    },
+    "publication_auth_construct_store": {
+      "classification": "incorrectly accepted: external private-field access or construction (T1713)",
+      "receipt": "type-boundaries/publication_auth_construct_store/result.json",
+      "elapsed_seconds": 88.344,
+      "input_retention": "Original complete project snapshot."
+    },
+    "publication_prepare_construct": {
+      "classification": "incorrectly accepted: external private-field access or construction (T1713)",
+      "receipt": "type-boundaries/publication_prepare_construct/result.json",
+      "elapsed_seconds": 89.332,
+      "input_retention": "Original complete project snapshot."
+    },
+    "publication_prepare_private_field": {
+      "classification": "incorrectly accepted: external private-field access or construction (T1713)",
+      "receipt": "type-boundaries/publication_prepare_private_field/result.json",
+      "elapsed_seconds": 90.3,
+      "input_retention": "Original complete project snapshot."
+    },
+    "publication_prepare_affine_reuse": {
+      "classification": "required refusal: E310 uses move offset 237 and second-use offset 277; displayed excerpt highlights first use",
+      "receipt": "type-boundaries/publication_prepare_affine_reuse/result.json",
+      "elapsed_seconds": 89.073,
+      "input_retention": "Original complete project snapshot."
+    },
+    "auth": {
+      "classification": "passed: actual credential/configuration/SHA-256/authority/scope component",
+      "receipt": "auth/result.json"
+    }
+  },
+  "files": {
+    "build-manifest.json": {
+      "raw_sha256": "cc3119ce9094b199abb682796c2d0741057e24b1c19389daee264af4c921fd34",
+      "stored_sha256": "cc3119ce9094b199abb682796c2d0741057e24b1c19389daee264af4c921fd34",
+      "compressed": false
+    },
+    "whole-project/result.json": {
+      "raw_sha256": "cc8a83c8a9c2b20ea160fbbdcd6da9f4afcd946aa2a7c7afd3587466ecebd3cb",
+      "stored_sha256": "cc8a83c8a9c2b20ea160fbbdcd6da9f4afcd946aa2a7c7afd3587466ecebd3cb",
+      "compressed": false
+    },
+    "whole-project/stdout.log.gz": {
+      "raw_sha256": "6a3cf5192354f71615ac51034b3e97c20eda99643fcaf5bbe6d41ad59bd12167",
+      "stored_sha256": "7be736381a238897b1c50233ca4536ef7e2ac7b5ea6eaad9f4baace011d5ca60",
+      "compressed": true
+    },
+    "whole-project/stderr.log.gz": {
+      "raw_sha256": "8eea7997dd2a02688e26c74fc44faa306c4c4209253fcecb6b0af2062aec0a9b",
+      "stored_sha256": "5443b83f19282be210e81be099003d2f8a32d7cea8734bc5f598c3b7ac45311d",
+      "compressed": true
+    },
+    "auth/result.json": {
+      "raw_sha256": "ce2f0285eddb3c0f9c9a08ffe56f9b23e7ed51f8b20ad9cc70dcd3465392924e",
+      "stored_sha256": "ce2f0285eddb3c0f9c9a08ffe56f9b23e7ed51f8b20ad9cc70dcd3465392924e",
+      "compressed": false
+    },
+    "auth/stdout.log.gz": {
+      "raw_sha256": "35e6f1369090a198fd7e278f62fb3fc241425501f2e1c27ac959771397375887",
+      "stored_sha256": "9d94e710dd67793eac15441e35b5ad274da9044e91c9c910f66921195374fec5",
+      "compressed": true
+    },
+    "auth/stderr.log.gz": {
+      "raw_sha256": "9df14f41d774cedd9e8c62d1376e6b2ccf950ab196466d5e8d23f7b3316d38cf",
+      "stored_sha256": "f3546fae5fa42d308c6a58a690b11a1a682b6d0f67d4e9cda679b43111236f6f",
+      "compressed": true
+    },
+    "prepare/result.json": {
+      "raw_sha256": "9ada90e43e77c4f9bb290adf60ec30a6fb618786f93fe10ccb678e216d246169",
+      "stored_sha256": "9ada90e43e77c4f9bb290adf60ec30a6fb618786f93fe10ccb678e216d246169",
+      "compressed": false
+    },
+    "prepare/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "prepare/stderr.log.gz": {
+      "raw_sha256": "a6e1beb74698d90b3d743b536e1d9f0677e0a01fb41dbf1c75c5555d0062519d",
+      "stored_sha256": "9caf5bed7ed06079077bd3386cfe77ddaa85292fb22a8c56ce4963b75f3146e7",
+      "compressed": true
+    },
+    "credentials_file/result.json": {
+      "raw_sha256": "5182dffd8f9caf8fbb2015e2c7f6f6c474d760d5e35f5dbe35c833df9ec84677",
+      "stored_sha256": "5182dffd8f9caf8fbb2015e2c7f6f6c474d760d5e35f5dbe35c833df9ec84677",
+      "compressed": false
+    },
+    "credentials_file/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "credentials_file/stderr.log.gz": {
+      "raw_sha256": "da1ff9d32b5a5a510f2ce5b5ef2fe1cdc66c01dc048d9b1412313ce4b2c17380",
+      "stored_sha256": "23b4350a35ad247ba63dec53f3a2511e87eaed659dbba2e97435b11d5a9a6a3f",
+      "compressed": true
+    },
+    "auth_bounds/result.json": {
+      "raw_sha256": "cd0ec2f45acf03bdf301a9950b185dd02e68ae382593c00a12f4e0d2b5cd74ca",
+      "stored_sha256": "cd0ec2f45acf03bdf301a9950b185dd02e68ae382593c00a12f4e0d2b5cd74ca",
+      "compressed": false
+    },
+    "auth_bounds/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "auth_bounds/stderr.log.gz": {
+      "raw_sha256": "224b2abc462246a06a935a82034133d938c52cd8164511bc3060ecd9981b13f7",
+      "stored_sha256": "b8b01a902d64760402b61620391b07fd534c65b69f6dc219514c10ac7bacfd14",
+      "compressed": true
+    },
+    "auth_isolation/result.json": {
+      "raw_sha256": "4658bdf3b6e30212ad8673113aebec25802833df3a1b878df2c3f2065c5bd31e",
+      "stored_sha256": "4658bdf3b6e30212ad8673113aebec25802833df3a1b878df2c3f2065c5bd31e",
+      "compressed": false
+    },
+    "auth_isolation/stdout.log.gz": {
+      "raw_sha256": "27b4917ca450b045a163b83c448bbe66a8072d092e25e1ca9aa4db9ba136338d",
+      "stored_sha256": "6dbacee3735423feb55ac2e59b090f6163459a2822baae436839379bc510fb1b",
+      "compressed": true
+    },
+    "auth_isolation/stderr.log.gz": {
+      "raw_sha256": "e60cef576111388815a0cc56800bd511192c68a41fb44fd333e0cd12e945166d",
+      "stored_sha256": "1c1a20480fc1ef84fc8a91999c1ec4c6219be960ccb61b05b9bc74a0742acea9",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_consume/result.json": {
+      "raw_sha256": "209336744ec6ef5f477aab74a137dd26b20fc55a08eca28a57dc28dac2338359",
+      "stored_sha256": "209336744ec6ef5f477aab74a137dd26b20fc55a08eca28a57dc28dac2338359",
+      "compressed": false
+    },
+    "type-boundaries/publication_prepare_consume/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_consume/stderr.log.gz": {
+      "raw_sha256": "883590bc671c488b9ec3c4b24083511fc5e6fc32797da78b264d2051036a8454",
+      "stored_sha256": "8e2052dc916f782ba2a7c3658b26706f0dc85a077e0588853fe75cdf5725b23c",
+      "compressed": true
+    },
+    "type-boundaries/publication_auth_private_store/result.json": {
+      "raw_sha256": "ae60ec62a824fa12d65669ba6a723c227370d873f8fc4b83a0838022409e90b9",
+      "stored_sha256": "ae60ec62a824fa12d65669ba6a723c227370d873f8fc4b83a0838022409e90b9",
+      "compressed": false
+    },
+    "type-boundaries/publication_auth_private_store/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "type-boundaries/publication_auth_private_store/stderr.log.gz": {
+      "raw_sha256": "36f8bcbc932dd4efc81d388d968ebad6a7976bb5d26a6a1b3c70041b0498e07b",
+      "stored_sha256": "187d98805b8ccf8e0cce041ff3e678886c299c75ae1a8935bef28215fa5729a3",
+      "compressed": true
+    },
+    "type-boundaries/publication_auth_construct_store/result.json": {
+      "raw_sha256": "53d0b95f99a5e0f7bbe0358fbcfdbb05cf5d729fd822f46822bfbbf4cf395016",
+      "stored_sha256": "53d0b95f99a5e0f7bbe0358fbcfdbb05cf5d729fd822f46822bfbbf4cf395016",
+      "compressed": false
+    },
+    "type-boundaries/publication_auth_construct_store/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "type-boundaries/publication_auth_construct_store/stderr.log.gz": {
+      "raw_sha256": "122621a62501324e2770573c8f6ea9e2edbed6b6ba1b5e73a85b93d3e2020a69",
+      "stored_sha256": "934c961f125119fd3ed557f34d09a3c3cad01115b8cf0f83cc36d6ff0a0ad0b3",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_construct/result.json": {
+      "raw_sha256": "54e447ca4d0916c18470a07d327239dc6005eb37fbce8f78a67e89e98c7cb078",
+      "stored_sha256": "54e447ca4d0916c18470a07d327239dc6005eb37fbce8f78a67e89e98c7cb078",
+      "compressed": false
+    },
+    "type-boundaries/publication_prepare_construct/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_construct/stderr.log.gz": {
+      "raw_sha256": "ac589900fb457e181214b683c89c8c33efe2859307f845f58c9ea067d021aebb",
+      "stored_sha256": "e6046a452cca592228a4b7ee5e20f6f76b3a38fcd17e6f673e5c9c2d431d5f89",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_private_field/result.json": {
+      "raw_sha256": "04b0e998e53a035f255ae5f734082163e53657a0aadc607117ee311c15a4057a",
+      "stored_sha256": "04b0e998e53a035f255ae5f734082163e53657a0aadc607117ee311c15a4057a",
+      "compressed": false
+    },
+    "type-boundaries/publication_prepare_private_field/stdout.log.gz": {
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stored_sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_private_field/stderr.log.gz": {
+      "raw_sha256": "6f32513c751362bf4fea567eb8d0dacaa372bd2ef092b4d8598469b3389703ad",
+      "stored_sha256": "56ecbf465316d77ee99dfef34e53a792a1c184603e6e7f60e9755cf8b41bc11e",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_affine_reuse/result.json": {
+      "raw_sha256": "8c0049bb2e1759a71fd83d4b86c2eb97789883238e016ac9a4f94ae7f4c9e447",
+      "stored_sha256": "8c0049bb2e1759a71fd83d4b86c2eb97789883238e016ac9a4f94ae7f4c9e447",
+      "compressed": false
+    },
+    "type-boundaries/publication_prepare_affine_reuse/stdout.log.gz": {
+      "raw_sha256": "6a3cf5192354f71615ac51034b3e97c20eda99643fcaf5bbe6d41ad59bd12167",
+      "stored_sha256": "7be736381a238897b1c50233ca4536ef7e2ac7b5ea6eaad9f4baace011d5ca60",
+      "compressed": true
+    },
+    "type-boundaries/publication_prepare_affine_reuse/stderr.log.gz": {
+      "raw_sha256": "0026905ddc6e7e3fe18516954df0ddbd18d88f543b0a0c91702b3696c30aa341",
+      "stored_sha256": "75b1246c3cc85eabcb207ceb79562d1a08e6ee86c460edb2acdd9d94c36981b0",
+      "compressed": true
+    },
+    "language-boundary-review.json": {
+      "raw_sha256": "95b579a204b4c1b6f8684e912d88c1f72ceddf8a52e8f772a5302c8a1bddf519",
+      "stored_sha256": "95b579a204b4c1b6f8684e912d88c1f72ceddf8a52e8f772a5302c8a1bddf519",
+      "compressed": false
+    }
+  },
+  "limits": [
+    "This checks the named candidate, not registry main. Three production authentication/preparation modules were added; all earlier compilation inputs are unchanged.",
+    "Compiler changes are cumulative. Error totals and elapsed times do not isolate a fix or establish a performance change.",
+    "No HTTP receive, durable publication, installation, deployed-service or AOT acceptance."
+  ]
+}

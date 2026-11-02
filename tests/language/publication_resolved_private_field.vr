@@ -1,0 +1,6 @@
+// T1722 negative: callers read attribution only through the result's API.
+module verum_registry.tests.publication_resolved_private_field;
+mount verum_registry.protocol.authority.Resolved;
+
+fn selected_authority(resolved: &Resolved) -> Text { resolved.authority_id }
+fn main() {}

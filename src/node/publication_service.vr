@@ -1,0 +1,142 @@
+module verum_registry.node.publication_service;
+
+mount core.net.http.{Method, Response, StatusCode};
+mount core.net.url.percent_decode;
+mount core.net.weft.app.WeftApp;
+mount core.net.weft.error.WeftError;
+mount core.net.weft.handler.{Handler, WeftRequest};
+mount verum_registry.protocol.authority.Authority;
+mount verum_registry.protocol.publication.{PublicationLimits, publication_limits};
+mount verum_registry.protocol.publication_encoding.encode_source_metadata;
+mount verum_registry.node.publication_auth.CredentialStore;
+mount verum_registry.node.publication_credentials_file.load_credentials;
+mount verum_registry.node.publication_prepare.{PreparationError, prepare_publication};
+mount verum_registry.node.publication_archive.{
+    ArchiveAdmissionLimits, default_archive_limits, valid_publication_name, valid_publication_version,
+};
+mount verum_registry.node.publication_storage.PublicationStorage;
+mount verum_registry.node.publication_record.DecodedPublicationRecord;
+mount verum_registry.node.publication_commit.{PublicationCommitError, commit_prepared_publication, load_publication};
+
+/// One immutable operator configuration. Every read comes from durable storage;
+/// there is no independently updated catalog that can acknowledge missing bytes.
+public type PublicationHandler is {
+    private credentials: CredentialStore,
+    private authorities: List<Authority>,
+    private storage: PublicationStorage,
+    private envelope_limits: PublicationLimits,
+    private archive_limits: ArchiveAdmissionLimits,
+};
+
+fn failure(status: Int, message: &Text) -> Response {
+    let mut body: List<Byte> = List.with_capacity(message.len());
+    for byte in message.bytes() { body.push(byte); }
+    Response.new(StatusCode.new(status)).header("content-type", "text/plain; charset=utf-8").body(body)
+}
+
+implement PublicationHandler {
+    /// The initial listener uses Weft's bounded 1 MiB receive budget. Reserve
+    /// room for framing and headers: source metadata <=64 KiB, gzip <=896 KiB.
+    /// Configuration errors refuse startup; an empty fallback cannot authorize.
+    public fn open(
+        directory: &Text, credential_file: &Text, authorities: List<Authority>,
+    ) -> Result<PublicationHandler, Text> {
+        let credentials = match load_credentials(credential_file, &authorities) {
+            Result.Ok(value) => value,
+            Result.Err(_) => return Result.Err("credential configuration could not be loaded"),
+        };
+        let storage = match PublicationStorage.open(directory, 100663296) {
+            Result.Ok(value) => value,
+            Result.Err(_) => return Result.Err("publication storage could not be opened"),
+        };
+        Result.Ok(PublicationHandler {
+            credentials: credentials, authorities: authorities, storage: storage,
+            envelope_limits: publication_limits(65536, 917504).unwrap(),
+            archive_limits: default_archive_limits(),
+        })
+    }
+
+    /// Synchronous admission completes before the handler returns HTTP success.
+    /// The storage transaction also handles independent competing processes.
+    public fn respond(&self, request: &WeftRequest) -> Response {
+        if request.path == "/api/v1/cogs/publish" {
+            let prepared = match prepare_publication(
+                request, &self.credentials, &self.authorities, &self.envelope_limits,
+            ) {
+                Result.Ok(value) => value,
+                Result.Err(error) => return error.response(),
+            };
+            return match commit_prepared_publication(prepared, &self.storage, &self.archive_limits) {
+                Result.Ok(receipt) => receipt.response(),
+                Result.Err(error) => error.response(),
+            };
+        }
+        let segments = request.path.split(&"/");
+        if (segments.len() != 6 && segments.len() != 7)
+            || segments[0] != "" || segments[1] != "api" || segments[2] != "v1" || segments[3] != "cogs"
+            || (segments.len() == 7 && segments[6] != "download") {
+            return failure(404, &"route not found");
+        }
+        if !(request.method is Method.Get) {
+            return failure(405, &"method not allowed").header("allow", "GET");
+        }
+        if request.body.len() != 0 { return failure(400, &"unexpected request body"); }
+        if let Maybe.Some(query) = &request.raw_query {
+            if query.len() != 0 { return failure(400, &"unexpected query"); }
+        }
+        let name = match percent_decode(&segments[4]) {
+            Result.Ok(value) => value,
+            Result.Err(_) => return failure(400, &"invalid coordinate"),
+        };
+        let version = match percent_decode(&segments[5]) {
+            Result.Ok(value) => value,
+            Result.Err(_) => return failure(400, &"invalid coordinate"),
+        };
+        if !valid_publication_name(&name) || !valid_publication_version(&version) {
+            return failure(400, &"invalid coordinate");
+        }
+        let record: DecodedPublicationRecord = match load_publication(&self.storage, &name, &version) {
+            Result.Ok(Maybe.Some(value)) => value,
+            Result.Ok(Maybe.None) => return failure(404, &"publication not found"),
+            Result.Err(_) => return failure(500, &"publication could not be read"),
+        };
+        if segments.len() == 7 {
+            return Response.new(StatusCode.new(200)).header("content-type", "application/gzip")
+                .header("etag", f"\"{record.metadata.checksum_spelling}\"").body(record.archive);
+        }
+        let source = match encode_source_metadata(&record.metadata, 1048576) {
+            Result.Ok(value) => value,
+            Result.Err(_) => return failure(500, &"publication could not be encoded"),
+        };
+        // Extend the encoder's complete JSON object with server-owned fields.
+        // Source publication carries no precompiled artifacts or trust evidence.
+        let json = source.slice(0, source.len() - 1)
+            + ",\"artifacts\":{\"tier0\":null,\"tier1\":null,\"tier2\":null,\"tier3\":null}"
+            + ",\"proofs\":null,\"cbgr_profiles\":null,\"signature\":null,\"ipfs_hash\":null"
+            + f",\"published_at\":{record.published_at}" + "}";
+        let mut body: List<Byte> = List.with_capacity(json.len());
+        for byte in json.bytes() { body.push(byte); }
+        Response.new(StatusCode.new(200)).header("content-type", "application/json").body(body)
+    }
+}
+
+implement Handler for PublicationHandler {
+    async fn handle(&self, request: WeftRequest) -> Result<Response, WeftError> {
+        let response = self.respond(&request);
+        // Every endpoint returns a complete buffered representation. Explicit
+        // framing lets both persistent and closing HTTP clients finish reading
+        // without using transport shutdown as the body delimiter.
+        let length = response.body_bytes().len();
+        Result.Ok(response.header("content-length", f"{length}"))
+    }
+}
+
+public async fn serve_publications(
+    address: &Text, directory: &Text, credential_file: &Text, authorities: List<Authority>,
+) -> Result<(), Text> {
+    let handler = PublicationHandler.open(directory, credential_file, authorities)?;
+    // Inflation is bounded per request; a small connection budget also bounds
+    // aggregate memory until streaming archive admission is available.
+    let server = WeftApp.new(handler).with_max_connections(2).bind(address.clone())?;
+    server.serve().await
+}

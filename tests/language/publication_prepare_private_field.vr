@@ -1,0 +1,6 @@
+// T1636 negative: the only public transfer is consuming into_parts().
+module verum_registry.tests.publication_prepare_private_field;
+mount verum_registry.node.publication_prepare.PreparedPublication;
+
+fn archive_size(prepared: &PreparedPublication) -> Int { prepared.publication.archive.len() }
+fn main() {}

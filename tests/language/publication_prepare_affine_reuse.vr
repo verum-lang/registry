@@ -1,0 +1,10 @@
+// T1636 negative: a prepared publication cannot be consumed twice.
+module verum_registry.tests.publication_prepare_affine_reuse;
+mount verum_registry.node.publication_prepare.PreparedPublication;
+
+fn consume_twice(prepared: PreparedPublication) -> Int {
+    let first = prepared.into_parts();
+    let second = prepared.into_parts();
+    first.publication_snapshot().archive.len() + second.publication_snapshot().archive.len()
+}
+fn main() {}

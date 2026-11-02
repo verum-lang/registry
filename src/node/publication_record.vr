@@ -1,0 +1,200 @@
+module verum_registry.node.publication_record;
+
+mount core.encoding.hex.encode;
+mount core.hash.crypto.sha256.Sha256;
+mount verum_registry.protocol.publication_metadata.{DecodedSourceMetadata, decode_source_metadata};
+mount verum_registry.protocol.publication_encoding.encode_source_metadata;
+
+/// Decoded local storage data. This value carries no authentication or admission
+/// authority; only the publication transaction can produce a success receipt.
+public type DecodedPublicationRecord is {
+    public principal: Text,
+    public credential: Text,
+    public authority: Text,
+    public scope_kind: Text,
+    public scope: Text,
+    public published_at: Int,
+    public metadata: DecodedSourceMetadata,
+    public archive: List<Byte>,
+};
+
+public type PublicationRecordError is | Invalid | TooLarge;
+
+public fn publication_checksum(bytes: &[Byte]) -> Text {
+    let mut hash = Sha256.new();
+    hash.update(bytes);
+    let digest = hash.finalize();
+    encode(&digest[..])
+}
+
+/// Delimit both coordinates under a format-specific domain. Accepted names and
+/// semantic versions cannot contain NUL, so different coordinates stay distinct.
+public fn publication_record_key(name: &Text, version: &Text) -> Text {
+    let mut hash = Sha256.new();
+    hash.update("verum-source-release-v1\0".as_bytes());
+    hash.update(name.as_bytes());
+    hash.update("\0".as_bytes());
+    hash.update(version.as_bytes());
+    let digest = hash.finalize();
+    encode(&digest[..])
+}
+
+fn append_text(out: &mut List<Byte>, value: &Text) {
+    let mut length = value.len();
+    let mut index = 0;
+    while index < 4 {
+        out.push((length % 256) as Byte);
+        length = length / 256;
+        index = index + 1;
+    }
+    for byte in value.bytes() { out.push(byte); }
+}
+
+fn identifier_valid(value: &Text) -> Bool {
+    if value.len() < 1 || value.len() > 128 { return false; }
+    for byte in value.bytes() {
+        if !((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)
+            || (byte >= 0x30 && byte <= 0x39) || byte == 0x5f || byte == 0x2d) {
+            return false;
+        }
+    }
+    true
+}
+
+fn provenance_valid(record: &DecodedPublicationRecord) -> Bool {
+    identifier_valid(&record.principal) && identifier_valid(&record.credential)
+        && identifier_valid(&record.authority) && record.published_at >= 0
+        && (record.scope_kind == "exact" || record.scope_kind == "scope")
+        && record.scope.len() > 0 && record.scope.len() <= 262144
+}
+
+/// Versioned, length-delimited transaction payload. The outer immutable store
+/// supplies integrity and coordinate binding. No text delimiter is escaped or
+/// discarded, and the original compressed archive is retained byte for byte.
+public fn encode_publication_record(record: &DecodedPublicationRecord)
+    -> Result<List<Byte>, PublicationRecordError>
+{
+    if !provenance_valid(record) { return Result.Err(PublicationRecordError.Invalid); }
+    if record.archive.len() < 1 || record.archive.len() > 67108864 {
+        return Result.Err(PublicationRecordError.TooLarge);
+    }
+    if publication_checksum(record.archive.as_slice()) != record.metadata.checksum_spelling {
+        return Result.Err(PublicationRecordError.Invalid);
+    }
+    let metadata = match encode_source_metadata(&record.metadata, 1048576) {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PublicationRecordError.TooLarge),
+    };
+    let mut out: List<Byte> = List.with_capacity(record.archive.len() + metadata.len() + 512);
+    for byte in "VRREL001".bytes() { out.push(byte); }
+    append_text(&mut out, &record.principal);
+    append_text(&mut out, &record.credential);
+    append_text(&mut out, &record.authority);
+    append_text(&mut out, &record.scope_kind);
+    append_text(&mut out, &record.scope);
+    append_text(&mut out, &record.published_at.to_text());
+    append_text(&mut out, &metadata);
+    for byte in record.archive.iter() { out.push(*byte); }
+    Result.Ok(out)
+}
+
+fn read_text(bytes: &List<Byte>, position: &mut Int, limit: Int)
+    -> Result<Text, PublicationRecordError>
+{
+    if bytes.len() - *position < 4 { return Result.Err(PublicationRecordError.Invalid); }
+    let mut length = 0;
+    let mut index = 3;
+    while index >= 0 {
+        let byte = bytes[*position + index] as Int;
+        if byte > limit || length > (limit - byte) / 256 {
+            return Result.Err(PublicationRecordError.Invalid);
+        }
+        length = length * 256 + byte;
+        index = index - 1;
+    }
+    *position = *position + 4;
+    if length > bytes.len() - *position { return Result.Err(PublicationRecordError.Invalid); }
+    let mut text: List<Byte> = List.with_capacity(length);
+    index = 0;
+    while index < length {
+        text.push(bytes[*position + index]);
+        index = index + 1;
+    }
+    *position = *position + length;
+    match Text.from_utf8(text.as_slice()) {
+        Result.Ok(value) => Result.Ok(value),
+        Result.Err(_) => Result.Err(PublicationRecordError.Invalid),
+    }
+}
+
+public fn decode_publication_record(bytes: &List<Byte>)
+    -> Result<DecodedPublicationRecord, PublicationRecordError>
+{
+    if bytes.len() < 8 || bytes.len() > 68420992 {
+        return Result.Err(PublicationRecordError.Invalid);
+    }
+    let magic = "VRREL001".as_bytes();
+    let mut index = 0;
+    while index < 8 {
+        if bytes[index] != magic[index] { return Result.Err(PublicationRecordError.Invalid); }
+        index = index + 1;
+    }
+    let mut position = 8;
+    let principal = read_text(bytes, &mut position, 128)?;
+    let credential = read_text(bytes, &mut position, 128)?;
+    let authority = read_text(bytes, &mut position, 128)?;
+    let scope_kind = read_text(bytes, &mut position, 5)?;
+    let scope = read_text(bytes, &mut position, 262144)?;
+    let timestamp = read_text(bytes, &mut position, 20)?;
+    let published_at = match timestamp.parse_int() {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PublicationRecordError.Invalid),
+    };
+    if published_at.to_text() != timestamp { return Result.Err(PublicationRecordError.Invalid); }
+    let metadata_text = read_text(bytes, &mut position, 1048576)?;
+    let metadata = match decode_source_metadata(&metadata_text, 1048576) {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PublicationRecordError.Invalid),
+    };
+    let canonical = match encode_source_metadata(&metadata, 1048576) {
+        Result.Ok(value) => value,
+        Result.Err(_) => return Result.Err(PublicationRecordError.Invalid),
+    };
+    if canonical != metadata_text { return Result.Err(PublicationRecordError.Invalid); }
+    let length = bytes.len() - position;
+    if length < 1 || length > 67108864 { return Result.Err(PublicationRecordError.Invalid); }
+    let mut archive: List<Byte> = List.with_capacity(length);
+    while position < bytes.len() { archive.push(bytes[position]); position = position + 1; }
+    let record = DecodedPublicationRecord {
+        principal: principal, credential: credential, authority: authority,
+        scope_kind: scope_kind, scope: scope, published_at: published_at,
+        metadata: metadata, archive: archive,
+    };
+    if !provenance_valid(&record)
+        || publication_checksum(record.archive.as_slice()) != record.metadata.checksum_spelling {
+        return Result.Err(PublicationRecordError.Invalid);
+    }
+    Result.Ok(record)
+}
+
+/// Retries retain the first server time, credential and matched grant. A newly
+/// authenticated credential for the same principal/authority may retry, but
+/// cannot replace any source metadata or a single compressed archive byte.
+public fn same_publication_record(left: &DecodedPublicationRecord, right: &DecodedPublicationRecord)
+    -> Bool
+{
+    if left.principal != right.principal || left.authority != right.authority
+        || left.archive.len() != right.archive.len() { return false; }
+    let mut index = 0;
+    while index < left.archive.len() {
+        if left.archive[index] != right.archive[index] { return false; }
+        index = index + 1;
+    }
+    let left_metadata = match encode_source_metadata(&left.metadata, 1048576) {
+        Result.Ok(value) => value, Result.Err(_) => return false,
+    };
+    let right_metadata = match encode_source_metadata(&right.metadata, 1048576) {
+        Result.Ok(value) => value, Result.Err(_) => return false,
+    };
+    left_metadata == right_metadata
+}

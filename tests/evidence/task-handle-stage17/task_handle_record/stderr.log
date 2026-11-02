@@ -1,0 +1,12 @@
+     Running /private/tmp/verum-T1678-carrier-controls/task_handle_record/task_handle_record.vr (interpreter)
+error<E400>: Type mismatch in field 'handle' of 'task_handle_record.HeldVerification': expected 'core.async.task.JoinHandle<Ok(Int) | Err(Text)>', found 'JoinHandle<Ok(Int) | Err(Text)>'
+  --> /private/tmp/verum-T1678-carrier-controls/task_handle_record/task_handle_record.vr:15:43
+   │
+13 │ 
+14 │ async fn main() {
+15 │     let held = HeldVerification { handle: spawn(verdict_child()) };
+   │                                           ^^^^^^^^^^^^^^^^^^^^^^
+16 │     let completed: Result<Result<Int, Text>, JoinError> = held.handle.await;
+17 │     match completed {
+   │
+error: compilation failed with 1 error

@@ -1,0 +1,106 @@
+module verum_registry.tests.publication_storage;
+
+mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
+mount core.base.env.var;
+
+fn environment(key: &Text) -> Text {
+    match var(key) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("missing storage fixture environment"),
+    }
+}
+
+fn payload() -> List<Byte> {
+    let mut bytes: List<Byte> = List.new();
+    let mut index = 0;
+    while index < 10003 { bytes.push((index % 256) as Byte); index = index + 1; }
+    bytes
+}
+
+fn store(directory: &Text) -> PublicationStorage {
+    match PublicationStorage.open(directory, 32768) {
+        Result.Ok(value) => value,
+        Result.Err(_) => panic("open real publication storage"),
+    }
+}
+
+fn check_value(storage: &PublicationStorage, key: &Text, expected: &List<Byte>) {
+    let actual = match storage.load(key) {
+        Result.Ok(Maybe.Some(value)) => value,
+        _ => panic("committed record must load"),
+    };
+    assert_eq(actual.len(), expected.len());
+    let mut index = 0;
+    while index < actual.len() { assert_eq(actual[index], expected[index]); index = index + 1; }
+}
+
+fn main() {
+    let directory_value = environment(&"VERUM_STORAGE_TEST_DIRECTORY");
+    let phase_value = environment(&"VERUM_STORAGE_TEST_PHASE");
+    let directory = &directory_value;
+    let phase = &phase_value;
+    let storage = store(directory);
+    let key = "1111111111111111111111111111111111111111111111111111111111111111";
+    let missing = "0000000000000000000000000000000000000000000000000000000000000000";
+    let bytes = payload();
+    if *phase == "write" {
+        assert(storage.load(&key) is Result.Ok(Maybe.None));
+        assert(storage.commit(&key, &bytes) is Result.Ok(RecordWrite.Created));
+        check_value(&storage, &key, &bytes);
+        let reopened = store(directory);
+        check_value(&reopened, &key, &bytes);
+        print("publication-storage: created");
+    } else if *phase == "restart" {
+        check_value(&storage, &key, &bytes);
+        assert(storage.commit(&key, &bytes) is Result.Ok(RecordWrite.Existing));
+        let mut changed = payload(); changed[7] = 99_u8;
+        assert(storage.commit(&key, &changed) is Result.Err(PublicationStorageError.Conflict));
+        changed.push(1_u8);
+        assert(storage.commit(&key, &changed) is Result.Err(PublicationStorageError.Conflict));
+        check_value(&storage, &key, &bytes);
+        assert(storage.load(&missing) is Result.Ok(Maybe.None));
+        assert(storage.load(&"../outside") is Result.Err(PublicationStorageError.InvalidKey));
+        assert(storage.commit(&"../outside", &bytes) is Result.Err(PublicationStorageError.InvalidKey));
+        assert(PublicationStorage.open(directory, 0) is Result.Err(PublicationStorageError.TooLarge));
+        assert(PublicationStorage.open(directory, 100663297) is Result.Err(PublicationStorageError.TooLarge));
+        assert(PublicationStorage.open(&f"{directory}/symlink-root", 32768)
+            is Result.Err(PublicationStorageError.InvalidDirectory));
+        assert(PublicationStorage.open(&f"{directory}/file-root", 32768)
+            is Result.Err(PublicationStorageError.InvalidDirectory));
+        assert(PublicationStorage.open(&f"{directory}/missing-root", 32768)
+            is Result.Err(PublicationStorageError.Io(_)));
+        let tiny = match PublicationStorage.open(directory, 1) {
+            Result.Ok(value) => value, _ => panic("open bounded store"),
+        };
+        assert(tiny.commit(&missing, &bytes) is Result.Err(PublicationStorageError.TooLarge));
+        assert(tiny.load(&key) is Result.Err(PublicationStorageError.Corrupt));
+        for invalid in [
+            "2222222222222222222222222222222222222222222222222222222222222222",
+            "3333333333333333333333333333333333333333333333333333333333333333",
+            "4444444444444444444444444444444444444444444444444444444444444444",
+            "5555555555555555555555555555555555555555555555555555555555555555",
+            "6666666666666666666666666666666666666666666666666666666666666666",
+            "7777777777777777777777777777777777777777777777777777777777777777",
+            "8888888888888888888888888888888888888888888888888888888888888888",
+            "9999999999999999999999999999999999999999999999999999999999999999",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert(storage.load(&invalid) is Result.Err(PublicationStorageError.Corrupt));
+            assert(storage.commit(&invalid, &bytes) is Result.Err(PublicationStorageError.Corrupt));
+        }
+        let empty: List<Byte> = List.new();
+        let empty_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        assert(storage.commit(&empty_key, &empty) is Result.Ok(RecordWrite.Created));
+        check_value(&storage, &empty_key, &empty);
+        print("publication-storage: restart and refusals");
+    } else if *phase == "race-a" || *phase == "race-b" {
+        let mut value: List<Byte> = List.new();
+        for byte in phase.bytes() { value.push(byte); }
+        let race_key = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        match storage.commit(&race_key, &value) {
+            Result.Ok(RecordWrite.Created) => print("publication-storage: race created"),
+            Result.Err(PublicationStorageError.Conflict) => print("publication-storage: race conflict"),
+            _ => panic("concurrent distinct writers must have exactly one winner"),
+        }
+    } else { panic("unknown storage test phase"); }
+}

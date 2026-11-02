@@ -1,0 +1,194 @@
+// T1722: copied public projections must not rewrite retained authorized input.
+// This is a domain isolation requirement, not a deep-copy language promise.
+module verum_registry.tests.publication_prepare_copy;
+
+mount core.net.http.{Method, Headers};
+mount core.net.weft.handler.WeftRequest;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+mount verum_registry.protocol.publication.publication_limits;
+mount verum_registry.protocol.publication_metadata.{DecodedDependency, DecodedPublication};
+mount verum_registry.node.publication_auth.decode_credentials;
+mount verum_registry.node.publication_prepare.{PreparedContents, prepare_publication};
+
+fn authorities() -> List<Authority> {
+    let mut names: List<NamePattern> = List.new();
+    names.push(NamePattern.Exact("widget"));
+    names.push(NamePattern.Exact("other-widget"));
+    let mut owners: List<Authority> = List.new();
+    owners.push(Authority { id: "local", role: AuthorityRole.Local, owns: names });
+    owners
+}
+
+fn prepared() -> PreparedContents {
+    let owners = authorities();
+    let configuration = """{"version":1,"principals":[{"id":"alice","grants":[{"authority":"local","names":[{"exact":"widget"}]}]}],"credentials":[{"id":"active","principal":"alice","token_sha256":"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee","active":true}]}""";
+    let credentials = match decode_credentials(&configuration, &owners) {
+        Result.Ok(value) => value, _ => panic("copy fixture credential configuration"),
+    };
+    let source = """{"name":"widget","version":"1.2.3","description":"λ","authors":["Alice"],"license":null,"repository":null,"homepage":null,"keywords":[],"categories":[],"readme":null,"dependencies":{"codec":{"version":"^1","features":["decode"],"optional":false,"default_features":false}},"features":{"default":["fast"]},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}""";
+    let mut body: List<Byte> = List.new();
+    let mut length = source.as_bytes().len();
+    let mut width = 0;
+    while width < 4 {
+        body.push((length % 256) as Byte);
+        length = length / 256;
+        width = width + 1;
+    }
+    for byte in source.bytes() { body.push(byte); }
+    for byte in [5_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8,
+                 31_u8, 139_u8, 0_u8, 255_u8, 13_u8] { body.push(byte); }
+    let mut headers = Headers.new();
+    headers.set(&"content-type", &"application/vnd.verum.cog-publish.v1");
+    headers.set(&"authorization", &"Bearer vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    let req = WeftRequest.new(Method.Post, "/api/v1/cogs/publish", Maybe.None, headers, body);
+    let limits = match publication_limits(1024, 5) {
+        Result.Ok(value) => value, _ => panic("copy fixture publication limits"),
+    };
+    match prepare_publication(&req, &credentials, &owners, &limits) {
+        Result.Ok(value) => value.into_parts(),
+        Result.Err(_) => panic("copy fixture valid authenticated request refused"),
+    }
+}
+
+fn retained_input_is_original(contents: &PreparedContents) -> Bool {
+    if contents.principal_id() != "alice"
+        || contents.credential_id() != "active"
+        || contents.authority_id() != "local" { return false; }
+    let publication = contents.publication_snapshot();
+    if publication.metadata.name_spelling != "widget"
+        || publication.metadata.version_spelling != "1.2.3"
+        || publication.metadata.authors.len() != 1
+        || publication.metadata.authors[0] != "Alice" { return false; }
+    if publication.archive.len() != 5 { return false; }
+    if publication.archive[0] != 31_u8 || publication.archive[1] != 139_u8
+        || publication.archive[2] != 0_u8 || publication.archive[3] != 255_u8
+        || publication.archive[4] != 13_u8 { return false; }
+    if publication.metadata.features.len() != 1 { return false; }
+    match publication.metadata.features.get(&"default") {
+        Maybe.Some(values) => {
+            if values.len() != 1 || values[0] != "fast" { return false; }
+        },
+        _ => return false,
+    }
+    if publication.metadata.dependencies.len() != 1 { return false; }
+    match publication.metadata.dependencies.get(&"codec") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            if options.version_spelling != "^1"
+                || !(options.optional is Maybe.Some(false))
+                || !(options.default_features is Maybe.Some(false)) { return false; }
+            match &options.features {
+                Maybe.Some(values) => {
+                    if values.len() != 1 || values[0] != "decode" { return false; }
+                },
+                _ => return false,
+            }
+        },
+        _ => return false,
+    }
+    true
+}
+
+fn copied_name() -> Bool {
+    let contents = prepared();
+    assert(retained_input_is_original(&contents));
+    let mut copied: DecodedPublication = contents.publication_snapshot();
+    // The credential grants widget only, even though both names have an owner.
+    copied.metadata.name_spelling = "other-widget";
+    assert_eq(copied.metadata.name_spelling, "other-widget");
+    retained_input_is_original(&contents)
+}
+
+fn copied_authors() -> Bool {
+    let contents = prepared();
+    assert(retained_input_is_original(&contents));
+    let mut copied: DecodedPublication = contents.publication_snapshot();
+    copied.metadata.authors[0] = "Mallory";
+    copied.metadata.authors.push("Eve");
+    assert_eq(copied.metadata.authors.len(), 2);
+    assert_eq(copied.metadata.authors[0], "Mallory");
+    assert_eq(copied.metadata.authors[1], "Eve");
+    retained_input_is_original(&contents)
+}
+
+fn copied_archive() -> Bool {
+    let contents = prepared();
+    assert(retained_input_is_original(&contents));
+    let mut copied: DecodedPublication = contents.publication_snapshot();
+    copied.archive[0] = 42_u8;
+    copied.archive.push(99_u8);
+    assert_eq(copied.archive.len(), 6);
+    assert_eq(copied.archive[0], 42_u8);
+    assert_eq(copied.archive[5], 99_u8);
+    retained_input_is_original(&contents)
+}
+
+fn copied_feature_members() -> Bool {
+    let contents = prepared();
+    assert(retained_input_is_original(&contents));
+    let mut copied: DecodedPublication = contents.publication_snapshot();
+    match copied.metadata.features.get_mut(&"default") {
+        Maybe.Some(values) => {
+            values[0] = "slow";
+            values.push("extra");
+        },
+        _ => panic("copy fixture default feature missing"),
+    }
+    match copied.metadata.features.get(&"default") {
+        Maybe.Some(values) => {
+            assert_eq(values.len(), 2);
+            assert_eq(values[0], "slow");
+            assert_eq(values[1], "extra");
+        },
+        _ => panic("copied default feature missing"),
+    }
+    retained_input_is_original(&contents)
+}
+
+fn copied_dependency_features() -> Bool {
+    let contents = prepared();
+    assert(retained_input_is_original(&contents));
+    let mut copied: DecodedPublication = contents.publication_snapshot();
+    match copied.metadata.dependencies.get_mut(&"codec") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            match &mut options.features {
+                Maybe.Some(values) => {
+                    values[0] = "encode";
+                    values.push("extra");
+                },
+                _ => panic("copy fixture dependency features missing"),
+            }
+        },
+        _ => panic("copy fixture dependency missing"),
+    }
+    match copied.metadata.dependencies.get(&"codec") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            match &options.features {
+                Maybe.Some(values) => {
+                    assert_eq(values.len(), 2);
+                    assert_eq(values[0], "encode");
+                    assert_eq(values[1], "extra");
+                },
+                _ => panic("copied dependency features missing"),
+            }
+        },
+        _ => panic("copied dependency missing"),
+    }
+    retained_input_is_original(&contents)
+}
+
+fn main() {
+    // Complete every independent mutation before asserting retained isolation.
+    let name_retained = copied_name();
+    let authors_retained = copied_authors();
+    let archive_retained = copied_archive();
+    let features_retained = copied_feature_members();
+    let dependency_retained = copied_dependency_features();
+    if !name_retained { print("copied name changed retained contents or attribution"); }
+    if !authors_retained { print("copied authors changed retained contents or attribution"); }
+    if !archive_retained { print("copied archive changed retained contents or attribution"); }
+    if !features_retained { print("copied feature members changed retained contents or attribution"); }
+    if !dependency_retained { print("copied dependency features changed retained contents or attribution"); }
+    assert(name_retained && authors_retained && archive_retained
+        && features_retained && dependency_retained);
+    print("publication-prepare-copy: ok");
+}

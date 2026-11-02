@@ -1,0 +1,26 @@
+{
+  "task": "T1652",
+  "scope": "Isolated component project with the exact production framing module; not a whole-registry or HTTP admission check.",
+  "production_module_sha256": "d6a3ba2112a5ae38fee85549fb107c44770dbb952863e641e6d726c0b96b0bde",
+  "fixture_sha256": "e0f8cce0a9fdfc8b0d4af2ae15db795b84a0a0b25d6e70d6f497aff8d936ba43",
+  "project_inputs": {
+    "src/main.vr": "18f3b6f2567827e40cd37e836ca758e7a37dd1bebb7bc308a743e16ee5fb538b",
+    "src/protocol/publication.vr": "d6a3ba2112a5ae38fee85549fb107c44770dbb952863e641e6d726c0b96b0bde",
+    "verum.toml": "1d99c409b02e7bdb88b9765716721b42e2360e7ecd55f9bbe2a4b18213f97ab2"
+  },
+  "entry_transformation": "Only change fixture module header to verum_registry.main.",
+  "cli_sha256": "b068627fa0cfa87ec94cfcf0faf9be57351077ced350062f60ccdd7c9223b5f6",
+  "language_product_commit": "b12135c9fda3c024ff5a86ec5638bf83c733d5c1",
+  "command": [
+    "verum",
+    "run",
+    "--tier",
+    "interpret"
+  ],
+  "deadline_seconds": 180,
+  "elapsed_seconds": 180.04,
+  "returncode": -9,
+  "timed_out": true,
+  "source_unchanged": true,
+  "log_sha256": "376c5b856ce7387835f2652538b051b8e4e65d70f997879387bbd86b04ca2eb9"
+}

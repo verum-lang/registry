@@ -1,0 +1,308 @@
+// =============================================================================
+// verum_registry.protocol.revocation — trust is given once and taken back once
+// =============================================================================
+// Spec: registry-federation-protocol §2.4 (key lifecycle)
+//
+// A signing key is compromised, or an authority retires one. Every
+// coordinate that key vouched for is affected at once, and the registry
+// has to say something about each of them.
+//
+// TWO THINGS ARE EASY TO GET WRONG HERE, and both are the kind of wrong
+// that looks fine in review.
+//
+// The first is DIRECTION. A key's standing moves one way: trusted, then
+// suspended while somebody investigates, then revoked. It never moves
+// back. An operator who can un-revoke a key can be socially engineered
+// into un-revoking one, and a replication protocol that merges two
+// nodes' opinions by taking the LAST WRITE will silently un-revoke one
+// whenever the clocks disagree. Making the move one-way is not a policy
+// somebody has to remember; it is the only transition this module
+// offers.
+//
+// The second is what revocation MEANS. A revoked key does not mean the
+// artefact was bad. It means nobody can vouch for it any more. Those are
+// different answers and clients act on them differently: "this release
+// was withdrawn" is a reason to roll back, "we can no longer verify this
+// release" is a reason to re-fetch from someone who can. A registry that
+// collapses them into `404` sends every client down the wrong path at
+// once.
+//
+// WHAT THIS MODULE DEMONSTRATES ABOUT THE LANGUAGE — and each of these
+// is here because the domain wants it, not the other way round:
+//
+//   * `@derive`, where the domain wants ordinary structural equality —
+//     next to `protocol/query`'s hand-written `role_eq`, which exists
+//     because that type deliberately has none;
+//   * the `is` operator, for asking whether a value is in a state
+//     without spelling out the arms nobody reads;
+//   * an EXPLICIT `proof { … }` block: the one-way property is a finite
+//     case analysis and the prover closes it, so the argument is written
+//     out rather than left to `auto`;
+//   * `@verify(runtime)` — the gradual dial. The same property over a
+//     LEDGER of keys walks a map, which the prover does not unfold. The
+//     claim is not deleted and not downgraded to a comment: it is
+//     enforced where it can be, at run time.
+
+@arch_module(
+    foundation: Foundation.ZfcTwoInacc,
+    stratum: MsfsStratum.LFnd,
+    lifecycle: Lifecycle.Definition
+)
+module verum_registry.protocol.revocation;
+
+mount verum_registry.protocol.evidence.{Verified};
+
+// -----------------------------------------------------------------------------
+// Where a key stands
+// -----------------------------------------------------------------------------
+
+/// The standing of one signing key.
+///
+/// `@derive(Eq, Clone, Debug)` — and it is worth saying why HERE and not
+/// in `protocol/authority`, whose `AuthorityRole` carries no derived
+/// equality and has `role_eq` written out by hand instead.
+///
+/// The difference is what equality MEANS for the type. Two standings are
+/// the same standing when they are the same case with the same reason —
+/// ordinary structural equality, and deriving it is exactly right
+/// because there is no judgement in it. An authority role is a claim
+/// about who answers for what, and the comparison there was written out
+/// so that adding a role forces somebody to decide how it compares
+/// rather than inheriting an answer.
+///
+/// Derive when the structure IS the meaning. Write it out when it is not.
+@derive(Eq, Clone, Debug)
+public type KeyStanding is
+    /// The key may sign, and its signatures verify.
+    | Trusted
+    /// Something is wrong and is being investigated. Existing artefacts
+    /// still verify; new publications do not.
+    | Suspended(Text)
+    /// The key is finished. Nothing it signed can be vouched for again.
+    | Revoked(Text);
+
+/// How far along the one-way road a standing is.
+///
+/// The refinement is an invariant of a value this module computes about
+/// ITSELF — the same rule the rest of the programme follows: our own
+/// bug, so halting is right, as against a typed refusal for anything a
+/// peer sends us.
+public pure fn severity(s: &KeyStanding) -> Int{it >= 0} {
+    match s {
+        KeyStanding.Trusted      => 0,
+        KeyStanding.Suspended(_) => 1,
+        KeyStanding.Revoked(_)   => 2,
+    }
+}
+
+/// Why a change of standing was refused.
+public type RevocationError is
+    /// The move would take a key backwards — the case this module exists
+    /// to make impossible. Names both ends, because an operator's next
+    /// question is which one is stale.
+    | WouldGoBackwards { from: Int, to: Int }
+    /// A key nobody has recorded. Distinct from `Trusted`: a key we have
+    /// never seen is not a key we vouch for.
+    | UnknownKey(Text);
+
+// -----------------------------------------------------------------------------
+// The single transition
+// -----------------------------------------------------------------------------
+
+/// May a key move from one standing to another?
+public pure fn may_move(from: &KeyStanding, to: &KeyStanding) -> Bool {
+    severity(to) >= severity(from)
+}
+
+/// Move one key's standing, or refuse.
+///
+/// The ONLY way a standing changes in this programme. There is no setter
+/// and no field to assign, so "revocation is monotone" is not a rule
+/// somebody can forget to apply — it is the shape of the only door.
+public pure fn advance(
+    from: &KeyStanding,
+    to: KeyStanding,
+) -> Result<KeyStanding, RevocationError> {
+    if !may_move(from, &to) {
+        return Result.Err(RevocationError.WouldGoBackwards {
+            from: severity(from),
+            to: severity(&to),
+        });
+    }
+    Result.Ok(to)
+}
+
+// -----------------------------------------------------------------------------
+// What a client is told
+// -----------------------------------------------------------------------------
+
+/// What a node may say about an artefact, given its signer's standing.
+@derive(Eq, Clone, Debug)
+public type Serving is
+    /// The evidence still stands.
+    | Serve
+    /// The artefact exists and can no longer be vouched for. NOT
+    /// "not found" — the client's next move is to find someone who can
+    /// vouch for it, and a `404` sends them to publish it again instead.
+    | Unverifiable(Text)
+    /// Held, but not offered for new resolution while the investigation
+    /// runs. An existing lockfile pinning it still resolves.
+    | Quarantined(Text);
+
+/// The decision, for one artefact and one standing.
+///
+/// A match, because every case carries a different answer AND a
+/// different reason. Exhaustiveness is doing real work here: adding a
+/// fourth standing later stops this function compiling, which is the
+/// only reliable way to make somebody decide what a node should say
+/// about it.
+public pure fn serving(v: &Verified, standing: &KeyStanding) -> Serving {
+    match standing {
+        KeyStanding.Trusted      => Serving.Serve,
+        KeyStanding.Suspended(w) => Serving.Quarantined(w.clone()),
+        KeyStanding.Revoked(w)   => Serving.Unverifiable(w.clone()),
+    }
+}
+
+/// May this key sign a NEW publication?
+///
+/// THE `is` OPERATOR, where it is the natural spelling: the question is
+/// whether a value is in one state, the answer is a `Bool`, and a match
+/// would spell out two arms that exist only to say `false`. It is not a
+/// shorthand for a match — it is a different question, and writing the
+/// different question differently is what keeps the match above
+/// meaningful.
+public pure fn may_publish(s: &KeyStanding) -> Bool {
+    s is Trusted
+}
+
+/// Does this decision still let a client install the artefact?
+public pure fn installable(s: &Serving) -> Bool {
+    s is Serve
+}
+
+// -----------------------------------------------------------------------------
+// The obligation this module carries (spec §6)
+// -----------------------------------------------------------------------------
+
+/// A key's standing never goes backwards.
+public pure fn advance_never_goes_back(from: &KeyStanding, to: &KeyStanding) -> Bool {
+    match advance(from, to.clone()) {
+        Ok(landed) => severity(&landed) >= severity(from),
+        // A refusal is the property holding, not an exception to it.
+        Err(_) => true,
+    }
+}
+
+@verify(formal)
+public theorem a_standing_never_goes_back(from: &KeyStanding, to: &KeyStanding)
+    ensures advance_never_goes_back(from, to)
+    proof {
+        // DISCHARGED, and written out rather than left to `auto`,
+        // because the argument is short enough to read and it is the
+        // one somebody will want to check.
+        //
+        // Case analysis on the branch taken in `advance`:
+        //
+        //   * the guard refused — `advance` returns `Err`, and the
+        //     predicate's `Err` arm is `true`;
+        //   * the guard admitted — then `may_move(from, to)` held, which
+        //     IS `severity(to) >= severity(from)`, and the value landed
+        //     is `to` itself. The `Ok` arm asks exactly that question of
+        //     exactly that value.
+        //
+        // No third branch exists: `advance` has one `if` and one tail.
+        // `severity` is total over the three cases and every result is
+        // non-negative by its refinement, so neither side of the
+        // comparison can be undefined.
+    };
+
+/// And the same property over a LEDGER of keys.
+///
+/// THE GRADUAL DIAL, and this is the demonstration.
+///
+/// `apply_all` folds `advance` across every key a peer sent. The
+/// property is the same one the theorem above discharges, but stating it
+/// over the ledger means quantifying over a WALK, and the prover does
+/// not unfold a loop — the same wall three other obligations in this
+/// programme hit.
+///
+/// Three things could happen at that wall. The claim could be deleted,
+/// and the guarantee quietly stops existing. It could be left as a
+/// comment, which is the same thing with more words. Or the level moves:
+/// `@verify(runtime)` keeps the claim and enforces it where it can be
+/// enforced — every application checks, and a violation halts here
+/// rather than serving a resurrected key.
+///
+/// That is what "gradual" buys. Not a weaker guarantee dressed up as a
+/// strong one: a guarantee whose ENFORCEMENT POINT moved, stated in the
+/// signature where a caller reads it.
+@verify(runtime)
+public fn apply_all(
+    ledger: &Map<Text, KeyStanding>,
+    updates: &List<(Text, KeyStanding)>,
+) -> Result<Map<Text, KeyStanding>, RevocationError>
+    ensures nothing_in_the_ledger_went_backwards(ledger, result)
+{
+    let mut next: Map<Text, KeyStanding> = Map.new();
+    for k in ledger.keys() {
+        match ledger.get(k.clone()) {
+            Maybe.Some(v) => { next.insert(k.clone(), v); },
+            Maybe.None    => {},
+        }
+    }
+    for update in updates.iter() {
+        let key = update.0.clone();
+        let to = update.1.clone();
+        match next.get(key.clone()) {
+            Maybe.Some(from) => {
+                match advance(&from, to) {
+                    Ok(landed) => { next.insert(key.clone(), landed); },
+                    Err(e)     => return Result.Err(e),
+                }
+            }
+            // A key we have never seen is not a key we vouch for, so a
+            // peer cannot introduce one by revoking it. Naming it beats
+            // silently adopting it.
+            Maybe.None => return Result.Err(RevocationError.UnknownKey(key)),
+        }
+    }
+    Result.Ok(next)
+}
+
+/// Every key in the new ledger stands at least where it stood before.
+///
+/// The predicate the runtime level checks. Written as a walk, which is
+/// why it is not UNFOLDED — the reflector reads straight-line bodies,
+/// not iteration.
+///
+/// `pure` is not decoration here and was missing until T0905 measured
+/// what it costs. A walk over two maps calling only `severity` (itself
+/// `pure`) is a mathematical function by construction; but a predicate
+/// not DECLARED pure gets no SMT symbol at all, so a goal naming it
+/// fails on well-formedness — reported in the same shape as a failed
+/// proof. The word is the difference between "we could not show this"
+/// and "the solver never heard of it".
+public pure fn nothing_in_the_ledger_went_backwards(
+    before: &Map<Text, KeyStanding>,
+    after: &Map<Text, KeyStanding>,
+) -> Bool {
+    for k in before.keys() {
+        match before.get(k.clone()) {
+            Maybe.Some(was) => {
+                match after.get(k.clone()) {
+                    Maybe.Some(now) => {
+                        if severity(&now) < severity(&was) {
+                            return false;
+                        }
+                    }
+                    // A key that vanished is a key that stopped being
+                    // vouched for, which is forward, not backward.
+                    Maybe.None => {},
+                }
+            }
+            Maybe.None => {},
+        }
+    }
+    true
+}

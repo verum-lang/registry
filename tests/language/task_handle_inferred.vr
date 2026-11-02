@@ -1,0 +1,25 @@
+// T1678 control: the current compiler keyword-spawn result contract.
+// This control observes the raw keyword result; it is not join-error acceptance.
+module task_handle_inferred;
+
+async fn scalar_child() -> Int {
+    41
+}
+
+async fn verdict_child() -> Result<Int, Text> {
+    Result.Err("evidence")
+}
+
+async fn main() {
+    let scalar = spawn(scalar_child());
+    let scalar_value: Int = scalar.await;
+    assert_eq(scalar_value, 41);
+
+    let verdict = spawn(verdict_child());
+    let verdict_value: Result<Int, Text> = verdict.await;
+    match verdict_value {
+        Result.Err(reason) => assert_eq(reason, "evidence"),
+        Result.Ok(_) => panic("child evidence refusal was lost"),
+    }
+    print("task-handle-inferred: ok");
+}

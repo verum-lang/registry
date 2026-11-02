@@ -1,0 +1,315 @@
+// T1722: explicit domain snapshots preserve shape and independent mutable data.
+// Separate from the five unchanged mutation oracles in prepare_copy.
+module verum_registry.tests.publication_prepare_snapshot;
+
+mount core.net.http.{Method, Headers};
+mount core.net.weft.handler.WeftRequest;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
+mount verum_registry.protocol.publication.publication_limits;
+mount verum_registry.protocol.publication_metadata.{
+    DecodedDependency, DecodedDependencyOptions, DecodedPublication,
+};
+mount verum_registry.node.publication_auth.decode_credentials;
+mount verum_registry.node.publication_prepare.{PreparedContents, prepare_publication};
+
+fn metadata(name: &Text) -> Text {
+    let mut source = Text.with_capacity(2048);
+    source.push_str(&"{\"name\":\"");
+    source.push_str(name);
+    source.push_str(&"""","version":"1.2.3+snapshot","description":"описание λ🙂 preserved","authors":["Автор🙂Long","Second author"],"license":"","repository":null,"homepage":"https://example.invalid/snapshot","keywords":["keyword-first-λ","keyword-second"],"categories":["category-first","category-second"],"readme":"readme\nλ🙂 preserved","dependencies":{"simple-codec":"^1","detailed-none":{"version":"^1"},"detailed-empty":{"version":"^1","features":[],"optional":false,"default_features":false},"detailed-full":{"version":"^2","features":["feature-first-λ","feature-second"],"optional":true,"default_features":true},"detailed-null":{"version":"^3","features":null,"optional":null,"default_features":null}},"features":{"default":["feature-first-λ","feature-second"],"empty":[],"λ-key":["unicode-member-🙂"]},"checksum":"0000000000000000000000000000000000000000000000000000000000000000"}""");
+    source
+}
+
+fn prepared(name: &Text) -> PreparedContents {
+    let mut names: List<NamePattern> = List.new();
+    names.push(NamePattern.Exact("widget-snapshot"));
+    names.push(NamePattern.Scope("@snapshot"));
+    let mut owners: List<Authority> = List.new();
+    owners.push(Authority { id: "snapshot_local", role: AuthorityRole.Local, owns: names });
+    let configuration = """{"version":1,"principals":[{"id":"snapshot_alice","grants":[{"authority":"snapshot_local","names":[{"exact":"widget-snapshot"},{"scope":"@snapshot"}]}]}],"credentials":[{"id":"snapshot_active","principal":"snapshot_alice","token_sha256":"0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee","active":true}]}""";
+    let credentials = match decode_credentials(&configuration, &owners) {
+        Result.Ok(value) => value, _ => panic("snapshot credential configuration"),
+    };
+    let source = metadata(name);
+    let mut body: List<Byte> = List.new();
+    let mut length = source.as_bytes().len();
+    let mut width = 0;
+    while width < 4 {
+        body.push((length % 256) as Byte);
+        length = length / 256;
+        width = width + 1;
+    }
+    for byte in source.bytes() { body.push(byte); }
+    for byte in [5_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8,
+                 31_u8, 139_u8, 0_u8, 255_u8, 13_u8] { body.push(byte); }
+    let mut headers = Headers.new();
+    headers.set(&"content-type", &"application/vnd.verum.cog-publish.v1");
+    headers.set(&"authorization", &"Bearer vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    let req = WeftRequest.new(Method.Post, "/api/v1/cogs/publish", Maybe.None, headers, body);
+    let limits = match publication_limits(4096, 5) {
+        Result.Ok(value) => value, _ => panic("snapshot publication limits"),
+    };
+    match prepare_publication(&req, &credentials, &owners, &limits) {
+        Result.Ok(value) => value.into_parts(),
+        Result.Err(_) => panic("snapshot authenticated request refused"),
+    }
+}
+
+fn assert_some_text(value: &Maybe<Text>, expected: &Text) {
+    match value {
+        Maybe.Some(text) => assert(*text == *expected),
+        Maybe.None => panic("snapshot lost present text"),
+    }
+}
+
+fn assert_original(publication: &DecodedPublication, name: &Text) {
+    let data = &publication.metadata;
+    assert(data.name_spelling == *name);
+    assert_eq(data.version_spelling, "1.2.3+snapshot");
+    assert_eq(data.checksum_spelling, "0000000000000000000000000000000000000000000000000000000000000000");
+    assert_some_text(&data.description, &"описание λ🙂 preserved");
+    assert_some_text(&data.license, &"");
+    assert(data.repository is Maybe.None);
+    assert_some_text(&data.homepage, &"https://example.invalid/snapshot");
+    assert_some_text(&data.readme, &"readme\nλ🙂 preserved");
+    assert_eq(data.authors.len(), 2);
+    assert_eq(data.authors[0], "Автор🙂Long");
+    assert_eq(data.authors[1], "Second author");
+    assert_eq(data.keywords.len(), 2);
+    assert_eq(data.keywords[0], "keyword-first-λ");
+    assert_eq(data.keywords[1], "keyword-second");
+    assert_eq(data.categories.len(), 2);
+    assert_eq(data.categories[0], "category-first");
+    assert_eq(data.categories[1], "category-second");
+    assert_eq(data.dependencies.len(), 5);
+    match data.dependencies.get(&"simple-codec") {
+        Maybe.Some(DecodedDependency.Requirement(version)) => assert_eq(version, "^1"),
+        _ => panic("snapshot changed simple dependency form"),
+    }
+    for dependency in ["detailed-none", "detailed-null"] {
+        match data.dependencies.get(&dependency) {
+            Maybe.Some(DecodedDependency.Detailed(options)) => {
+                let expected = if dependency == "detailed-none" { "^1" } else { "^3" };
+                assert_eq(options.version_spelling, expected);
+                assert(options.features is Maybe.None);
+                assert(options.optional is Maybe.None);
+                assert(options.default_features is Maybe.None);
+            },
+            _ => panic("snapshot lost absent options"),
+        }
+    }
+    match data.dependencies.get(&"detailed-empty") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            assert_eq(options.version_spelling, "^1");
+            assert(options.optional is Maybe.Some(false));
+            assert(options.default_features is Maybe.Some(false));
+            match options.features {
+                Maybe.Some(values) => assert_eq(values.len(), 0),
+                _ => panic("snapshot collapsed present empty features"),
+            }
+        },
+        _ => panic("snapshot changed detailed dependency form"),
+    }
+    match data.dependencies.get(&"detailed-full") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            assert_eq(options.version_spelling, "^2");
+            assert(options.optional is Maybe.Some(true));
+            assert(options.default_features is Maybe.Some(true));
+            match options.features {
+                Maybe.Some(values) => {
+                    assert_eq(values.len(), 2);
+                    assert_eq(values[0], "feature-first-λ");
+                    assert_eq(values[1], "feature-second");
+                },
+                _ => panic("snapshot lost ordered dependency features"),
+            }
+        },
+        _ => panic("snapshot lost populated options"),
+    }
+    assert_eq(data.features.len(), 3);
+    match data.features.get(&"default") {
+        Maybe.Some(values) => {
+            assert_eq(values.len(), 2);
+            assert_eq(values[0], "feature-first-λ");
+            assert_eq(values[1], "feature-second");
+        },
+        _ => panic("snapshot lost ordered feature members"),
+    }
+    match data.features.get(&"empty") {
+        Maybe.Some(values) => assert_eq(values.len(), 0),
+        _ => panic("snapshot lost empty feature list"),
+    }
+    match data.features.get(&"λ-key") {
+        Maybe.Some(values) => {
+            assert_eq(values.len(), 1);
+            assert_eq(values[0], "unicode-member-🙂");
+        },
+        _ => panic("snapshot changed feature key spelling"),
+    }
+    assert_eq(publication.archive.len(), 5);
+    assert_eq(publication.archive[0], 31_u8);
+    assert_eq(publication.archive[1], 139_u8);
+    assert_eq(publication.archive[2], 0_u8);
+    assert_eq(publication.archive[3], 255_u8);
+    assert_eq(publication.archive[4], 13_u8);
+}
+
+fn mutate_snapshot(publication: &mut DecodedPublication) {
+    publication.metadata.name_spelling.push_str(&"-changed");
+    publication.metadata.version_spelling.push_str(&"-changed");
+    publication.metadata.checksum_spelling.push_str(&"-changed");
+    assert_eq(publication.metadata.name_spelling, "widget-snapshot-changed");
+    assert_eq(publication.metadata.version_spelling, "1.2.3+snapshot-changed");
+    assert_eq(publication.metadata.checksum_spelling, "0000000000000000000000000000000000000000000000000000000000000000-changed");
+    match &mut publication.metadata.description {
+        Maybe.Some(text) => text.push_str(&"-changed"), _ => panic("description mutation setup"),
+    }
+    match &mut publication.metadata.license {
+        Maybe.Some(text) => text.push_str(&"new-license"), _ => panic("license mutation setup"),
+    }
+    publication.metadata.repository = Maybe.Some("new-repository");
+    match &mut publication.metadata.homepage {
+        Maybe.Some(text) => text.push_str(&"/changed"), _ => panic("homepage mutation setup"),
+    }
+    match &mut publication.metadata.readme {
+        Maybe.Some(text) => text.push_str(&"-changed"), _ => panic("readme mutation setup"),
+    }
+    assert_some_text(&publication.metadata.description, &"описание λ🙂 preserved-changed");
+    assert_some_text(&publication.metadata.license, &"new-license");
+    assert_some_text(&publication.metadata.repository, &"new-repository");
+    assert_some_text(&publication.metadata.homepage, &"https://example.invalid/snapshot/changed");
+    assert_some_text(&publication.metadata.readme, &"readme\nλ🙂 preserved-changed");
+    publication.metadata.authors[0].push_str(&"-changed");
+    publication.metadata.authors.push("new-author");
+    publication.metadata.keywords[0].push_str(&"-changed");
+    publication.metadata.categories[1] = "changed-category";
+    assert_eq(publication.metadata.authors.len(), 3);
+    assert_eq(publication.metadata.authors[0], "Автор🙂Long-changed");
+    assert_eq(publication.metadata.authors[2], "new-author");
+    assert_eq(publication.metadata.keywords[0], "keyword-first-λ-changed");
+    assert_eq(publication.metadata.categories[1], "changed-category");
+    match publication.metadata.dependencies.get_mut(&"detailed-full") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            options.version_spelling.push_str(&"-changed");
+            options.optional = Maybe.Some(false);
+            options.default_features = Maybe.None;
+            match &mut options.features {
+                Maybe.Some(values) => {
+                    values[0].push_str(&"-changed");
+                    values.push("new-dependency-feature");
+                },
+                _ => panic("dependency mutation setup"),
+            }
+        },
+        _ => panic("detailed mutation setup"),
+    }
+    match publication.metadata.dependencies.get(&"detailed-full") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => {
+            assert_eq(options.version_spelling, "^2-changed");
+            assert(options.optional is Maybe.Some(false));
+            assert(options.default_features is Maybe.None);
+            match options.features {
+                Maybe.Some(values) => {
+                    assert_eq(values.len(), 3);
+                    assert_eq(values[0], "feature-first-λ-changed");
+                    assert_eq(values[2], "new-dependency-feature");
+                },
+                _ => panic("dependency mutation did not remain present"),
+            }
+        },
+        _ => panic("detailed mutation disappeared"),
+    }
+    publication.metadata.dependencies.insert("simple-codec",
+        DecodedDependency.Detailed(DecodedDependencyOptions {
+            version_spelling: "^9", features: Maybe.None,
+            optional: Maybe.Some(true), default_features: Maybe.Some(false),
+        }));
+    match publication.metadata.dependencies.get(&"simple-codec") {
+        Maybe.Some(DecodedDependency.Detailed(options)) => assert_eq(options.version_spelling, "^9"),
+        _ => panic("whole dependency replacement did not execute"),
+    }
+    match publication.metadata.features.get_mut(&"default") {
+        Maybe.Some(values) => {
+            values[0].push_str(&"-changed");
+            values.push("new-feature-member");
+        },
+        _ => panic("feature mutation setup"),
+    }
+    match publication.metadata.features.get(&"default") {
+        Maybe.Some(values) => {
+            assert_eq(values.len(), 3);
+            assert_eq(values[0], "feature-first-λ-changed");
+            assert_eq(values[2], "new-feature-member");
+        },
+        _ => panic("feature mutation disappeared"),
+    }
+    let mut added_members: List<Text> = List.new();
+    added_members.push("new-map-member");
+    publication.metadata.features.insert("added-key", added_members);
+    assert_eq(publication.metadata.features.len(), 4);
+    match publication.metadata.features.get(&"added-key") {
+        Maybe.Some(values) => assert_eq(values[0], "new-map-member"),
+        _ => panic("new feature map entry did not execute"),
+    }
+    publication.archive[2] = 42_u8;
+    publication.archive.push(99_u8);
+    assert_eq(publication.archive.len(), 6);
+    assert_eq(publication.archive[2], 42_u8);
+    assert_eq(publication.archive[5], 99_u8);
+}
+
+fn attribution_snapshots(contents: &PreparedContents) {
+    let mut principal = contents.principal_id();
+    let mut credential = contents.credential_id();
+    let mut authority = contents.authority_id();
+    principal.push_str(&"-changed");
+    credential.push_str(&"-changed");
+    authority.push_str(&"-changed");
+    assert_eq(principal, "snapshot_alice-changed");
+    assert_eq(credential, "snapshot_active-changed");
+    assert_eq(authority, "snapshot_local-changed");
+    assert_eq(contents.principal_id(), "snapshot_alice");
+    assert_eq(contents.credential_id(), "snapshot_active");
+    assert_eq(contents.authority_id(), "snapshot_local");
+}
+
+fn main() {
+    let contents = prepared(&"widget-snapshot");
+    let mut first = contents.publication_snapshot();
+    let second = contents.publication_snapshot();
+    assert_original(&first, &"widget-snapshot");
+    assert_original(&second, &"widget-snapshot");
+    mutate_snapshot(&mut first);
+    assert_original(&second, &"widget-snapshot");
+    assert_original(&contents.publication_snapshot(), &"widget-snapshot");
+    attribution_snapshots(&contents);
+    let mut exact = contents.scope_snapshot();
+    match &mut exact {
+        NamePattern.Exact(name) => name.push_str(&"-changed"),
+        _ => panic("exact attribution setup"),
+    }
+    match exact {
+        NamePattern.Exact(name) => assert_eq(name, "widget-snapshot-changed"),
+        _ => panic("exact attribution mutation did not execute"),
+    }
+    match contents.scope_snapshot() {
+        NamePattern.Exact(name) => assert_eq(name, "widget-snapshot"),
+        _ => panic("retained exact attribution changed"),
+    }
+    let scoped = prepared(&"@snapshot/widget");
+    let mut scope = scoped.scope_snapshot();
+    match &mut scope {
+        NamePattern.Scope(name) => name.push_str(&"-changed"),
+        _ => panic("scope attribution setup"),
+    }
+    match scope {
+        NamePattern.Scope(name) => assert_eq(name, "@snapshot-changed"),
+        _ => panic("scope attribution mutation did not execute"),
+    }
+    match scoped.scope_snapshot() {
+        NamePattern.Scope(name) => assert_eq(name, "@snapshot"),
+        _ => panic("retained scope attribution changed"),
+    }
+    assert_original(&scoped.publication_snapshot(), &"@snapshot/widget");
+    print("publication-prepare-snapshot: ok");
+}

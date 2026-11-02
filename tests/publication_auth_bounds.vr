@@ -1,0 +1,98 @@
+// T1636: collection limits, separate from the routine verifier component.
+module verum_registry.tests.publication_auth_bounds;
+
+mount core.text.builder.TextBuilder;
+mount verum_registry.protocol.authority.{Authority, AuthorityRole};
+mount verum_registry.node.publication_auth.{CredentialConfigError, decode_credentials, authenticate};
+
+fn authorities() -> List<Authority> {
+    [Authority { id: "local", role: AuthorityRole.Local, owns: List.new() }]
+}
+
+fn root(principals: &Text, credentials: &Text) -> Text {
+    f"{{\"version\":1,\"principals\":[{principals}],\"credentials\":[{credentials}]}}"
+}
+
+fn accept(source: &Text) {
+    assert(source.len() < 262144);
+    assert(decode_credentials(source, &authorities()) is Result.Ok(_));
+}
+
+fn refuse(source: &Text, expected: &Text) {
+    assert(source.len() < 262144);
+    match decode_credentials(source, &authorities()) {
+        Result.Err(CredentialConfigError.InvalidSchema(path)) => assert_eq(path, expected),
+        _ => panic("collection boundary was accepted or confused with total bytes"),
+    }
+}
+
+fn principals(count: Int) -> Text {
+    let mut output = TextBuilder.new();
+    let mut index = 0;
+    while index < count {
+        if index != 0 { output.push(&","); }
+        output.push(&f"{{\"id\":\"p{index}\",\"grants\":[]}}");
+        index = index + 1;
+    }
+    output.build()
+}
+
+fn credentials(count: Int) -> Text {
+    let mut output = TextBuilder.new();
+    let mut index = 0;
+    while index < count {
+        if index != 0 { output.push(&","); }
+        // Distinct valid 32-byte digests without a hash-generation benchmark.
+        let digits = f"{index}";
+        let prefix = "0".repeat(64 - digits.len());
+        let hash = if index == 0 {
+            "0a479c22546d3b2f7351f4ab8ae6ac0b33d4d29975c9a8f6362afdc4152c82ee"
+        } else { f"{prefix}{digits}" };
+        output.push(&f"{{\"id\":\"c{index}\",\"principal\":\"p0\",\"token_sha256\":\"{hash}\",\"active\":true}}");
+        index = index + 1;
+    }
+    output.build()
+}
+
+fn names(count: Int) -> Text {
+    let mut output = TextBuilder.new();
+    let mut index = 0;
+    while index < count {
+        if index != 0 { output.push(&","); }
+        output.push(&f"{{\"exact\":\"name{index}\"}}");
+        index = index + 1;
+    }
+    output.build()
+}
+
+fn grants(count: Int) -> Text {
+    let mut output = TextBuilder.new();
+    let mut index = 0;
+    while index < count {
+        if index != 0 { output.push(&","); }
+        output.push(&f"{{\"authority\":\"local\",\"names\":[{{\"exact\":\"name{index}\"}}]}}");
+        index = index + 1;
+    }
+    output.build()
+}
+
+fn main() {
+    accept(&root(&principals(256), &""));
+    refuse(&root(&principals(257), &""), &"principals");
+    let source = root(&principals(1), &credentials(1024));
+    assert(source.len() < 262144);
+    let store = match decode_credentials(&source, &authorities()) {
+        Result.Ok(value) => value, _ => panic("1024 credentials must load"),
+    };
+    assert(authenticate(&store, &"vrp1_000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f") is Result.Ok(_));
+    refuse(&root(&principals(1), &credentials(1025)), &"credentials");
+    let thirty_two = grants(32);
+    let thirty_three = grants(33);
+    accept(&root(&f"{{\"id\":\"p0\",\"grants\":[{thirty_two}]}}", &""));
+    refuse(&root(&f"{{\"id\":\"p0\",\"grants\":[{thirty_three}]}}", &""), &"grants");
+    let at_names = names(32);
+    let over_names = names(33);
+    accept(&root(&f"{{\"id\":\"p0\",\"grants\":[{{\"authority\":\"local\",\"names\":[{at_names}]}}]}}", &""));
+    refuse(&root(&f"{{\"id\":\"p0\",\"grants\":[{{\"authority\":\"local\",\"names\":[{over_names}]}}]}}", &""), &"names");
+    print("publication-auth-bounds: ok");
+}
