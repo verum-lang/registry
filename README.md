@@ -62,9 +62,13 @@ and listener gates independently with
 `python3 tools/test_publication_postgres.py /absolute/path/to/verum --component storage`,
 then `--component transaction` and `--component http`.
 
-The latest complete-project check evaluates authentication candidate
+Registry commit `8ad0abc` passed the whole-project check. The CLI with
+SHA-256 `077b3e309558074ae8e2b1481e137f3264c1d8c0cd0a6d6e990538942ddbf2ae`
+checked all 40 production files in 71 seconds.
+
+An earlier whole-project check evaluated authentication candidate
 `c02238261` with the freshly baked CLI from language commit `49559a042`.
-It completes in **349.31 seconds with 2 compilation errors**, exit 101:
+It completed in **349.31 seconds with 2 compilation errors** and exited 101:
 the slice importer disagrees with the language's spawned-handle and await
 result types (T1681). The earlier response-field assignment and two IoResult
 pattern errors are absent; context-declaration warnings remain. The
