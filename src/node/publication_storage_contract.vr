@@ -68,7 +68,7 @@ public fn validate_record(
         index = index - 1;
     }
     if length != bytes.len() - 48 { return Result.Err(PublicationStorageError.Corrupt); }
-    let digest = record_digest(key, &bytes[48..]);
+    let digest = record_digest(key, &bytes.as_slice()[48..]);
     index = 0;
     while index < 32 {
         if digest[index] != bytes[16 + index] {

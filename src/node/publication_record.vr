@@ -92,7 +92,8 @@ public fn encode_publication_record(record: &DecodedPublicationRecord)
     append_text(&mut out, &record.authority);
     append_text(&mut out, &record.scope_kind);
     append_text(&mut out, &record.scope);
-    append_text(&mut out, &record.published_at.to_text());
+    let published_at = record.published_at;
+    append_text(&mut out, &published_at.to_text());
     append_text(&mut out, &metadata);
     for byte in record.archive.iter() { out.push(*byte); }
     Result.Ok(out)
