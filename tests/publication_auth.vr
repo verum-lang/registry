@@ -153,6 +153,18 @@ fn configuration_refusals() {
         Result.Err(CredentialConfigError.InvalidSchema(_)) => {},
         _ => panic("credential grant bound to upstream authority"),
     }
+    // Even matching configured owners cannot authorize an identifier that the
+    // immutable publication record would reject.
+    for invalid_id in ["local/node", "local node", "本地", "local.node"] {
+        let invalid: List<Authority> = [Authority {
+            id: invalid_id.clone(), role: AuthorityRole.Local, owns: List.new(),
+        }];
+        let source = configuration().replace(&"local", &invalid_id);
+        match decode_credentials(&source, &invalid) {
+            Result.Err(CredentialConfigError.InvalidSchema(field)) => assert_eq(field, "authority"),
+            _ => panic("invalid configured authority accepted by credential decoder"),
+        }
+    }
     let duplicates: List<Authority> = [
         Authority { id: "local", role: AuthorityRole.Local, owns: List.new() },
         Authority { id: "local", role: AuthorityRole.Local, owns: List.new() },

@@ -1,6 +1,7 @@
 // Spec: Cog Publication Protocol v1 — authenticated publisher preparation.
 module verum_registry.node.publication_auth;
 
+mount verum_registry.protocol.identity.valid_identity;
 mount core.encoding.json.{JsonValue, JsonError, parse_strict};
 mount core.encoding.hex.{decode as decode_hex};
 mount core.hash.crypto.sha256.{Sha256};
@@ -109,17 +110,6 @@ fn exact_fields(
     Result.Ok(())
 }
 
-fn valid_identifier(text: &Text) -> Bool {
-    if text.len() < 1 || text.len() > 128 { return false; }
-    for byte in text.bytes() {
-        if !((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)
-            || (byte >= 0x30 && byte <= 0x39) || byte == 0x5f || byte == 0x2d) {
-            return false;
-        }
-    }
-    true
-}
-
 fn lowercase_hex(text: &Text, length: Int) -> Bool {
     if text.len() != length { return false; }
     for byte in text.bytes() {
@@ -188,7 +178,7 @@ fn read_pattern(value: &JsonValue) -> Result<NamePattern, CredentialConfigError>
         return Result.Ok(NamePattern.Exact(name));
     }
     let scope = text_field(fields, &"scope")?;
-    if !scope.starts_with(&"@") || !valid_identifier(&scope.slice(1, scope.len())) {
+    if !scope.starts_with(&"@") || !valid_identity(&scope.slice(1, scope.len())) {
         return Result.Err(CredentialConfigError.InvalidSchema("scope"));
     }
     Result.Ok(NamePattern.Scope(scope))
@@ -211,7 +201,7 @@ fn read_grant(value: &JsonValue, authorities: &List<Authority>) -> Result<Public
     let keys: List<Text> = ["authority", "names"];
     exact_fields(fields, &keys, &"grants")?;
     let authority = text_field(fields, &"authority")?;
-    if !local_authority(&authority, authorities) {
+    if !valid_identity(&authority) || !local_authority(&authority, authorities) {
         return Result.Err(CredentialConfigError.InvalidSchema("authority"));
     }
     let name_values = field(fields, &"names")?;
@@ -235,7 +225,7 @@ fn read_principal(value: &JsonValue, authorities: &List<Authority>) -> Result<Pu
     let keys: List<Text> = ["id", "grants"];
     exact_fields(fields, &keys, &"principals")?;
     let id = text_field(fields, &"id")?;
-    if !valid_identifier(&id) { return Result.Err(CredentialConfigError.InvalidSchema("id")); }
+    if !valid_identity(&id) { return Result.Err(CredentialConfigError.InvalidSchema("id")); }
     let grant_values = field(fields, &"grants")?;
     let values = array(&grant_values, &"grants")?;
     if values.len() > 32 { return Result.Err(CredentialConfigError.InvalidSchema("grants")); }
@@ -267,7 +257,7 @@ fn read_credential(value: &JsonValue, principals: &List<PublisherPrincipal>) -> 
     let keys: List<Text> = ["id", "principal", "token_sha256", "active"];
     exact_fields(fields, &keys, &"credentials")?;
     let id = text_field(fields, &"id")?;
-    if !valid_identifier(&id) { return Result.Err(CredentialConfigError.InvalidSchema("id")); }
+    if !valid_identity(&id) { return Result.Err(CredentialConfigError.InvalidSchema("id")); }
     let principal = text_field(fields, &"principal")?;
     let mut principal_index = -1;
     let mut index = 0;

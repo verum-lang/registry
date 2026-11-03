@@ -1,0 +1,23 @@
+module verum_registry.tests.publication_identity;
+
+mount verum_registry.protocol.identity.valid_identity;
+
+fn main() {
+    assert(valid_identity(&"A"));
+    assert(valid_identity(&"0"));
+    assert(valid_identity(&"_"));
+    assert(valid_identity(&"-"));
+    assert(valid_identity(&"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"));
+    assert(valid_identity(&"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assert(!valid_identity(&""));
+    assert(!valid_identity(&"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assert(!valid_identity(&"local/unsafe"));
+    assert(!valid_identity(&"local bad"));
+    assert(!valid_identity(&"é"));
+    assert(!valid_identity(&"本地"));
+    assert(!valid_identity(&"local.default"));
+    assert(!valid_identity(&"local:admin"));
+    assert(!valid_identity(&"local\0suffix"));
+    assert(!valid_identity(&"local\nsuffix"));
+    print("publication-identity: ok");
+}

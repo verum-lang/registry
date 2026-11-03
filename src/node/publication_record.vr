@@ -1,6 +1,7 @@
 module verum_registry.node.publication_record;
 
 mount core.encoding.hex.encode;
+mount verum_registry.protocol.identity.valid_identity;
 mount core.hash.crypto.sha256.Sha256;
 mount verum_registry.protocol.publication_metadata.{DecodedSourceMetadata, decode_source_metadata};
 mount verum_registry.protocol.publication_encoding.encode_source_metadata;
@@ -50,20 +51,9 @@ fn append_text(out: &mut List<Byte>, value: &Text) {
     for byte in value.bytes() { out.push(byte); }
 }
 
-fn identifier_valid(value: &Text) -> Bool {
-    if value.len() < 1 || value.len() > 128 { return false; }
-    for byte in value.bytes() {
-        if !((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)
-            || (byte >= 0x30 && byte <= 0x39) || byte == 0x5f || byte == 0x2d) {
-            return false;
-        }
-    }
-    true
-}
-
 fn provenance_valid(record: &DecodedPublicationRecord) -> Bool {
-    identifier_valid(&record.principal) && identifier_valid(&record.credential)
-        && identifier_valid(&record.authority) && record.published_at >= 0
+    valid_identity(&record.principal) && valid_identity(&record.credential)
+        && valid_identity(&record.authority) && record.published_at >= 0
         && (record.scope_kind == "exact" || record.scope_kind == "scope")
         && record.scope.len() > 0 && record.scope.len() <= 262144
 }

@@ -50,7 +50,9 @@ requires synchronous local commits for each publication.
 Set `VERUM_REGISTRY_STORAGE=postgres` and supply `VERUM_REGISTRY_PG_HOST`,
 `VERUM_REGISTRY_PG_PORT`, `VERUM_REGISTRY_PG_DATABASE`,
 `VERUM_REGISTRY_PG_USER` and `VERUM_REGISTRY_PG_PASSWORD` alongside the
-listener, credential and authority settings. TLS defaults to `verify-full`.
+listener, credential and authority settings. Publisher, credential and authority
+identifiers contain 1–128 ASCII letters, digits, `_` or `-`; invalid authority
+identifiers are refused during startup. TLS defaults to `verify-full`.
 The local test selects `VERUM_REGISTRY_PG_TLS=disable` for its isolated
 loopback database. `VERUM_REGISTRY_PG_CONNECTIONS` sets the pool maximum
 from 1 to 64 and defaults to 8. The default file backend uses

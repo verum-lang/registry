@@ -45,6 +45,8 @@ elif component in ("prepare", "prepare_copy", "prepare_snapshot"):
 elif component == "credentials_file":
     modules = [Path("src/protocol/authority.vr"), Path("src/node/publication_auth.vr"),
                Path("src/node/publication_credentials_file.vr")]
+if Path("src/node/publication_auth.vr") in modules:
+    modules.append(Path("src/protocol/identity.vr"))
 assets = [Path("tests/fixtures/publication_auth/credentials-v1.json")] if component == "credentials_file" else []
 fragments = {Path("src/node/publication_auth.vr"): Path("tests/fragments/publication_auth_isolation.vr")} if component == "auth_isolation" else {}
 for asset in assets:
@@ -147,6 +149,8 @@ class PublicationRunnerControls:
         elif self.component == "credentials_file":
             self.modules = ["src/protocol/authority.vr", "src/node/publication_auth.vr",
                             "src/node/publication_credentials_file.vr"]
+        if "src/node/publication_auth.vr" in self.modules:
+            self.modules.append("src/protocol/identity.vr")
         self.assets = ["tests/fixtures/publication_auth/credentials-v1.json"] if self.component == "credentials_file" else []
         self.fragments = {"src/node/publication_auth.vr": "tests/fragments/publication_auth_isolation.vr"} if self.component == "auth_isolation" else {}
         self.fixture = f"tests/publication_{self.component}.vr"

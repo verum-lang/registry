@@ -19,6 +19,7 @@ from test_publication_storage import run
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = b'[cog]\nname = "widget"\nversion = "1.2.3"\n'
 COMMON = (
+    "protocol/identity",
     "protocol/publication", "protocol/publication_metadata", "protocol/publication_encoding",
     "node/publication_record", "node/publication_manifest", "node/publication_archive",
 )

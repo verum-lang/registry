@@ -1,0 +1,17 @@
+module verum_registry.protocol.identity;
+
+/// Publisher, credential and authority identifiers share one bounded ASCII grammar.
+public pure fn valid_identity(text: &Text) -> Bool {
+    if text.len() < 1 || text.len() > 128 { return false; }
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !((byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)
+            || (byte >= 0x30 && byte <= 0x39) || byte == 0x5f || byte == 0x2d) {
+            return false;
+        }
+        index = index + 1;
+    }
+    true
+}

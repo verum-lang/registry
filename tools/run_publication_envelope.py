@@ -23,6 +23,14 @@ RUNNER = Path("tools/run_publication_envelope.py")
 NEW_HEADER = b"module verum_registry.main;\n"
 MANIFEST = b'[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n'
 COMPONENTS = {
+    "identity": {
+        "task": "T2198",
+        "modules": (Path("src/protocol/identity.vr"),),
+        "fixture": Path("tests/publication_identity.vr"),
+        "expected": Path("tests/publication_identity.expected"),
+        "header": b"module verum_registry.tests.publication_identity;\n",
+        "scope": "Run the shared publisher/credential/authority byte grammar and its boundaries. Does not establish startup, authentication, storage or HTTP acceptance.",
+    },
     "evidence_snapshot": {
         "task": "T1790",
         "modules": (Path("src/protocol/authority.vr"), Path("src/protocol/evidence.vr")),
@@ -39,6 +47,7 @@ COMPONENTS = {
         "modules": (Path("src/protocol/publication.vr"),
                     Path("src/protocol/publication_metadata.vr"),
                     Path("src/protocol/publication_encoding.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_record.vr")),
         "fixture": Path("tests/publication_record.vr"),
         "expected": Path("tests/publication_record.expected"),
@@ -107,6 +116,7 @@ COMPONENTS = {
     "auth": {
         "task": "T1636",
         "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr")),
         "fixture": Path("tests/publication_auth.vr"),
         "expected": Path("tests/publication_auth.expected"),
@@ -124,6 +134,7 @@ COMPONENTS = {
         "modules": (Path("src/protocol/authority.vr"),
                     Path("src/protocol/publication.vr"),
                     Path("src/protocol/publication_metadata.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr"),
                     Path("src/node/publication_prepare.vr")),
         "fixture": Path("tests/publication_prepare.vr"),
@@ -143,6 +154,7 @@ COMPONENTS = {
         "modules": (Path("src/protocol/authority.vr"),
                     Path("src/protocol/publication.vr"),
                     Path("src/protocol/publication_metadata.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr"),
                     Path("src/node/publication_prepare.vr")),
         "fixture": Path("tests/publication_prepare_copy.vr"),
@@ -162,6 +174,7 @@ COMPONENTS = {
         "modules": (Path("src/protocol/authority.vr"),
                     Path("src/protocol/publication.vr"),
                     Path("src/protocol/publication_metadata.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr"),
                     Path("src/node/publication_prepare.vr")),
         "fixture": Path("tests/publication_prepare_snapshot.vr"),
@@ -180,6 +193,7 @@ COMPONENTS = {
     "credentials_file": {
         "task": "T1636",
         "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr"),
                     Path("src/node/publication_credentials_file.vr")),
         "assets": (Path("tests/fixtures/publication_auth/credentials-v1.json"),),
@@ -196,6 +210,7 @@ COMPONENTS = {
     "auth_bounds": {
         "task": "T1636",
         "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr")),
         "fixture": Path("tests/publication_auth_bounds.vr"),
         "expected": Path("tests/publication_auth_bounds.expected"),
@@ -211,6 +226,7 @@ COMPONENTS = {
     "auth_isolation": {
         "task": "T1636",
         "modules": (Path("src/protocol/authority.vr"),
+                    Path("src/protocol/identity.vr"),
                     Path("src/node/publication_auth.vr")),
         "appended_fragments": {
             Path("src/node/publication_auth.vr"): Path("tests/fragments/publication_auth_isolation.vr"),

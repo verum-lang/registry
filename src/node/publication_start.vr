@@ -1,6 +1,7 @@
 module verum_registry.node.publication_start;
 
 mount core.base.env.var;
+mount verum_registry.protocol.identity.valid_identity;
 mount core.database.common.error.DbError;
 mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
 mount verum_registry.node.publication_archive.valid_publication_name;
@@ -22,7 +23,7 @@ fn required(name: &Text) -> Result<Text, Text> {
 /// Explicit local ownership is separate from credential grants. A grant cannot
 /// make an upstream or an unconfigured package locally publishable.
 public fn publication_authorities(id: &Text, names: &Text) -> Result<List<Authority>, Text> {
-    if id.len() == 0 || id.len() > 128 { return Result.Err("invalid local authority identifier"); }
+    if !valid_identity(id) { return Result.Err("invalid local authority identifier"); }
     let mut owned: List<NamePattern> = List.new();
     let mut seen: Map<Text, Bool> = Map.new();
     for name in names.split(&",") {
