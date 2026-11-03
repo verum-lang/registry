@@ -1,10 +1,12 @@
 module verum_registry.node.publication_start;
 
 mount core.base.env.var;
+mount core.database.common.error.DbError;
 mount verum_registry.protocol.authority.{Authority, AuthorityRole, NamePattern};
 mount verum_registry.node.publication_archive.valid_publication_name;
 mount verum_registry.node.publication_service.serve_publication_storage;
 mount verum_registry.node.publication_storage.PublicationStorage;
+mount verum_registry.node.publication_storage_contract.PublicationStorageError;
 mount core.database.postgres.config.{PgConfig, PgTlsMode};
 
 fn required(name: &Text) -> Result<Text, Text> {
@@ -75,5 +77,13 @@ fn configured_storage() -> Result<PublicationStorage, Text> {
     let config = PgConfig.new(host, port, user, password, database)
         .with_application_name("verum-registry").with_tls(tls);
     PublicationStorage.open_postgres(config, 100663296, connections)
-        .map_err(|_| "publication PostgreSQL storage could not be opened")
+        .map_err(|error| {
+            let detail = match error {
+                // Adapter payloads may contain arbitrary remote diagnostics.
+                PublicationStorageError.Database(DbError.Adapter(_)) => "database adapter failure".to_text(),
+                PublicationStorageError.Database(cause) => cause.message(),
+                _ => "invalid publication storage configuration".to_text(),
+            };
+            f"publication PostgreSQL storage could not be opened: {detail}"
+        })
 }

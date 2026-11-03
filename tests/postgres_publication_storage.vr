@@ -4,6 +4,12 @@ mount core.database.postgres.config.{PgConfig, PgTlsMode};
 mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
 
 fn main() {
+    let invalid = PgConfig.new("127.0.0.1", 1, "unused", "unused", "unused");
+    match PublicationStorage.open_postgres(invalid, 32768, 0) {
+        Result.Err(PublicationStorageError.Database(cause)) =>
+            assert_eq(cause.message(), "pool failure: config_invalid"),
+        _ => panic("invalid pool size must retain its configuration error"),
+    }
     let config = PgConfig.new(
         var(&"VERUM_PG_TEST_HOST").unwrap(),
         var(&"VERUM_PG_TEST_PORT").unwrap().parse_int().unwrap(),

@@ -1,5 +1,6 @@
 module verum_registry.node.publication_storage_contract;
 mount core.io.protocols.StreamError;
+mount core.database.common.error.DbError;
 mount core.hash.crypto.sha256.Sha256;
 
 public type PublicationStorageError is
@@ -9,7 +10,8 @@ public type PublicationStorageError is
     | Corrupt
     | Conflict
     | Io(StreamError)
-    | Database;
+    | Database(DbError)
+    | SessionClosed;
 
 public type RecordWrite is | Created | Existing;
 

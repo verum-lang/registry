@@ -17,7 +17,7 @@ fn main() {
     let original: List<Byte> = [0, 1, 127, 255];
     let retry: List<Byte> = [0, 42, 254];
     assert(storage.commit(&anchor, &original).unwrap() is RecordWrite.Created);
-    assert(storage.commit(&pending, &retry) is Result.Err(PublicationStorageError.Database));
+    assert(storage.commit(&pending, &retry) is Result.Err(PublicationStorageError.Database(_)));
     let loaded = storage.load(&anchor).unwrap().unwrap();
     assert_eq(loaded, original);
     assert(storage.commit(&pending, &retry).unwrap() is RecordWrite.Created);

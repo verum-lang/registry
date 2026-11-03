@@ -72,8 +72,8 @@ implement PublicationPgSession {
         ];
         let mut result = match &mut self.connection {
             Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.read, &params)
-                .map_err(|_| PublicationStorageError.Database)?,
-            Maybe.None => return Result.Err(PublicationStorageError.Database),
+                .map_err(|cause| PublicationStorageError.Database(cause))?,
+            Maybe.None => return Result.Err(PublicationStorageError.SessionClosed),
         };
         if result.rows.len() == 0 { return Result.Ok(Maybe.None); }
         if result.rows.len() != 1 || result.rows[0].len() != 1 {
@@ -93,8 +93,8 @@ implement PublicationPgSession {
         ];
         let result = match &mut self.connection {
             Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.insert, &params)
-                .map_err(|_| PublicationStorageError.Database)?,
-            Maybe.None => return Result.Err(PublicationStorageError.Database),
+                .map_err(|cause| PublicationStorageError.Database(cause))?,
+            Maybe.None => return Result.Err(PublicationStorageError.SessionClosed),
         };
         if result.rows.len() == 1 {
             if result.rows[0].len() != 1 { return Result.Err(PublicationStorageError.Corrupt); }
@@ -145,17 +145,21 @@ implement PublicationPostgresStorage {
     public fn open(config: PgConfig, limit: Int, connections: Int)
         -> Result<PublicationPostgresStorage, PublicationStorageError> {
         if limit < 1 || limit > 100663296 { return Result.Err(PublicationStorageError.TooLarge); }
-        if connections < 1 || connections > 64 { return Result.Err(PublicationStorageError.Database); }
+        if connections < 1 || connections > 64 {
+            return Result.Err(PublicationStorageError.Database(DbError.PoolFailure {
+                kind: PoolErrorKind.PekConfigInvalid("publication pool size must be between 1 and 64"),
+            }));
+        }
         let factory = || -> Result<PublicationPgSession, DbError> { open_session(&config) };
         let limits = PoolConfig.default(AdapterId.AdPostgres).with_min(1).with_max(connections)
             .with_acquire_timeout_ms(5000);
-        let pool = ConnectionPool.launch(limits, factory).map_err(|_| PublicationStorageError.Database)?;
+        let pool = ConnectionPool.launch(limits, factory).map_err(|cause| PublicationStorageError.Database(cause))?;
         Result.Ok(PublicationPostgresStorage { pool: pool, limit: limit })
     }
 
     public fn load(&self, key: &Text) -> Result<Maybe<List<Byte>>, PublicationStorageError> {
         if !key_valid(key) { return Result.Err(PublicationStorageError.InvalidKey); }
-        let mut lease = self.pool.acquire().map_err(|_| PublicationStorageError.Database)?;
+        let mut lease = self.pool.acquire().map_err(|cause| PublicationStorageError.Database(cause))?;
         let result = lease.conn_mut().load_encoded(key, self.limit);
         release(lease);
         match result? {
@@ -172,7 +176,7 @@ implement PublicationPostgresStorage {
         if value.len() > self.limit { return Result.Err(PublicationStorageError.TooLarge); }
         let mut bytes = header(key, value);
         for byte in value.iter() { bytes.push(*byte); }
-        let mut lease = self.pool.acquire().map_err(|_| PublicationStorageError.Database)?;
+        let mut lease = self.pool.acquire().map_err(|cause| PublicationStorageError.Database(cause))?;
         let result = lease.conn_mut().insert(key, &bytes, self.limit);
         release(lease);
         result
