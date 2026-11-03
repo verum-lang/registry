@@ -55,6 +55,24 @@ def check_installed(consumer, profile, base, digest, archive):
     assert entry["source"] == {"type": "registry", "registry": base, "version": "1.2.3"}
 
 
+def wait_for_listener(process, request, timeout):
+    deadline = time.monotonic() + timeout
+    while (remaining := deadline - time.monotonic()) > 0:
+        if process.poll() is not None:
+            raise RuntimeError(f"listener exited {process.returncode}")
+        try:
+            status, headers, body = request("/api/v1/cogs/publish", timeout=min(120, remaining))
+        except URLError as error:
+            if not isinstance(error.reason, ConnectionRefusedError):
+                raise
+            time.sleep(min(0.2, remaining))
+            continue
+        if status == 405 and headers.get("Allow") == "POST" and body == b"publication request refused":
+            return
+        raise RuntimeError(f"listener returned unexpected readiness response (HTTP {status})")
+    raise TimeoutError("listener did not accept connections before the startup deadline")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verum", type=Path)
@@ -179,18 +197,7 @@ def main():
             with output.open("ab") as log:
                 process = subprocess.Popen([executable, "run", "--tier", "interpret", "--", "serve-publications"], cwd=ROOT,
                                            stdout=log, stderr=log, env=environment, start_new_session=True)
-            deadline = time.monotonic() + options.timeout
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise RuntimeError(f"listener exited {process.returncode}\n" + output.read_text()[-24000:])
-                try:
-                    status, headers, body = request("/api/v1/cogs/publish", timeout=1)
-                    if status == 405 and headers.get("Allow") == "POST" and body == b"publication request refused":
-                        return
-                except (URLError, ConnectionError, TimeoutError):
-                    pass
-                time.sleep(0.2)
-            raise RuntimeError("listener startup timed out\n" + output.read_text()[-24000:])
+            wait_for_listener(process, request, options.timeout)
 
         try:
             start()
