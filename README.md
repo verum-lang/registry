@@ -41,7 +41,14 @@ These commands have different purposes:
 
 ### PostgreSQL publication storage
 
-Apply `migrations/001_publications.sql` as the schema owner. Grant the
+Apply `migrations/001_publications.sql` and then
+`migrations/002_publication_projection.sql` as the schema owner before
+starting this registry version. Migration 002 requires an empty v1 table and
+refuses a populated store without changing its schema or records. Existing
+publications require a verified record-by-record migration; no backfill tool
+is supplied yet. Do not delete published records to make the migration pass.
+
+Grant the
 registry's separate login role `USAGE` on schema `public` and only
 `SELECT, INSERT` on `public.verum_publications`. Use a logged table on a
 writable primary with `fsync` and `full_page_writes` enabled. The registry
@@ -57,6 +64,12 @@ The local test selects `VERUM_REGISTRY_PG_TLS=disable` for its isolated
 loopback database. `VERUM_REGISTRY_PG_CONNECTIONS` sets the pool maximum
 from 1 to 64 and defaults to 8. The default file backend uses
 `VERUM_REGISTRY_STORE`.
+
+`--component projection-sql` checks the actual schema, atomic projection,
+concurrent writers and crash recovery using PostgreSQL only. It does not run
+the Verum adapter or establish HTTP/index readiness. Docker commands and
+startup have separate `--docker-timeout` and `--startup-timeout` budgets;
+there is no overall workflow timeout.
 
 The isolated Docker runner uses a locally available `postgres:17-alpine`
 image and an identified Verum CLI. Run the adapter, authenticated transaction

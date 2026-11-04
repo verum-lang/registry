@@ -58,7 +58,7 @@ def main():
         (project / "src/node").mkdir(parents=True)
         (project / "verum.toml").write_text(
             '[cog]\nname = "verum-registry"\nversion = "0.1.0"\nedition = "2026"\n')
-        for module in ("storage_contract", "local_storage", "postgres_storage", "storage"):
+        for module in ("storage_contract", "local_storage"):
             relative = f"src/node/publication_{module}.vr"
             shutil.copyfile(ROOT / relative, project / relative)
         fixture = (ROOT / "tests/publication_storage.vr").read_text()

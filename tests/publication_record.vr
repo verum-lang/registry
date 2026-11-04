@@ -1,5 +1,8 @@
 module verum_registry.tests.publication_record;
 
+mount core.encoding.json.parse_strict;
+mount verum_registry.node.publication_write.publication_write;
+mount verum_registry.protocol.publication_encoding.{encode_index_version, MetadataEncodingError};
 mount verum_registry.protocol.publication_metadata.{DecodedSourceMetadata, decode_source_metadata};
 mount verum_registry.node.publication_record.{
     DecodedPublicationRecord, publication_checksum, publication_record_key,
@@ -92,8 +95,42 @@ fn corruption_is_refused() {
     assert(encode_publication_record(&invalid) is Result.Err(_));
 }
 
+fn projection_is_bound_to_record() {
+    let mut original = record("first", 1729000000);
+    original.metadata.features.insert("net", ["tls"]);
+    original.metadata.features.insert("default", ["net", "net"]);
+    original.metadata.features.insert("quoted\"", ["λ\n"]);
+    let write = publication_write(&original).unwrap();
+    assert_eq(*write.key(), publication_record_key(&"widget", &"1.2.3"));
+    assert_eq(*write.name(), "widget");
+    assert_eq(*write.version(), "1.2.3");
+    let projected = parse_strict(write.index_entry(), 1048576).unwrap();
+    let fields = projected.as_object().unwrap();
+    assert_eq(fields.len(), 4);
+    assert_eq(fields.get(&"version").unwrap().as_string().unwrap(), "1.2.3");
+    assert_eq(fields.get(&"checksum").unwrap().as_string().unwrap(), original.metadata.checksum_spelling);
+    let features = fields.get(&"features").unwrap().as_object().unwrap();
+    assert_eq(features.len(), 3);
+    assert_eq(features.get(&"default").unwrap().as_array().unwrap().len(), 2);
+    assert_eq(features.get(&"quoted\"").unwrap().as_array().unwrap()[0].as_string().unwrap(), "λ\n");
+    let encoded = write.index_entry();
+    assert_eq(encode_index_version(&original.metadata, encoded.len()).unwrap(), *encoded);
+    assert(encode_index_version(&original.metadata, encoded.len() - 1) is Result.Err(MetadataEncodingError.TooLarge));
+    assert(encode_index_version(&original.metadata, 0) is Result.Err(MetadataEncodingError.InvalidLimit));
+    original.metadata.name_spelling = "changed";
+    original.metadata.features.insert("later", []);
+    assert_eq(*write.name(), "widget");
+    let stored = decode_publication_record(write.value()).unwrap();
+    assert_eq(stored.metadata.name_spelling, "widget");
+    assert_eq(stored.metadata.features.len(), 3);
+    assert_eq(encode_index_version(&stored.metadata, 1048576).unwrap(), *write.index_entry());
+    original.archive[0] = 99_u8;
+    assert(publication_write(&original) is Result.Err(_));
+}
+
 fn main() {
     roundtrip_and_retry_identity();
     corruption_is_refused();
+    projection_is_bound_to_record();
     print("publication-record: ok");
 }

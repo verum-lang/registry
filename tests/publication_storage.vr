@@ -1,6 +1,7 @@
 module verum_registry.tests.publication_storage;
 
-mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
+mount verum_registry.node.publication_local_storage.PublicationLocalStorage;
+mount verum_registry.node.publication_storage_contract.{PublicationStorageError, RecordWrite};
 mount core.base.env.var;
 
 fn environment(key: &Text) -> Text {
@@ -17,14 +18,14 @@ fn payload() -> List<Byte> {
     bytes
 }
 
-fn store(directory: &Text) -> PublicationStorage {
-    match PublicationStorage.open(directory, 32768) {
+fn store(directory: &Text) -> PublicationLocalStorage {
+    match PublicationLocalStorage.open(directory, 32768) {
         Result.Ok(value) => value,
         Result.Err(_) => panic("open real publication storage"),
     }
 }
 
-fn check_value(storage: &PublicationStorage, key: &Text, expected: &List<Byte>) {
+fn check_value(storage: &PublicationLocalStorage, key: &Text, expected: &List<Byte>) {
     let actual = match storage.load(key) {
         Result.Ok(Maybe.Some(value)) => value,
         _ => panic("committed record must load"),
@@ -61,15 +62,15 @@ fn main() {
         assert(storage.load(&missing) is Result.Ok(Maybe.None));
         assert(storage.load(&"../outside") is Result.Err(PublicationStorageError.InvalidKey));
         assert(storage.commit(&"../outside", &bytes) is Result.Err(PublicationStorageError.InvalidKey));
-        assert(PublicationStorage.open(directory, 0) is Result.Err(PublicationStorageError.TooLarge));
-        assert(PublicationStorage.open(directory, 100663297) is Result.Err(PublicationStorageError.TooLarge));
-        assert(PublicationStorage.open(&f"{directory}/symlink-root", 32768)
+        assert(PublicationLocalStorage.open(directory, 0) is Result.Err(PublicationStorageError.TooLarge));
+        assert(PublicationLocalStorage.open(directory, 100663297) is Result.Err(PublicationStorageError.TooLarge));
+        assert(PublicationLocalStorage.open(&f"{directory}/symlink-root", 32768)
             is Result.Err(PublicationStorageError.InvalidDirectory));
-        assert(PublicationStorage.open(&f"{directory}/file-root", 32768)
+        assert(PublicationLocalStorage.open(&f"{directory}/file-root", 32768)
             is Result.Err(PublicationStorageError.InvalidDirectory));
-        assert(PublicationStorage.open(&f"{directory}/missing-root", 32768)
+        assert(PublicationLocalStorage.open(&f"{directory}/missing-root", 32768)
             is Result.Err(PublicationStorageError.Io(_)));
-        let tiny = match PublicationStorage.open(directory, 1) {
+        let tiny = match PublicationLocalStorage.open(directory, 1) {
             Result.Ok(value) => value, _ => panic("open bounded store"),
         };
         assert(tiny.commit(&missing, &bytes) is Result.Err(PublicationStorageError.TooLarge));

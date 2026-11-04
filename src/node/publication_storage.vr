@@ -5,6 +5,8 @@ mount verum_registry.node.publication_local_storage.PublicationLocalStorage;
 mount verum_registry.node.publication_postgres_storage.PublicationPostgresStorage;
 public mount verum_registry.node.publication_storage_contract.{PublicationStorageError, RecordWrite};
 
+mount verum_registry.node.publication_write.PublicationWrite;
+
 type PublicationBackend is
     | Local(PublicationLocalStorage)
     | Postgres(PublicationPostgresStorage);
@@ -30,10 +32,10 @@ implement PublicationStorage {
         }
     }
 
-    public fn commit(&self, key: &Text, value: &List<Byte>) -> Result<RecordWrite, PublicationStorageError> {
+    public fn commit(&self, write: &PublicationWrite) -> Result<RecordWrite, PublicationStorageError> {
         match &self.backend {
-            PublicationBackend.Local(storage) => storage.commit(key, value),
-            PublicationBackend.Postgres(storage) => storage.commit(key, value),
+            PublicationBackend.Local(storage) => storage.commit(write.key(), write.value()),
+            PublicationBackend.Postgres(storage) => storage.commit(write),
         }
     }
 }

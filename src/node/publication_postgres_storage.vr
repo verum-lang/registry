@@ -6,6 +6,7 @@ mount core.database.postgres.config.PgConfig;
 mount core.database.postgres.connection.{connect, PgConnection, PgConnState, PgPreparedStatement};
 mount core.database.postgres.wire.backend.TxStatus;
 mount core.database.postgres.wire.typed.TypedValue;
+mount verum_registry.node.publication_write.PublicationWrite;
 mount verum_registry.node.publication_storage_contract.{
     PublicationStorageError, RecordWrite, key_valid, header, decode_record, validate_record,
 };
@@ -20,6 +21,7 @@ type PublicationPgSession is {
 type PublicationPgStatements is {
     read: PgPreparedStatement,
     insert: PgPreparedStatement,
+    projection: PgPreparedStatement,
 };
 
 fn configuration_error() -> DbError {
@@ -43,6 +45,10 @@ fn prepare_session(connection: &mut PgConnection) -> Result<PublicationPgStateme
           AND c.relpersistence = 'p' AND c.relkind = 'r'
           AND has_table_privilege(c.oid, 'SELECT')
           AND has_table_privilege(c.oid, 'INSERT')
+          AND (SELECT count(*) FROM pg_catalog.pg_attribute a
+               WHERE a.attrelid = c.oid AND NOT a.attisdropped AND a.attnotnull
+                 AND a.attname IN ('release_name', 'release_version', 'index_entry')
+                 AND a.atttypid = 'text'::regtype) = 3
           AND current_setting('fsync') = 'on'
           AND current_setting('full_page_writes') = 'on'
           AND current_setting('default_transaction_read_only') = 'off'
@@ -60,8 +66,9 @@ fn prepare_session(connection: &mut PgConnection) -> Result<PublicationPgStateme
     if ready.len() != 1 { return Result.Err(configuration_error()); }
     // Bound transferred bytes even if an operator has damaged the stored row.
     let read = connection.prepare(&"SELECT CASE WHEN octet_length(record) <= $2::integer THEN record ELSE NULL END FROM public.verum_publications WHERE record_key = $1::text")?;
-    let insert = connection.prepare(&"INSERT INTO public.verum_publications (record_key, record) VALUES ($1::text, $2::bytea) ON CONFLICT (record_key) DO NOTHING RETURNING 1")?;
-    Result.Ok(PublicationPgStatements { read: read, insert: insert })
+    let insert = connection.prepare(&"INSERT INTO public.verum_publications (record_key, record, release_name, release_version, index_entry) VALUES ($1::text, $2::bytea, $3::text, $4::text, $5::text) ON CONFLICT (record_key) DO NOTHING RETURNING 1")?;
+    let projection = connection.prepare(&"SELECT CASE WHEN octet_length(release_name) <= 4096 THEN release_name ELSE NULL END, CASE WHEN octet_length(release_version) <= 4096 THEN release_version ELSE NULL END, CASE WHEN octet_length(index_entry) <= 1048576 THEN index_entry ELSE NULL END FROM public.verum_publications WHERE record_key = $1::text")?;
+    Result.Ok(PublicationPgStatements { read: read, insert: insert, projection: projection })
 }
 
 fn open_session(config: &PgConfig) -> Result<PublicationPgSession, DbError> {
@@ -111,10 +118,14 @@ implement PublicationPgSession {
         }
     }
 
-    fn insert(&mut self, key: &Text, bytes: &List<Byte>, limit: Int) -> Result<RecordWrite, PublicationStorageError> {
+    fn insert(&mut self, write: &PublicationWrite, bytes: List<Byte>, limit: Int) -> Result<RecordWrite, PublicationStorageError> {
+        let key = write.key();
         let params: List<Maybe<TypedValue>> = [
             Maybe.Some(TypedValue.TvText(key.clone())),
-            Maybe.Some(TypedValue.TvBytea(bytes.clone())),
+            Maybe.Some(TypedValue.TvBytea(bytes)),
+            Maybe.Some(TypedValue.TvText(write.name().clone())),
+            Maybe.Some(TypedValue.TvText(write.version().clone())),
+            Maybe.Some(TypedValue.TvText(write.index_entry().clone())),
         ];
         let result = match &mut self.connection {
             Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.insert, &params)
@@ -136,11 +147,34 @@ implement PublicationPgSession {
             Maybe.None => return Result.Err(PublicationStorageError.Corrupt),
         };
         validate_record(key, &existing, limit)?;
-        if existing.len() != bytes.len() { return Result.Err(PublicationStorageError.Conflict); }
+        let value = write.value();
+        if existing.len() != value.len() + 48 { return Result.Err(PublicationStorageError.Conflict); }
         let mut index = 0;
-        while index < bytes.len() {
-            if existing[index] != bytes[index] { return Result.Err(PublicationStorageError.Conflict); }
+        while index < value.len() {
+            if existing[index + 48] != value[index] { return Result.Err(PublicationStorageError.Conflict); }
             index = index + 1;
+        }
+        // A damaged projection must not be acknowledged by an exact retry.
+        // The runtime role cannot update it; never repair it as a side effect.
+        let params: List<Maybe<TypedValue>> = [Maybe.Some(TypedValue.TvText(key.clone()))];
+        let result = match &mut self.connection {
+            Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.projection, &params)
+                .map_err(|cause| PublicationStorageError.Database(cause))?,
+            Maybe.None => return Result.Err(PublicationStorageError.SessionClosed),
+        };
+        if result.rows.len() != 1 || result.rows[0].len() != 3 {
+            return Result.Err(PublicationStorageError.Corrupt);
+        }
+        let expected = [write.name(), write.version(), write.index_entry()];
+        let mut field = 0;
+        while field < 3 {
+            match &result.rows[0][field] {
+                TypedValue.TvText(value) => {
+                    if *value != *expected[field] { return Result.Err(PublicationStorageError.Corrupt); }
+                },
+                _ => return Result.Err(PublicationStorageError.Corrupt),
+            }
+            field = field + 1;
         }
         Result.Ok(RecordWrite.Existing)
     }
@@ -196,13 +230,15 @@ implement PublicationPostgresStorage {
     /// A single autocommit INSERT atomically persists the complete record.
     /// synchronous_commit=on makes a success follow the WAL durability barrier.
     /// A lost reply remains uncertain; retrying the same release is safe.
-    public fn commit(&self, key: &Text, value: &List<Byte>) -> Result<RecordWrite, PublicationStorageError> {
+    public fn commit(&self, write: &PublicationWrite) -> Result<RecordWrite, PublicationStorageError> {
+        let key = write.key();
+        let value = write.value();
         if !key_valid(key) { return Result.Err(PublicationStorageError.InvalidKey); }
         if value.len() > self.limit { return Result.Err(PublicationStorageError.TooLarge); }
         let mut bytes = header(key, value);
         for byte in value.iter() { bytes.push(*byte); }
         let mut lease = self.pool.acquire().map_err(|cause| PublicationStorageError.Database(cause))?;
-        let result = lease.conn_mut().insert(key, &bytes, self.limit);
+        let result = lease.conn_mut().insert(write, bytes, self.limit);
         release(lease);
         result
     }

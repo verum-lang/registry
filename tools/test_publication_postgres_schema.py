@@ -3,6 +3,8 @@
 from pathlib import Path
 import re
 
+from publication_test_records import publication
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,18 +19,22 @@ def production_statements():
 
 def check_publication_schema(sql, run_storage=None):
     ready, insert = production_statements()
-    migration = (ROOT / "migrations/001_publications.sql").read_text()
-    plain = "CREATE TABLE public.verum_publications (record_key text NOT NULL, record bytea NOT NULL);"
-    primary = "CREATE TABLE public.verum_publications (record_key text PRIMARY KEY, record bytea NOT NULL);"
+    migration = "\n".join((ROOT / "migrations" / name).read_text() for name in
+                          ("001_publications.sql", "002_publication_projection.sql"))
+    projection = ", release_name text NOT NULL, release_version text NOT NULL, index_entry text NOT NULL"
+    probe = publication("1.0.0", b"schema probe")
+    plain = "CREATE TABLE public.verum_publications (record_key text NOT NULL, record bytea NOT NULL" + projection + ");"
+    primary = "CREATE TABLE public.verum_publications (record_key text PRIMARY KEY, record bytea NOT NULL" + projection + ");"
     cases = (
         ("migration", migration, True),
         ("unique-constraint", plain + "ALTER TABLE public.verum_publications ADD UNIQUE (record_key);", True),
         ("unique-index", plain + "CREATE UNIQUE INDEX release_key ON public.verum_publications(record_key);", True),
         ("included-column", plain + "CREATE UNIQUE INDEX release_key ON public.verum_publications(record_key) INCLUDE (record);", True),
-        ("reordered-columns", "CREATE TABLE public.verum_publications (record bytea NOT NULL, record_key text PRIMARY KEY);", True),
+        ("reordered-columns", "CREATE TABLE public.verum_publications (record bytea NOT NULL, record_key text PRIMARY KEY" + projection + ");", True),
         ("nulls-not-distinct", plain + "CREATE UNIQUE INDEX release_key ON public.verum_publications(record_key) NULLS NOT DISTINCT;", True),
         ("unrelated-deferred-key", primary + "ALTER TABLE public.verum_publications ADD UNIQUE (record) DEFERRABLE INITIALLY DEFERRED;", True),
         ("extra-partial-index", primary + "CREATE UNIQUE INDEX partial_key ON public.verum_publications(record_key) WHERE record_key <> '';", True),
+        ("missing-projection", "CREATE TABLE public.verum_publications (record_key text PRIMARY KEY, record bytea NOT NULL);", False),
         ("missing-unique-key", plain, False),
         ("nonunique-index", plain + "CREATE INDEX release_key ON public.verum_publications(record_key);", False),
         ("partial-index", plain + "CREATE UNIQUE INDEX release_key ON public.verum_publications(record_key) WHERE record_key <> '';", False),
@@ -45,19 +51,19 @@ def check_publication_schema(sql, run_storage=None):
             sql("DROP TABLE public.verum_publications; " + schema +
                 " GRANT SELECT, INSERT ON public.verum_publications TO registry_publisher;")
             prefix = "SET ROLE registry_publisher; SET search_path = pg_catalog; "
-            prepared = sql(prefix + "PREPARE publication(text,bytea) AS " + insert + "; SELECT 'prepared';")
-            assert prepared.stdout.strip().endswith("prepared"), (name, prepared.stdout)
+            prepared = sql(prefix + "PREPARE publication(text,bytea,text,text,text) AS " + insert + "; SELECT 'prepared';", check=False)
+            assert (prepared.returncode == 0) == (name != "missing-projection"), (name, prepared.stdout, prepared.stderr)
             observed = [line for line in sql(prefix + ready + ";").stdout.splitlines() if line != "SET"]
             actual = observed == ["1"]
             if actual != accepted:
                 mismatches.append(name)
             # Independently ask PostgreSQL to exercise the real INSERT. Every
             # probe rolls back; no fake publication is part of startup itself.
-            executed = sql(prefix + "BEGIN; PREPARE publication(text,bytea) AS " + insert +
-                           "; EXECUTE publication(repeat('a',64),decode(repeat('00',48),'hex')); ROLLBACK;",
+            executed = sql(prefix + "BEGIN; PREPARE publication(text,bytea,text,text,text) AS " + insert +
+                           "; EXECUTE publication(" + probe.arguments() + "); ROLLBACK;",
                            check=False)
             assert (executed.returncode == 0) == accepted, (name, executed.stdout, executed.stderr)
-            print(f"PostgreSQL schema {name}: prepared=true startup={actual} insert={accepted}", flush=True)
+            print(f"PostgreSQL schema {name}: prepared={prepared.returncode == 0} startup={actual} insert={accepted}", flush=True)
             if run_storage is not None:
                 run_storage(accepted)
             assert sql("SELECT count(*) FROM public.verum_publications;").stdout.strip() == "0"

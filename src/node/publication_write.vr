@@ -1,0 +1,38 @@
+module verum_registry.node.publication_write;
+
+mount verum_registry.node.publication_record.{
+    DecodedPublicationRecord, PublicationRecordError, encode_publication_record, publication_record_key,
+};
+mount verum_registry.protocol.publication_encoding.encode_index_version;
+
+/// One immutable storage input. The projection and bytes are derived together
+/// from the same record; callers cannot substitute independent catalog fields.
+/// This is a storage value, not authentication, archive admission or a receipt.
+public type PublicationWrite is {
+    private key: Text,
+    private value: List<Byte>,
+    private name: Text,
+    private version: Text,
+    private index_entry: Text,
+};
+
+public fn publication_write(record: &DecodedPublicationRecord)
+    -> Result<PublicationWrite, PublicationRecordError>
+{
+    let value = encode_publication_record(record)?;
+    let index_entry = encode_index_version(&record.metadata, 1048576)
+        .map_err(|_| PublicationRecordError.TooLarge)?;
+    Result.Ok(PublicationWrite {
+        key: publication_record_key(&record.metadata.name_spelling, &record.metadata.version_spelling),
+        value: value, name: record.metadata.name_spelling.clone(),
+        version: record.metadata.version_spelling.clone(), index_entry: index_entry,
+    })
+}
+
+implement PublicationWrite {
+    public fn key(&self) -> &Text { &self.key }
+    public fn value(&self) -> &List<Byte> { &self.value }
+    public fn name(&self) -> &Text { &self.name }
+    public fn version(&self) -> &Text { &self.version }
+    public fn index_entry(&self) -> &Text { &self.index_entry }
+}

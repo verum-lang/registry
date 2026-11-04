@@ -121,11 +121,20 @@ public fn encode_source_metadata(
             Maybe.None => panic("metadata key disappeared during immutable encoding"),
         }
     }
-    writer.append(&"},\"features\":{")?;
+    writer.append(&"},\"features\":")?;
+    encode_features(&mut writer, metadata)?;
+    writer.append(&",\"checksum\":")?;
+    writer.text(&metadata.checksum_spelling)?;
+    writer.append(&"}")?;
+    Result.Ok(writer.output)
+}
+
+fn encode_features(writer: &mut Writer, metadata: &DecodedSourceMetadata) -> Result<(), MetadataEncodingError> {
+    writer.append(&"{")?;
     let mut feature_names: List<Text> = List.new();
     for (name, _) in metadata.features.iter() { feature_names.push(name.clone()); }
     feature_names.sort();
-    first = true;
+    let mut first = true;
     for name in feature_names.iter() {
         if !first { writer.append(&",")?; }
         first = false;
@@ -136,8 +145,23 @@ public fn encode_source_metadata(
             Maybe.None => panic("metadata key disappeared during immutable encoding"),
         }
     }
-    writer.append(&"},\"checksum\":")?;
+    writer.append(&"}")
+}
+
+/// Projection of an admitted immutable source release. All features and their
+/// source order are retained. Yank state cannot be supplied by a publisher;
+/// mutable yanking needs its own authenticated operation and storage contract.
+public fn encode_index_version(metadata: &DecodedSourceMetadata, max_bytes: Int)
+    -> Result<Text, MetadataEncodingError>
+{
+    if max_bytes < 1 || max_bytes > 1048576 { return Result.Err(MetadataEncodingError.InvalidLimit); }
+    let mut writer = Writer { output: Text.new(), limit: max_bytes };
+    writer.append(&"{\"version\":")?;
+    writer.text(&metadata.version_spelling)?;
+    writer.append(&",\"checksum\":")?;
     writer.text(&metadata.checksum_spelling)?;
+    writer.append(&",\"yanked\":false,\"features\":")?;
+    encode_features(&mut writer, metadata)?;
     writer.append(&"}")?;
     Result.Ok(writer.output)
 }

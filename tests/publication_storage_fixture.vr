@@ -1,0 +1,23 @@
+module verum_registry.node.publication_storage_fixture;
+
+mount core.base.env.var;
+mount core.io.file.File;
+mount core.io.protocols.Read;
+mount verum_registry.node.publication_record.decode_publication_record;
+mount verum_registry.node.publication_write.{PublicationWrite, publication_write};
+
+/// Decode independent complete-record fixtures through the production codec.
+/// The storage test does not mint an authenticated publication receipt.
+public fn fixture_write(name: &Text) -> PublicationWrite {
+    let directory = var(&"VERUM_PG_TEST_FIXTURES").unwrap();
+    let mut file = File.open(&f"{directory}/{name}.release").unwrap();
+    let mut value: List<Byte> = List.new();
+    let mut buffer: [Byte; 4096] = [0_u8; 4096];
+    loop {
+        let count = file.read(&mut buffer[..]).unwrap();
+        if count == 0 { break; }
+        let mut index = 0;
+        while index < count { value.push(buffer[index]); index = index + 1; }
+    }
+    publication_write(&decode_publication_record(&value).unwrap()).unwrap()
+}

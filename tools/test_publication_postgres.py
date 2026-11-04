@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -21,22 +22,38 @@ from test_publication_http import TOKEN, envelope, write_credentials
 from test_publication_storage import record, run
 from test_publication_admission import COMMON, TRANSACTION, fixtures, stage_component, unpack_record
 from test_publication_postgres_schema import check_publication_schema
+from test_publication_projection import check_projection
+from publication_test_records import publication, fixtures as storage_fixtures, write_fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def check_uncommitted_visibility(container, sql):
+
+def remove_owned_container(container, owner, timeout):
+    """Removal is restricted to this run's exact name and unpredictable label."""
+    inspected = subprocess.run(["docker", "inspect", "--format",
+        '{{index .Config.Labels "verum.registry-run-id"}}', container],
+        capture_output=True, text=True, timeout=timeout)
+    if inspected.returncode:
+        if "no such object" in inspected.stderr.lower() or "no such container" in inspected.stderr.lower():
+            return
+        raise RuntimeError("could not confirm cleanup ownership for " + container + ": " + inspected.stderr)
+    if inspected.stdout.strip() != owner:
+        raise RuntimeError("refusing cleanup of a container with another owner: " + container)
+    subprocess.run(["docker", "rm", "-fv", container], check=True,
+                   stdout=subprocess.DEVNULL, timeout=timeout)
+    print("PostgreSQL fixture: removed own container " + container, flush=True)
+
+
+def check_uncommitted_visibility(container, sql, timeout):
     """A second writer waits on the unique key, then wins after a rollback."""
-    key = "b" * 64
+    key = publication("5.0.0", b"committed").key
 
     def insert(payload):
-        data = record(key, payload).hex()
-        return ("INSERT INTO public.verum_publications (record_key, record) "
-                f"VALUES ('{key}', decode('{data}', 'hex')) "
-                "ON CONFLICT (record_key) DO NOTHING RETURNING 1;")
+        return publication("5.0.0", payload).insert()
 
     def wait_session(predicate):
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if sql("SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE " + predicate).stdout.strip() == "1":
                 return
@@ -57,18 +74,18 @@ def check_uncommitted_visibility(container, sql):
             with ThreadPoolExecutor(max_workers=1) as pool:
                 contender = pool.submit(subprocess.run, command,
                     input="SET application_name = 'publication_contender'; " + insert(b"committed"),
-                    text=True, capture_output=True, check=True, timeout=25)
+                    text=True, capture_output=True, check=True, timeout=timeout * 2)
                 try:
                     wait_session("application_name = 'publication_contender' AND wait_event_type = 'Lock'")
                 finally:
-                    first.communicate("ROLLBACK;\n", timeout=10)
+                    first.communicate("ROLLBACK;\n", timeout=timeout)
                 assert first.returncode == 0 and contender.result().stdout.strip() == "1"
         finally:
             if first.poll() is None:
                 first.stdin.close()
-                first.wait(timeout=10)
+                first.wait(timeout=timeout)
     observed = sql(f"SELECT encode(record,'hex') FROM public.verum_publications WHERE record_key = '{key}';")
-    assert bytes.fromhex(observed.stdout) == record(key, b"committed")
+    assert bytes.fromhex(observed.stdout) == publication("5.0.0", b"committed").record
     print("PostgreSQL SQL: uncommitted row invisible; waiting writer committed exact bytes after rollback", flush=True)
 
 
@@ -80,12 +97,12 @@ def check_pool_reconnect(container, sql, launch, timeout):
         return subprocess.run(command, input=query, text=True, capture_output=True,
                               check=True, timeout=10).stdout.strip()
 
-    anchor, pending = "e" * 64, "f" * 64
-    block = record(pending, b"uncommitted").hex()
+    records = storage_fixtures()
+    anchor, pending = records["anchor"].key, records["pending"].key
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True) as blocker:
-        blocker.stdin.write("SET application_name = 'publication_pool_blocker'; BEGIN; "
-                            f"INSERT INTO public.verum_publications VALUES ('{pending}', decode('{block}','hex'));\n")
+        blocker.stdin.write("SET application_name = 'publication_pool_blocker'; BEGIN; " +
+                            records["pending-block"].insert() + "\n")
         blocker.stdin.flush()
         with ThreadPoolExecutor(max_workers=1) as pool:
             client = pool.submit(launch)
@@ -120,8 +137,7 @@ def check_pool_reconnect(container, sql, launch, timeout):
             assert client.result() == "postgres storage: discarded terminated backend and recovered in live pool"
     rows = publisher_sql("SELECT record_key, encode(record,'hex') FROM public.verum_publications ORDER BY record_key;")
     actual = {key: bytes.fromhex(value) for key, value in (line.split("|") for line in rows.splitlines())}
-    assert actual == {anchor: record(anchor, bytes([0, 1, 127, 255])),
-                      pending: record(pending, bytes([0, 42, 254]))}
+    assert actual == {anchor: records["anchor"].record, pending: records["pending"].record}
     print("PostgreSQL: terminated active INSERT, observed a different backend in the same pool, "
           "and verified both immutable records", flush=True)
 
@@ -131,12 +147,21 @@ def main():
     parser.add_argument("verum", type=Path)
     parser.add_argument("--image", default="postgres:17-alpine")
     parser.add_argument("--timeout", type=float, default=600)
-    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "reconnect", "http", "sql", "schema", "schema-sql"), default="all")
+    parser.add_argument("--docker-timeout", type=float, default=60,
+                        help="deadline for each Docker command, not the SQL workflow")
+    parser.add_argument("--startup-timeout", type=float, default=180,
+                        help="readiness budget after each database start")
+    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "reconnect", "http", "sql", "schema", "schema-sql", "projection-sql"), default="all")
     options = parser.parse_args()
     executable = str(options.verum.resolve(strict=True))
     if not 0 < options.timeout <= 1800:
         parser.error("timeout must be between 0 and 1800 seconds")
-    container = None
+    if not 0 < options.docker_timeout <= 300:
+        parser.error("docker-timeout must be between 0 and 300 seconds")
+    if not 0 < options.startup_timeout <= 600:
+        parser.error("startup-timeout must be between 0 and 600 seconds")
+    owner = uuid.uuid4().hex
+    container = "verum-publication-" + owner[:12]
     with tempfile.TemporaryDirectory(prefix="registry-postgres-http-") as temporary:
         project = Path(temporary)
         environment = project / "postgres.env"
@@ -149,41 +174,58 @@ def main():
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         try:
-            container = subprocess.check_output([
-                "docker", "run", "-d", "--pull=never",
-                "--name", "verum-publication-" + uuid.uuid4().hex[:12],
+            print("PostgreSQL fixture: starting own container " + container, flush=True)
+            subprocess.run([
+                "docker", "run", "-d", "--pull=never", "--name", container,
                 "--label", "verum.registry-test=publication-http",
+                "--label", "verum.registry-run-id=" + owner,
                 "--memory", "512m", "--cpus", "1", "--pids-limit", "256",
                 "--publish", f"127.0.0.1:{port}:5432", "--env-file", str(environment), options.image,
-            ], text=True).strip()
+            ], check=True, stdout=subprocess.DEVNULL, timeout=options.docker_timeout)
 
-            def sql(query, check=True):
+            def sql(query, check=True, timeout=None):
                 return subprocess.run(["docker", "exec", "-i", container, "psql", "-X",
                     "-v", "ON_ERROR_STOP=1", "-U", "registry_admin", "-d", "registry_test", "-At"],
-                    input=query, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=check)
+                    input=query, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=check,
+                    timeout=options.docker_timeout if timeout is None else timeout)
 
             def wait_database():
-                deadline = time.monotonic() + 45
+                deadline = time.monotonic() + options.startup_timeout
                 while time.monotonic() < deadline:
                     # initdb briefly starts a Unix-socket-only server. Wait for
                     # the final TCP listener before installing application state.
-                    ready = subprocess.run(["docker", "exec", container, "pg_isready",
-                        "-h", "127.0.0.1", "-U", "registry_admin", "-d", "registry_test"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-                    if ready.returncode == 0 and sql("SELECT 1;", check=False).returncode == 0:
-                        break
+                    try:
+                        ready = subprocess.run(["docker", "exec", container, "pg_isready",
+                            "-h", "127.0.0.1", "-U", "registry_admin", "-d", "registry_test"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=min(options.docker_timeout, 15, max(0.01, deadline - time.monotonic())))
+                    except subprocess.TimeoutExpired:
+                        continue
+                    remaining = deadline - time.monotonic()
+                    if ready.returncode == 0 and remaining > 0:
+                        try:
+                            if sql("SELECT 1;", check=False,
+                                   timeout=min(options.docker_timeout, remaining)).returncode == 0:
+                                break
+                        except subprocess.TimeoutExpired:
+                            continue
                     time.sleep(0.25)
                 else:
-                    raise RuntimeError("isolated PostgreSQL did not start")
+                    logs = subprocess.run(["docker", "logs", "--tail", "40", container],
+                                          capture_output=True, text=True, timeout=options.docker_timeout)
+                    raise RuntimeError("isolated PostgreSQL did not start\n" + logs.stdout + logs.stderr)
 
             def restart_database():
+                print("PostgreSQL fixture: crashing and restarting own database", flush=True)
                 subprocess.run(["docker", "kill", "--signal", "KILL", container],
-                               check=True, stdout=subprocess.DEVNULL)
-                subprocess.run(["docker", "start", container], check=True, stdout=subprocess.DEVNULL)
+                               check=True, stdout=subprocess.DEVNULL, timeout=options.docker_timeout)
+                subprocess.run(["docker", "start", container], check=True,
+                               stdout=subprocess.DEVNULL, timeout=options.docker_timeout)
                 wait_database()
 
             wait_database()
-            sql((ROOT / "migrations/001_publications.sql").read_text())
+            for migration in ("001_publications.sql", "002_publication_projection.sql"):
+                sql((ROOT / "migrations" / migration).read_text())
             password = secrets.token_hex(24)
             sql(f"CREATE ROLE registry_publisher LOGIN PASSWORD '{password}';"
                 "GRANT USAGE ON SCHEMA public TO registry_publisher;"
@@ -192,7 +234,8 @@ def main():
                               "UPDATE verum_publications SET record = record;"):
                 denied = sql("SET ROLE registry_publisher; " + statement, check=False)
                 assert denied.returncode != 0 and "permission denied" in denied.stderr
-            address = subprocess.check_output(["docker", "port", container, "5432/tcp"], text=True).strip()
+            address = subprocess.check_output(["docker", "port", container, "5432/tcp"],
+                                              text=True, timeout=options.docker_timeout).strip()
             assert address == f"127.0.0.1:{port}"
             configuration = project / "connection.json"
             connection = {
@@ -204,36 +247,44 @@ def main():
             configuration.chmod(0o600)
             print("PostgreSQL: SCRAM test database and restricted publisher ready", flush=True)
 
+            record_fixtures = project / "record-fixtures"
+            write_fixtures(record_fixtures)
+            records = storage_fixtures()
+
+            def stage_storage(source, fixture):
+                stage_component(source, COMMON + TRANSACTION, fixture)
+                shutil.copyfile(ROOT / "tests/publication_storage_fixture.vr",
+                                source / "src/node/publication_storage_fixture.vr")
+
             def pg_environment():
-                return {"VERUM_PG_TEST_" + key.upper(): str(connection[key])
-                        for key in ("host", "port", "user", "password", "database")}
-            if options.component in ("all", "schema", "schema-sql"):
+                return {"VERUM_PG_TEST_FIXTURES": str(record_fixtures), **{"VERUM_PG_TEST_" + key.upper(): str(connection[key])
+                        for key in ("host", "port", "user", "password", "database")}}
+            if options.component in ("all", "projection-sql"):
+                check_projection(sql)
+            if options.component in ("all", "schema", "schema-sql", "projection-sql"):
                 probe_schema = None
-                if options.component != "schema-sql":
+                if options.component not in ("schema-sql", "projection-sql"):
                     source = project / "schema-test"
-                    modules = tuple(f"node/publication_{part}" for part in
-                                    ("storage_contract", "local_storage", "postgres_storage", "storage"))
-                    stage_component(source, modules, "postgres_publication_schema")
+                    stage_storage(source, "postgres_publication_schema")
                     def probe_schema(accepted):
                         output = run([executable, "run", "--tier", "interpret"], source, options.timeout,
                                      {**pg_environment(), "VERUM_PG_SCHEMA_ACCEPTED": "yes" if accepted else "no",
                                       "VERUM_NO_OBJECT_CACHE": "1"})
                         assert output == ("postgres schema: accepted" if accepted else "postgres schema: refused"), output
                 check_publication_schema(sql, probe_schema)
-            if options.component in ("all", "sql", "storage"):
-                check_uncommitted_visibility(container, sql)
-                if options.component == "sql":
+            if options.component in ("all", "sql", "storage", "projection-sql"):
+                check_uncommitted_visibility(container, sql, options.docker_timeout)
+                if options.component in ("sql", "projection-sql"):
                     restart_database()
                     recovered = sql("SELECT encode(record,'hex') FROM public.verum_publications "
-                                    "WHERE record_key = repeat('b',64);")
-                    assert bytes.fromhex(recovered.stdout) == record("b" * 64, b"committed")
+                                    f"WHERE record_key = '{publication('5.0.0', b'committed').key}';")
+                    assert bytes.fromhex(recovered.stdout) == publication("5.0.0", b"committed").record
+                    assert sql("SELECT index_entry FROM public.verum_publications;").stdout.strip() == publication("5.0.0", b"committed").projection
                     print("PostgreSQL SQL: committed row survived unclean server restart", flush=True)
-                sql("DELETE FROM public.verum_publications WHERE record_key = repeat('b',64);")
+                sql(f"DELETE FROM public.verum_publications WHERE record_key = '{publication('5.0.0', b'committed').key}';")
             if options.component in ("all", "storage"):
                 source = project / "storage-test"
-                modules = tuple(f"node/publication_{part}" for part in
-                                ("storage_contract", "local_storage", "postgres_storage", "storage"))
-                stage_component(source, modules, "postgres_publication_storage")
+                stage_storage(source, "postgres_publication_storage")
                 def phase(name):
                     return run([executable, "run", "--tier", "interpret"], source, options.timeout,
                                {**pg_environment(), "VERUM_PG_STORAGE_PHASE": name, "VERUM_NO_OBJECT_CACHE": "1"})
@@ -246,20 +297,19 @@ def main():
                 def stored(key):
                     return bytes.fromhex(sql(
                         f"SELECT encode(record, 'hex') FROM verum_publications WHERE record_key = '{key}';").stdout.strip())
-                assert stored("c" * 64) == record("c" * 64, bytes(i % 256 for i in range(10003)))
+                assert stored(records["large"].key) == records["large"].record
                 print("PostgreSQL: Verum read after database crash, exact retry and differing bytes refused", flush=True)
                 with ThreadPoolExecutor(max_workers=2) as pool:
                     outcomes = list(pool.map(phase, ("race-a", "race-b")))
                 assert sorted(outcomes) == ["postgres storage: race conflict", "postgres storage: race created"]
-                assert stored("d" * 64) in (record("d" * 64, bytes([1, 2, 3])),
-                                            record("d" * 64, bytes([4, 5, 6])))
+                assert stored(records["race-a"].key) in (records["race-a"].record, records["race-b"].record)
                 # Keep the outer framing length valid while corrupting a checksum-covered byte.
                 sql("UPDATE public.verum_publications SET record = set_byte(record,48,255) "
-                    "WHERE record_key = repeat('c',64);")
+                    f"WHERE record_key = '{records['large'].key}';")
                 assert phase("corrupt") == "postgres storage: corrupt row refused"
-                damaged = bytearray(record("c" * 64, bytes(i % 256 for i in range(10003))))
+                damaged = bytearray(records["large"].record)
                 damaged[48] = 255
-                assert stored("c" * 64) == damaged
+                assert stored(records["large"].key) == damaged
                 print("PostgreSQL: competing Verum writers and corruption refusal passed", flush=True)
                 sql("DELETE FROM verum_publications;")
             if options.component in ("all", "transaction"):
@@ -296,9 +346,7 @@ def main():
                 print("PostgreSQL: authenticated Verum preparation, admission, restart, retry and conflict passed", flush=True)
             if options.component in ("all", "reconnect"):
                 source = project / "reconnect-test"
-                modules = tuple(f"node/publication_{part}" for part in
-                                ("storage_contract", "local_storage", "postgres_storage", "storage"))
-                stage_component(source, modules, "postgres_publication_reconnect")
+                stage_storage(source, "postgres_publication_reconnect")
                 def reconnect():
                     return run([executable, "run", "--tier", "interpret"], source, options.timeout,
                                {**pg_environment(), "VERUM_NO_OBJECT_CACHE": "1"})
@@ -352,8 +400,7 @@ def main():
                 subprocess.run([sys.executable, str(ROOT / "tools/test_publication_http.py"), executable,
                     "--timeout", str(options.timeout), "--postgres-config", str(configuration)], check=True)
         finally:
-            if container:
-                subprocess.run(["docker", "rm", "-fv", container], check=True, stdout=subprocess.DEVNULL)
+            remove_owned_container(container, owner, options.docker_timeout)
 
 
 if __name__ == "__main__":

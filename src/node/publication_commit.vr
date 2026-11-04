@@ -11,8 +11,9 @@ mount verum_registry.node.publication_archive.{
 };
 mount verum_registry.node.publication_record.{
     DecodedPublicationRecord, PublicationRecordError, publication_record_key,
-    encode_publication_record, decode_publication_record, same_publication_record,
+    decode_publication_record, same_publication_record,
 };
+mount verum_registry.node.publication_write.publication_write;
 mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError, RecordWrite};
 
 /// Constructible only after validated bytes and attribution are durable.
@@ -69,15 +70,14 @@ fn existing_receipt(
     existing: &DecodedPublicationRecord,
 ) -> Result<PublicationReceipt, PublicationCommitError> {
     if !same_publication_record(candidate, existing) { return Result.Err(PublicationCommitError.Conflict); }
-    let bytes = match encode_publication_record(existing) {
+    let write = match publication_write(existing) {
         Result.Ok(value) => value,
         Result.Err(_) => return Result.Err(PublicationCommitError.CorruptRecord),
     };
-    let key = publication_record_key(&existing.metadata.name_spelling, &existing.metadata.version_spelling);
     // A preceding writer may have linked its file but failed directory sync.
     // Seeing the file alone is insufficient: recommit the ORIGINAL bytes so
     // retry acknowledgement also follows durable storage confirmation.
-    match storage.commit(&key, &bytes) {
+    match storage.commit(&write) {
         Result.Ok(_) => Result.Ok(receipt(existing, false)),
         Result.Err(PublicationStorageError.Conflict) => Result.Err(PublicationCommitError.Conflict),
         Result.Err(error) => Result.Err(PublicationCommitError.Storage(error)),
@@ -111,13 +111,12 @@ public fn commit_prepared_publication(
         Maybe.Some(existing) => return existing_receipt(storage, &record, &existing),
         Maybe.None => {},
     }
-    let bytes = match encode_publication_record(&record) {
+    let write = match publication_write(&record) {
         Result.Ok(value) => value,
         Result.Err(PublicationRecordError.TooLarge) => return Result.Err(PublicationCommitError.RecordTooLarge),
         Result.Err(_) => return Result.Err(PublicationCommitError.CorruptRecord),
     };
-    let key = publication_record_key(&record.metadata.name_spelling, &record.metadata.version_spelling);
-    match storage.commit(&key, &bytes) {
+    match storage.commit(&write) {
         Result.Ok(RecordWrite.Created) => Result.Ok(receipt(&record, true)),
         Result.Ok(RecordWrite.Existing) => Result.Ok(receipt(&record, false)),
         Result.Err(PublicationStorageError.Conflict) => {
