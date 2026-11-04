@@ -24,14 +24,39 @@ type PublicationPgStatements is {
 
 fn configuration_error() -> DbError {
     DbError.PoolFailure {
-        kind: PoolErrorKind.PekConfigInvalid("publication storage requires WAL durability and a writable database"),
+        kind: PoolErrorKind.PekConfigInvalid("publication storage requires WAL durability, write access, and an immediate unique release key"),
     }
 }
 
 fn prepare_session(connection: &mut PgConnection) -> Result<PublicationPgStatements, DbError> {
     connection.set_recv_timeout_ms(Maybe.Some(15000))?;
     connection.simple_query(&"SET search_path = pg_catalog; SET synchronous_commit = on; SET statement_timeout = '10s'; SET lock_timeout = '5s'")?;
-    let ready = connection.query_all(&"SELECT 1 FROM pg_catalog.pg_class WHERE oid = 'public.verum_publications'::regclass AND relpersistence = 'p' AND relkind = 'r' AND has_table_privilege(oid, 'SELECT') AND has_table_privilege(oid, 'INSERT') AND current_setting('fsync') = 'on' AND current_setting('full_page_writes') = 'on' AND current_setting('default_transaction_read_only') = 'off'")?;
+    // PREPARE does not establish ON CONFLICT compatibility. A missing arbiter
+    // fails only when PostgreSQL plans the first INSERT; a deferrable arbiter
+    // fails even later, during execution. Require an unconditional unique key
+    // on record_key, including every matching index: one immediate key cannot
+    // hide another matching deferrable constraint. Included columns are not key
+    // columns. No matching index produces NULL, which refuses this startup row.
+    let ready = connection.query_all(&"""
+        SELECT 1 FROM pg_catalog.pg_class c
+        WHERE c.oid = 'public.verum_publications'::regclass
+          AND c.relpersistence = 'p' AND c.relkind = 'r'
+          AND has_table_privilege(c.oid, 'SELECT')
+          AND has_table_privilege(c.oid, 'INSERT')
+          AND current_setting('fsync') = 'on'
+          AND current_setting('full_page_writes') = 'on'
+          AND current_setting('default_transaction_read_only') = 'off'
+          AND (
+              SELECT bool_and(i.indimmediate AND i.indisready AND i.indislive)
+              FROM pg_catalog.pg_index i
+              JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = c.oid AND a.attname = 'record_key' AND NOT a.attisdropped
+              WHERE i.indrelid = c.oid
+                AND i.indisunique AND i.indisvalid AND NOT i.indisexclusion
+                AND i.indnkeyatts = 1 AND i.indkey[0] = a.attnum
+                AND i.indexprs IS NULL AND i.indpred IS NULL
+          )
+    """)?;
     if ready.len() != 1 { return Result.Err(configuration_error()); }
     // Bound transferred bytes even if an operator has damaged the stored row.
     let read = connection.prepare(&"SELECT CASE WHEN octet_length(record) <= $2::integer THEN record ELSE NULL END FROM public.verum_publications WHERE record_key = $1::text")?;

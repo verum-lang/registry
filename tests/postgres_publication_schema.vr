@@ -1,0 +1,30 @@
+module verum_registry.tests.postgres_publication_schema;
+
+mount core.base.env.var;
+mount core.database.postgres.config.{PgConfig, PgTlsMode};
+mount verum_registry.node.publication_storage.{PublicationStorage, PublicationStorageError};
+
+fn main() {
+    let config = PgConfig.new(
+        var(&"VERUM_PG_TEST_HOST").unwrap(),
+        var(&"VERUM_PG_TEST_PORT").unwrap().parse_int().unwrap(),
+        var(&"VERUM_PG_TEST_USER").unwrap(),
+        var(&"VERUM_PG_TEST_PASSWORD").unwrap(),
+        var(&"VERUM_PG_TEST_DATABASE").unwrap(),
+    ).with_tls(PgTlsMode.PtmDisable);
+    let accepted = var(&"VERUM_PG_SCHEMA_ACCEPTED").unwrap() == "yes";
+    match PublicationStorage.open_postgres(config, 32768, 1) {
+        Result.Ok(storage) => {
+            assert(accepted);
+            let key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            assert(storage.load(&key).unwrap() is Maybe.None);
+            print("postgres schema: accepted");
+        },
+        Result.Err(PublicationStorageError.Database(cause)) => {
+            assert(!accepted);
+            assert_eq(cause.message(), "pool failure: config_invalid");
+            print("postgres schema: refused");
+        },
+        _ => panic("unexpected publication schema startup failure"),
+    }
+}

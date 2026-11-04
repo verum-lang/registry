@@ -20,6 +20,7 @@ import uuid
 from test_publication_http import TOKEN, envelope, write_credentials
 from test_publication_storage import record, run
 from test_publication_admission import COMMON, TRANSACTION, fixtures, stage_component, unpack_record
+from test_publication_postgres_schema import check_publication_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,7 +131,7 @@ def main():
     parser.add_argument("verum", type=Path)
     parser.add_argument("--image", default="postgres:17-alpine")
     parser.add_argument("--timeout", type=float, default=600)
-    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "reconnect", "http", "sql"), default="all")
+    parser.add_argument("--component", choices=("all", "storage", "transaction", "handler", "reconnect", "http", "sql", "schema", "schema-sql"), default="all")
     options = parser.parse_args()
     executable = str(options.verum.resolve(strict=True))
     if not 0 < options.timeout <= 1800:
@@ -206,6 +207,19 @@ def main():
             def pg_environment():
                 return {"VERUM_PG_TEST_" + key.upper(): str(connection[key])
                         for key in ("host", "port", "user", "password", "database")}
+            if options.component in ("all", "schema", "schema-sql"):
+                probe_schema = None
+                if options.component != "schema-sql":
+                    source = project / "schema-test"
+                    modules = tuple(f"node/publication_{part}" for part in
+                                    ("storage_contract", "local_storage", "postgres_storage", "storage"))
+                    stage_component(source, modules, "postgres_publication_schema")
+                    def probe_schema(accepted):
+                        output = run([executable, "run", "--tier", "interpret"], source, options.timeout,
+                                     {**pg_environment(), "VERUM_PG_SCHEMA_ACCEPTED": "yes" if accepted else "no",
+                                      "VERUM_NO_OBJECT_CACHE": "1"})
+                        assert output == ("postgres schema: accepted" if accepted else "postgres schema: refused"), output
+                check_publication_schema(sql, probe_schema)
             if options.component in ("all", "sql", "storage"):
                 check_uncommitted_visibility(container, sql)
                 if options.component == "sql":
