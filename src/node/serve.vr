@@ -124,11 +124,8 @@ implement NodeHandler {
     }
 
     /// Text as a response body. Every route here answers with one fact.
-    fn text_response(status: StatusCode, text: &Text) -> Response {
-        let mut body: List<Byte> = List.new();
-        for b in text.bytes() {
-            body.push(b);
-        }
+    fn text_response(status: StatusCode, text: Text) -> Response {
+        let body = text.into_bytes();
         Response.new(status)
             .header("Content-Length", f"{body.len()}")
             .body(body)
@@ -181,7 +178,7 @@ implement NodeHandler {
         let total = self.answer_count(&q);
         NodeHandler.text_response(
             StatusCode.ok(),
-            &encode_search_answer(&results, total),
+            encode_search_answer(&results, total),
         )
     }
 
@@ -195,31 +192,31 @@ implement NodeHandler {
         match req.query_param(&"name") {
             Maybe.None => NodeHandler.text_response(
                 StatusCode.bad_request(),
-                &"resolve requires ?name=<package>",
+                "resolve requires ?name=<package>",
             ),
             Maybe.Some(raw) => {
                 let name = PackageName(raw);
                 match resolve(&self.sources, &name, self.require_audit) {
                     Result.Ok(found) => {
-                        NodeHandler.text_response(StatusCode.ok(), &found.via())
+                        NodeHandler.text_response(StatusCode.ok(), found.via())
                     }
                     // Three refusals, three answers — see the header.
                     Result.Err(ResolveError.NoSourceHasIt(what)) => {
                         NodeHandler.text_response(
                             StatusCode.not_found(),
-                            &f"no configured source has {what}",
+                            f"no configured source has {what}",
                         )
                     }
                     Result.Err(ResolveError.OnlyBelowPolicy(who)) => {
                         NodeHandler.text_response(
                             StatusCode.forbidden(),
-                            &f"only {who} has it, and it is below this node's audit policy",
+                            f"only {who} has it, and it is below this node's audit policy",
                         )
                     }
                     Result.Err(ResolveError.SourceFailed(_)) => {
                         NodeHandler.text_response(
                             StatusCode.new(502),
-                            &"a configured source failed",
+                            "a configured source failed",
                         )
                     }
                 }
@@ -274,14 +271,14 @@ implement NodeHandler {
             Ok(t) => t,
             Err(_) => return NodeHandler.text_response(
                 StatusCode.bad_request(),
-                &"body is not valid UTF-8",
+                "body is not valid UTF-8",
             ),
         };
 
         let request = match decode_publish_request(&body) {
             Err(e) => return NodeHandler.text_response(
                 StatusCode.bad_request(),
-                &e.describe(),
+                e.describe(),
             ),
             Ok(r) => r,
         };
@@ -289,33 +286,33 @@ implement NodeHandler {
         match publish_request(&mut self.cache, &request) {
             Ok(Published.Accepted(v)) => NodeHandler.text_response(
                 StatusCode.created(),
-                &f"published {v.manifest().version}",
+                f"published {v.manifest().version}",
             ),
             Ok(Published.AlreadyIdentical(v)) => NodeHandler.text_response(
                 StatusCode.ok(),
-                &f"already held, identical at {v.manifest().version}",
+                f"already held, identical at {v.manifest().version}",
             ),
             Err(PublishError.NotOurName(claimed, owner)) =>
                 NodeHandler.text_response(
                     StatusCode.forbidden(),
-                    &f"{claimed} does not own that name — {owner} does",
+                    f"{claimed} does not own that name — {owner} does",
                 ),
             Err(PublishError.NoSuchName) => NodeHandler.text_response(
                 StatusCode.not_found(),
-                &"this node answers for no such name",
+                "this node answers for no such name",
             ),
             Err(PublishError.ContestedName(who)) => NodeHandler.text_response(
                 StatusCode.new(409),
-                &f"the name is claimed by {who.len()} authorities and will not be ranked",
+                f"the name is claimed by {who.len()} authorities and will not be ranked",
             ),
             Err(PublishError.VersionAlreadyPublished(ver)) =>
                 NodeHandler.text_response(
                     StatusCode.new(409),
-                    &f"{ver} is already published with other content",
+                    f"{ver} is already published with other content",
                 ),
             Err(PublishError.EvidenceRefused(_)) => NodeHandler.text_response(
                 StatusCode.new(422),
-                &"the evidence does not hold",
+                "the evidence does not hold",
             ),
         }
     }
