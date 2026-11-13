@@ -54,13 +54,15 @@ implement PublicationHandler {
     public fn from_storage(
         storage: PublicationStorage, credential_file: &Text, authorities: List<Authority>,
     ) -> Result<PublicationHandler, Text> {
+        let envelope_limits = publication_limits(65536, 917504)
+            .map_err(|_| "publication envelope limits are outside the protocol bounds")?;
         let credentials = match load_credentials(credential_file, &authorities) {
             Result.Ok(value) => value,
             Result.Err(_) => return Result.Err("credential configuration could not be loaded"),
         };
         Result.Ok(PublicationHandler {
             advisories: Maybe.None, credentials: credentials, authorities: authorities, storage: storage,
-            envelope_limits: publication_limits(65536, 917504).unwrap(),
+            envelope_limits: envelope_limits,
             archive_limits: default_archive_limits(),
         })
     }
