@@ -3,7 +3,7 @@ module verum_registry.node.publication_postgres_storage;
 mount core.database.common.error.{DbError, AdapterId, PoolErrorKind};
 mount core.database.common.pool_impl.{ConnectionPool, PoolConfig, PooledConnection};
 mount core.database.postgres.config.PgConfig;
-mount core.database.postgres.connection.{connect, PgConnection, PgConnState, PgPreparedStatement};
+mount core.database.postgres.connection.{connect, PgConnection, PgConnState, PgPreparedStatement, PgTypedQueryResult};
 mount core.database.postgres.wire.backend.TxStatus;
 mount core.database.postgres.wire.typed.TypedValue;
 mount verum_registry.node.publication_write.PublicationWrite;
@@ -84,6 +84,15 @@ fn open_session(config: &PgConfig) -> Result<PublicationPgSession, DbError> {
     }
 }
 
+fn execute_stored(session: &mut Maybe<PgConnection>, statement: &PgPreparedStatement, params: &List<Maybe<TypedValue>>)
+    -> Result<PgTypedQueryResult, PublicationStorageError> {
+    match session {
+        Maybe.Some(connection) => connection.execute_prepared_typed(statement, params)
+            .map_err(|cause| PublicationStorageError.Database(cause)),
+        Maybe.None => Result.Err(PublicationStorageError.SessionClosed),
+    }
+}
+
 implement PublicationPgSession {
     fn close(&mut self) {
         if let Maybe.Some(connection) = self.connection.take() { let _ = connection.close(); }
@@ -102,11 +111,7 @@ implement PublicationPgSession {
             Maybe.Some(TypedValue.TvText(key.clone())),
             Maybe.Some(TypedValue.TvInt4(limit + 48)),
         ];
-        let mut result = match &mut self.connection {
-            Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.read, &params)
-                .map_err(|cause| PublicationStorageError.Database(cause))?,
-            Maybe.None => return Result.Err(PublicationStorageError.SessionClosed),
-        };
+        let mut result = execute_stored(&mut self.connection, &self.statements.read, &params)?;
         if result.rows.len() == 0 { return Result.Ok(Maybe.None); }
         if result.rows.len() != 1 || result.rows[0].len() != 1 {
             return Result.Err(PublicationStorageError.Corrupt);
@@ -127,11 +132,7 @@ implement PublicationPgSession {
             Maybe.Some(TypedValue.TvText(write.version().clone())),
             Maybe.Some(TypedValue.TvText(write.index_entry().clone())),
         ];
-        let result = match &mut self.connection {
-            Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.insert, &params)
-                .map_err(|cause| PublicationStorageError.Database(cause))?,
-            Maybe.None => return Result.Err(PublicationStorageError.SessionClosed),
-        };
+        let result = execute_stored(&mut self.connection, &self.statements.insert, &params)?;
         if result.rows.len() == 1 {
             if result.rows[0].len() != 1 { return Result.Err(PublicationStorageError.Corrupt); }
             match result.rows[0][0] {
@@ -157,11 +158,7 @@ implement PublicationPgSession {
         // A damaged projection must not be acknowledged by an exact retry.
         // The runtime role cannot update it; never repair it as a side effect.
         let params: List<Maybe<TypedValue>> = [Maybe.Some(TypedValue.TvText(key.clone()))];
-        let result = match &mut self.connection {
-            Maybe.Some(connection) => connection.execute_prepared_typed(&self.statements.projection, &params)
-                .map_err(|cause| PublicationStorageError.Database(cause))?,
-            Maybe.None => return Result.Err(PublicationStorageError.SessionClosed),
-        };
+        let result = execute_stored(&mut self.connection, &self.statements.projection, &params)?;
         if result.rows.len() != 1 || result.rows[0].len() != 3 {
             return Result.Err(PublicationStorageError.Corrupt);
         }
