@@ -270,22 +270,7 @@ implement NodeHandler {
     public fn route_publish(&mut self, req: &WeftRequest) -> Response
         using [Clock, NodeIdentity, Uplink]
     {
-        // `Text.from_utf8` returns a Result, not a Maybe — a body that
-        // is not UTF-8 is a transport fault with a REASON, and the
-        // reason is worth keeping even though this route does not print
-        // it: a client sending latin-1 and a client sending a truncated
-        // multi-byte sequence have made different mistakes.
-        // T1130 WORKAROUND — the `[..]` is load-bearing, not style.
-        // `&req.body` is a reference to a RECORD FIELD, and the
-        // `&List<Byte>` -> `&[Byte]` coercion at a call to a
-        // slice-taking stdlib function silently yields an EMPTY slice
-        // in that position: `from_utf8` returned `Ok("")` for a
-        // 282-byte body, so every publication answered 400 with an
-        // empty message. A user function taking `&List<Byte>` reads the
-        // same expression correctly; the spelling below is what makes
-        // the stdlib one see the bytes. DELETE the `[..]` when T1130
-        // lands, and not before.
-        let body = match Text.from_utf8(&req.body[..]) {
+        let body = match Text.from_utf8(req.body_bytes()) {
             Ok(t) => t,
             Err(_) => return NodeHandler.text_response(
                 StatusCode.bad_request(),
