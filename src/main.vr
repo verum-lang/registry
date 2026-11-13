@@ -257,7 +257,7 @@ fn offer(
     version: &Text,
     artefact: &Text,
     as_authority: &Text,
-) {
+) using [Clock, NodeIdentity, Uplink] {
     let manifest = Manifest {
         name: PackageName(name.clone()),
         version: version.clone(),
@@ -322,7 +322,7 @@ fn build_slice(v: &Verified, requires: List<Text>) -> Slice {
     Slice { items: items }
 }
 
-async fn carry(label: &Text, slice: &Slice) {
+async fn carry(label: &Text, slice: &Slice) using [Clock, Uplink] {
     let mut far_side = Cache.empty();
     match import_slice(&mut far_side, slice).await {
         Ok(n) => {
@@ -672,7 +672,7 @@ fn hash_scene(label: &Text) {
 /// `&mut Cache with [Store]` and is the mirror image. Under a plain
 /// `&mut` both are simply "may change the cache", and the difference
 /// lives in a reviewer's attention.
-fn retention_scene(label: &Text) {
+fn retention_scene(label: &Text) using [Clock] {
     match verified_sample() {
         Maybe.Some(v) => {
             let mut shelf = Cache.empty();
